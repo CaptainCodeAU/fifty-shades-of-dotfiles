@@ -23,7 +23,7 @@
 # THE OLD BEHAVIOUR IS GONE. `c-legacy` carried the original alias from 2026-09-22 until
 # P10 the same day, when Gavin removed it: nothing had needed it. `lifeos` is the LifeOS
 # launch. The other c-family aliases (cb, cr, ct, cpr, cd_, cskip) were retired on
-# 2026-10-06; only `ci` (piped) is left.
+# 2026-10-06, and `ci`, the last one (piped `claude -p`), on 2026-10-14.
 #
 # WHY A SCRIPT AND NOT JUST A LONGER ALIAS. So it can be tested. An alias is unreachable
 # from a non-interactive shell, so a selftest could not see it at all; this file is on

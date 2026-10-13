@@ -3,7 +3,7 @@
 # what it claims to (W-20260924-A59, D-20260924-A05).
 #
 # THE SEAM is a real INTERACTIVE zsh (`zsh -i`) that sources the .zshrc under test, exactly as a
-# herdr pane does, so the `c` aliases (cb, ci, cr) expand and route through the function the way
+# herdr pane does, so any alias that ends in `claude` would expand and route through the function the way
 # herdr's typed `claude <args>` does. A STUB claude (a script that prints its argv) sits first on
 # PATH with ~/.local/bin removed, and the run ABORTS before any arm unless `whence -p claude` is
 # that stub: this test must never be able to start a real session (on 2026-09-24 a smoke test
@@ -109,7 +109,6 @@ if [[ "$CPG_MODE" == herdr ]]; then
     refuse "bypass flag alone"                    'claude --dangerously-skip-permissions'
     refuse "--append-system-prompt TEXT is not a file" 'claude --append-system-prompt "be nice"'
     refuse "--settings alone"                     'claude --settings /x.json'
-    refuse "alias ci (claude -p, no prompt file)" 'ci hi'
     refuse "env prefix does not hide it"          'CLAUDE_CODE_SESSION_NAME=x claude'
     refuse "override that is not an item id"     'PJ_WORKERS_CONTROL=yes claude'
     refuse "override whose log cannot be written" 'PJ_WORKERS_CONTROL=W-20260924-A59 CONV_HOOK_LOG=/dev/null/cpg.log claude'
@@ -133,7 +132,7 @@ if [[ "$CPG_MODE" == herdr ]]; then
     pass "--append-system-prompt-file=PATH"       'claude --append-system-prompt-file=/p.md'
     pass "--system-prompt-file PATH"              'claude --system-prompt-file /p.md'
     # The cb, cr and cpr alias arms went with those aliases (retired 2026-10-06, cb3407d);
-    # `ci` is the one c alias left, and its refusal is armed above.
+    # The `ci` arms went with `ci` (removed 2026-10-14); no c alias is left.
     # escapes and routes the function never sees
     pass "command claude (the human escape)"      'command claude' 'STUB_ARGV:'
     pass "sudo claude (its wrapper runs command claude)" 'sudo claude --x' '[--x]'
@@ -153,7 +152,6 @@ else
     refuse "unset: bare claude"                   'claude'
     refuse "unset: claude with a prompt"          'claude "fix the bug"'
     refuse "unset: claude -p"                     'claude -p hi'
-    refuse "unset: alias ci"                      'ci hi'
     refuse "HERDR_ENV=0 is not herdr, still refused" 'HERDR_ENV=0 claude'
     run 'claude'
     if [[ "$OUT" == *"REFUSED outside herdr"* ]]; then res PASS "unset: the refusal says outside herdr"

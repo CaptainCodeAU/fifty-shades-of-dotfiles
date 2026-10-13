@@ -991,16 +991,21 @@ export USE_BUILTIN_RIPGREP=0
 
 # __claude_launch, engage's launch function, and the shared launch blocks it is built from
 # (__cl_*) live in ~/.zsh_claude_launch, so the `engage` launcher (~/CODE/CaptainCodeAU/engage)
-# sources the same definition. One copy: edit it there, never paste it back here. `ci` below
-# is the last alias that calls it.
+# sources the same definition. One copy: edit it there, never paste it back here. Nothing in
+# this file calls it since `ci` went (2026-10-14, below).
 [[ -f ~/.zsh_claude_launch ]] && source ~/.zsh_claude_launch
 
 # THE c-FAMILY ALIASES ARE RETIRED (Gavin, 2026-10-06): cb, cr, ct, cpr, cd_ and cskip
 # were removed, and with them _LIFEOS_SP, the LifeOS system-prompt array only they used.
-# engage replaced them. `ci` stays because scripts may pipe into it. Two of them were
+# engage replaced them. Two of them were
 # broken when they went: cd_ passed `--debug "filter"` (the filter only binds as
 # --debug=filter) and cr's "resume last session" was bare --resume, which opens a picker.
 # Restore any of them from git history (commit before this note) if one is ever needed.
+# `ci` (one-shot `claude -p`) went too, on 2026-10-14 (Gavin, dotfiles-main): it was kept
+# "because scripts may pipe into it", but scripts never see aliases, and since Q10
+# (2026-10-06) the claude() guard below refused it everywhere, so nothing could use it
+# (measured 2026-10-13: `ci hello` refused, rc 1). The one-shot form now is
+# `command claude -p "..."`, which runs with no rules and no launch blocks.
 
 # `c` IS A SIGNPOST NOW, NOT A LAUNCHER (F5c, ruled by Gavin 2026-09-22).
 #
@@ -1064,11 +1069,10 @@ claude-clean() {
     echo "clean-room cwd: $dir" >&2
     ( builtin cd "$dir" && command claude --setting-sources '' --strict-mcp-config "$@" )
 }
-alias ci='__claude_launch claude --dangerously-skip-permissions -p'                          # Non-interactive / piped (no LifeOS prompt: its banner would pollute stdout)
 
 # claude() IS THE HERDR PANE GUARD (W-20260924-A59, ruled by Gavin 2026-09-24, D-20260924-A05).
 #
-# Since 2026-10-06 (Gavin, Q10) it guards OUTSIDE herdr too: a plain `claude` or `ci` typed in
+# Since 2026-10-06 (Gavin, Q10) it guards OUTSIDE herdr too: a plain `claude` typed in
 # any interactive zsh is refused, naming engage. Until then HERDR_ENV unset meant `command
 # claude "$@"` and nothing else. Scripts never see this function, and `command claude` is the
 # way round in both places. The refusal says where it happened ("in a herdr pane" or
@@ -1087,7 +1091,7 @@ alias ci='__claude_launch claude --dangerously-skip-permissions -p'             
 # PJ_WORKERS_CONTROL=<item id> in the environment, the one named override, which is logged with
 # the pane id to hooks-security.log and REFUSED when that log cannot be written.
 # REFUSES: everything else, `claude -p` included (a headless session is still a session
-# without the rules, it counts against the per-project cap, and `pj -p` exists), and so `ci`.
+# without the rules, it counts against the per-project cap, and `pj -p` exists).
 # Gavin typing a bare `claude` in a herdr pane is refused too (ruled): the guard cannot tell his
 # typing from herdr's, and the refusal names the escape.
 #

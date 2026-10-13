@@ -5,22 +5,21 @@
 #   1. SHARED BLOCKS, every one named __cl_*: each does one piece of launch work, and any
 #      launcher may call any of them. Each carries its id from the launcher-pieces list
 #      (L1 to L11). The name is the contract: __cl_* means shared.
-#   2. ENGAGE'S OWN (and `ci`'s), named anything but __cl_*: __engage_screen (the only piece
-#      that reads an engage variable) and __claude_launch, the list engage runs. Sourced by
-#      the `engage` launcher (~/CODE/CaptainCodeAU/engage, every engage session) and by
-#      ~/.zshrc for `ci`. `ci` has no working caller today: the claude() guard in ~/.zshrc
-#      refuses its bare -p (measured by dotfiles-main, 13 Oct 2026). Decide `ci` before
-#      deleting this part with engage.
+#   2. ENGAGE'S OWN, named anything but __cl_*: __engage_screen (the only piece that reads
+#      an engage variable) and __claude_launch, the list engage runs. Sourced by the `engage`
+#      launcher (~/CODE/CaptainCodeAU/engage, every engage session); ~/.zshrc also sources
+#      this file but calls nothing in it. Its other caller, the `ci` alias, was removed on
+#      2026-10-14 (Gavin), so this part goes with engage when engage goes.
 # A launcher with its own list (makeitso, today) keeps that list in its own script, sources
 # this file only for the blocks it names, and removes every function here that is not
 # __cl_*, so engage's part can never run inside it.
 # THE RULE THAT KEEPS THEM APART: change a shared block, check every launcher that names
-# it; change engage's part, check engage and `ci`.
+# it; change engage's part, check engage.
 #
 # HOW A BLOCK HANDS A SETTING TO CLAUDE: the launch function declares `local -a __cl_env`,
 # a block hands NAME=value to __cl_add, which appends it there (zsh's dynamic scope lets a
 # called function see its caller's locals), and the launcher exports the list for claude
-# alone (engage and `ci`: __cl_run_with_env, in a subshell). __cl_add refuses when __cl_env
+# alone (engage: __cl_run_with_env, in a subshell). __cl_add refuses when __cl_env
 # is not a local of the caller, so a block typed at a prompt cannot leave a value (the NVD
 # key) in your shell.
 # SOURCING THIS FILE ONLY DEFINES FUNCTIONS: it sets no variable, prints nothing and runs
@@ -67,8 +66,8 @@ __cl_add() {
 # and it spawns hooks with NO controlling terminal, so the hook cannot write to /dev/tty either.
 # Both measured 2026-09-15: a probe inside the hook logged `w_test=yes real_write=FAIL`, i.e.
 # `[ -w /dev/tty ]` passes while the open() fails. The shell, unlike the hook, owns the terminal.
-# Writing to /dev/tty rather than stdout is deliberate: it can never pollute a pipe, so `ci`
-# (piped -p) stays clean with no flag sniffing. Fails silently when there is no tty.
+# Writing to /dev/tty rather than stdout is deliberate: it can never pollute a pipe, so a
+# piped `claude -p` launch stays clean with no flag sniffing. Fails silently when there is no tty.
 __cl_last_commit() {
   if [[ -x "$HOME/.claude/hooks/LastCommitFiles.sh" ]]; then
     { "$HOME/.claude/hooks/LastCommitFiles.sh" </dev/null > /dev/tty; } 2>/dev/null || true
@@ -181,12 +180,13 @@ __cl_ssh_agent() {
 }
 
 # The runner: export the settings the blocks collected in __cl_env, then run the command.
-# Always in a subshell, so nothing is exported into the calling shell (`ci` runs in your
-# interactive shell). The count guard matters: `export` with no names PRINTS every exported
+# Always in a subshell, so nothing is exported into the calling shell (a launcher may run in
+# your interactive shell). The count guard matters: `export` with no names PRINTS every exported
 # variable, so an empty list must never reach it. `builtin` so an alias or function named
 # export cannot silently drop the settings.
-# The subshell (not `env`) keeps shell functions callable: `ci` hands over `claude`, which in
-# an interactive shell is the claude() pane guard from .zshrc, and `env` cannot run a function.
+# The subshell (not `env`) keeps shell functions callable: a caller may hand over a function
+# (in an interactive shell, `claude` is the claude() pane guard from .zshrc), and `env` cannot
+# run a function.
 # GH_TOKEN REMOVED 2026-09-18 from the launch chain. It used to be injected as
 # GH_TOKEN="$gh_token" beside the settings below. Why it went: every session started with a
 # GitHub key in its environment, where any command could read it and any transcript could
@@ -211,7 +211,7 @@ __cl_run_with_env() {
 # Gavin's June 2026 rejection of fullscreen's mouse capture. engage lifts it by exporting
 # PJ_RENDERER=fullscreen, which it does for every session unless the profile, --classic or
 # /classic asks for classic (D-20260927-A11; engage exports PJ_RENDERER on every launch, so it
-# is never inherited). `ci` never sets it and stays locked. W-20260923-A12: the lock outranks
+# is never inherited). A caller that never sets it stays locked. W-20260923-A12: the lock outranks
 # /tui and NO_FLICKER, so a docked Mods pane needed a way past it.
 __engage_screen() {
   local alt_off=1
@@ -219,7 +219,7 @@ __engage_screen() {
   __cl_add "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=$alt_off"
 }
 
-# engage's list (and `ci`'s): every piece, in the order the single function ran them before
+# engage's list: every piece, in the order the single function ran them before
 # the split. Takes the claude command line as its arguments.
 __claude_launch() {
   local -a __cl_env=()

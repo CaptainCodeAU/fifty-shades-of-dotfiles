@@ -3,7 +3,8 @@
 `home/.zsh_claude_launch` holds the shared launch blocks (`__cl_*`, one piece of launch
 work each, ids L1 to L11) and engage's own part: `__engage_screen` and `__claude_launch`,
 the list engage runs. `engage` (`~/CODE/CaptainCodeAU/engage`) sources it for every
-engage session, and `.zshrc` uses `__claude_launch` for `ci`. `makeitso`
+engage session. `.zshrc` also sources it but calls nothing in it: `ci`, its last caller
+there, was removed on 2026-10-14. `makeitso`
 (`~/CODE/CaptainCodeAU/v2/makeitso`) keeps its own list in its own script, reads this file
 only for the blocks it names, and removes every function that is not `__cl_*`. Split into
 blocks on 2026-10-13; before that it was one function. This page lists every variable
@@ -24,9 +25,9 @@ one chain, so the two can no longer drift apart.
 | `NVD_API_KEY`                          | from the Keychain                         | Lifts NVD's rate limit for the CVE sweep. Not a credential to anything. Open item W-20261006-A44 (parked by Gavin) asks whether it should leave the session environment. |
 | `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` | `1`, or `0` when `PJ_RENDERER=fullscreen` | The classic-renderer lock; engage lifts it for full-screen sessions.                                                                                                     |
 | `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY`  | `1`                                       | Clearing `DISABLE_TELEMETRY` re-enables the "How is Claude doing?" survey; this keeps it off. Added 2026-10-06.                                                          |
-| `CLAUDE_CODE_NONBLOCKING_STDOUT` | `1` | A terminal that stops reading (paused pane, stalled SSH) cannot freeze Claude. Added 2026-10-06 (Q15: 17); the freeze itself is untestable on demand. |
-| `CLAUDE_AUTO_BACKGROUND_TASKS` | `1` | Long subagents move to the background. Engage sessions already launch subagents async, so no visible effect here; kept on Gavin's pick (Q15.1: 2). |
-| `CLAUDE_CODE_WORKER_CHECKIN_SCHEDULE` | `600` | Reminds Claude every 10 minutes to check background work still running. Live test with 60: the check-in arrived at 60.0 s; none without it. |
+| `CLAUDE_CODE_NONBLOCKING_STDOUT`       | `1`                                       | A terminal that stops reading (paused pane, stalled SSH) cannot freeze Claude. Added 2026-10-06 (Q15: 17); the freeze itself is untestable on demand.                    |
+| `CLAUDE_AUTO_BACKGROUND_TASKS`         | `1`                                       | Long subagents move to the background. Engage sessions already launch subagents async, so no visible effect here; kept on Gavin's pick (Q15.1: 2).                       |
+| `CLAUDE_CODE_WORKER_CHECKIN_SCHEDULE`  | `600`                                     | Reminds Claude every 10 minutes to check background work still running. Live test with 60: the check-in arrived at 60.0 s; none without it.                              |
 
 `GH_TOKEN` was removed from the launch on 2026-09-18; the note above `__cl_run_with_env`
 says why.
@@ -85,23 +86,23 @@ reported to him, and D-20261006-A04: one commit per fix, after its test.
 
 ## User settings changed the same day (`~/.claude/settings.json`, dot-claude repo)
 
-These reach plain `claude` and `ci`, not engage sessions (engage loads
+These reach plain `claude` (and reached `ci` until it was removed on 2026-10-14), not engage sessions (engage loads
 `--setting-sources project,local` plus its own `--settings` file; engage's copies of these
 keys are with engage-main, pending Gavin). Each was a separate commit after a plain-claude
 A/B in a herdr pane.
 
-| Change | Reading before → after |
-|---|---|
-| `modelSettings` `claude-opus-5-5` `effortLevel: high` (Opus 5.5 ignores a top-level `effortLevel`) | effort medium → high |
-| `voiceEnabled` → `voice.enabled` (deprecated key) | no change; voice state has no read-only surface (void) |
-| `leftArrowOpensAgents` dropped (global-config key, read only from `~/.claude.json`) | no change |
-| empty `mcpServers` dropped (not a settings key) | no change |
-| `timeFormat: 12-hour`, `timeZone: Australia/Melbourne` | "done 2:56 pm" → "done 2:55 pm": the Mac's locale already matched; pins it for other machines |
-| `maxProseWidth: 100` | widest prose line 184 → 102 columns |
-| `prefersReducedMotion: true`, `spinnerTipsEnabled: false` | spinner 6 cycling glyphs → 1 static; tips void |
-| `footerLinksRegexes` for W-/D- IDs → dot-claude code search | 0 → 2 footer badges |
-| `fallbackModel: ["claude-opus-5", "sonnet"]` | clean start both arms; the switch needs an overload (void) |
-| `sandbox.failIfUnavailable: true` | clean start both arms; the refusal needs a broken sandbox (void) |
+| Change                                                                                             | Reading before → after                                                                        |
+| -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `modelSettings` `claude-opus-5-5` `effortLevel: high` (Opus 5.5 ignores a top-level `effortLevel`) | effort medium → high                                                                          |
+| `voiceEnabled` → `voice.enabled` (deprecated key)                                                  | no change; voice state has no read-only surface (void)                                        |
+| `leftArrowOpensAgents` dropped (global-config key, read only from `~/.claude.json`)                | no change                                                                                     |
+| empty `mcpServers` dropped (not a settings key)                                                    | no change                                                                                     |
+| `timeFormat: 12-hour`, `timeZone: Australia/Melbourne`                                             | "done 2:56 pm" → "done 2:55 pm": the Mac's locale already matched; pins it for other machines |
+| `maxProseWidth: 100`                                                                               | widest prose line 184 → 102 columns                                                           |
+| `prefersReducedMotion: true`, `spinnerTipsEnabled: false`                                          | spinner 6 cycling glyphs → 1 static; tips void                                                |
+| `footerLinksRegexes` for W-/D- IDs → dot-claude code search                                        | 0 → 2 footer badges                                                                           |
+| `fallbackModel: ["claude-opus-5", "sonnet"]`                                                       | clean start both arms; the switch needs an overload (void)                                    |
+| `sandbox.failIfUnavailable: true`                                                                  | clean start both arms; the refusal needs a broken sandbox (void)                              |
 
 LifeOS keeps its own keys in this file (`notifications`, `max_tokens`, `principal` and
 others). Claude Code ignores them; LifeOS's notification system reads `notifications`.
@@ -126,6 +127,11 @@ subcommand (`doctor`, `mcp`, `purge`, ...), a launch carrying a system-prompt fi
 logged `PJ_WORKERS_CONTROL=<item id>` override, and every script (engage and lifeos run
 `claude` from PATH and never see the function). Selftest: `zsh-claude-paneguard-selftest
 --mutants` (72 arms, 4 mutants).
+
+`ci` was removed on 2026-10-14 (Gavin, dotfiles-main): this refusal left it with no working
+caller, and scripts never see aliases. Its two refusal arms went with it, so the selftest is
+70 arms, and 75 passed with `--mutants`, measured 2026-10-14. The one-shot form now is
+`command claude -p "..."`.
 
 So `~/.claude/settings.json` (user settings) now reaches only `command claude` and LifeOS
 sessions; engage sessions read their own settings file.
