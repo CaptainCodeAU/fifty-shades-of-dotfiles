@@ -29,8 +29,11 @@
 #   * a breath (a full stop and a comma, about 0.3 s) goes before each line
 #     that starts a section: one that starts with ** or the status mark
 #     (v12). See BREATHS below
-#   * a middle dot between words becomes a comma (v10), so a status line
-#     "done, low risk" is not one run-together phrase
+#   * a middle dot between words becomes a full stop (v12; a comma in
+#     v10), so a status line "done. low risk." is not one run-together phrase
+#   * bold stars round a span ending in . ! or ? are dropped (v12): the
+#     voice lost the full stop's pause after "**Pause words.**" before a
+#     small letter (0.04 s against 0.22 s)
 #   * a path with two or more slashes is spoken as its last part (v10): a
 #     long one took 2.2 s, "results" alone 0.2 s. Not a URL, a date, or a
 #     word list like and/or/not
@@ -1857,10 +1860,11 @@ $t =~ s/\x{00DF}/ss/g;                          # eszett
 $t =~ s/\x{0110}/D/g; $t =~ s/\x{0111}/d/g;     # D-stroke
 $t =~ s/\x{00DE}/Th/g; $t =~ s/\x{00FE}/th/g;   # thorn
 # A middle dot between words, as in a status line "done \x{00B7} low risk", is a
-# comma (v10, Q6): dropped with the rest, the line ran together as one
-# phrase. Measured: "done, low risk" 0.46 s against 0.39 s run together.
-$t =~ s/[ \t]*\x{00B7}[ \t]*/, /g;
-$t =~ s/^[ \t]*, //mg;
+# full stop (v12, Gavin's marked-up line; a comma in v10, Q6): dropped with
+# the rest, the line ran together as one phrase. A mark already before it
+# is replaced, so "done, \x{00B7}" is not ", .".
+$t =~ s/[.,;:!?]?[ \t]*\x{00B7}[ \t]*/. /g;
+$t =~ s/^[ \t]*\. //mg;
 $t =~ s/[^\t\n\r\x06\x20-\x7e]//g;              # everything else outside printable ASCII (\x06: ours, v12)
 # No embedded speech commands like [[slnc 60000]]: after the drop above,
 # so an invisible character between the brackets cannot hide a pair, and
@@ -1880,6 +1884,13 @@ $t =~ s/^ | $//g;
 # token with no letter (a date such as 12/10/2026) are left as they are.
 $t =~ s{(?<![^\s`"'(\[\x06])((?:~|\.{1,2})?/?[\w.@+-]+(?:/[\w.@+-]*)+)(?=[\s`"')\],:;\x02-\x06]|$)}{_path_last($1)}ge;
 $t =~ s{(?<![^\s`"'(\[\x06])/([A-Za-z][A-Za-z0-9_:-]*)(?=[\s`"')\],.;!?\x02-\x06]|$)}{_slash_command($1)}ge;
+# Bold stars round a span that ends in . ! or ? go (v12, Gavin): with
+# them the voice lost the full stop's pause before a small letter.
+# MEASURED (Aaron, 460 wpm): "**Pause words.** done" 0.04 s, "Pause
+# words. done" 0.22 s; before a capital, 0.22 s either way. A label that
+# ends in a colon keeps its stars: without them its pause was shorter
+# (0.17 s became 0.11 s). After the label and section rules above.
+$t =~ s/\*\*([^*\x06]*?[.!?])\*\*/$1/g;
 $t = _pause_speak($t);                           # the marks become pauses (v9)
 my $orig = length $t;
 $t = substr($t, 0, $max) if $orig > $max;
@@ -3206,22 +3217,27 @@ lead_in=0
     _ok "...a \\x06 in the clipboard makes no breath (control)" [ "$out" = 'One. Two.' ]
     out="$(printf 'Intro.\n\n**What it means:** text.\n\xe2\x9d\xaf **Item.** done.\n  \xe2\x8b\x85 **Proof.** detail.\n- **Listed.** item.\n' | _st --print --stdin)"
     _ok "a breath before a ** line and a status-mark line (v12)" \
-        [ "$out" = 'Intro. {{{breath}}} **What it means [[slnc 150]]** text. {{{breath}}} **Item.** done. **Proof.** detail. **Listed.** item.' ]
+        [ "$out" = 'Intro. {{{breath}}} **What it means [[slnc 150]]** text. {{{breath}}} Item. done. Proof. detail. Listed. item.' ]
     _st_arm breath; _st_file "$P2"
     printf 'Aa.\n```\nx\n```\nBb.\n' | STANDIN_MS_PER_CHAR=20 _st --stdin >/dev/null 2>&1; _st_idle
     _ok "a breath cuts the text into voices, 200 ms apart (v12)" [ "$(_runs 1)" = "7000*$(_n 3 20) 0*9600 7000*$(_n 35 20) 0*9600 7000*$(_n 3 20)" ]
     _st_arm breath-lone; _st_file "$P2"
     printf '**Next.** dd ee\n' | STANDIN_MS_PER_CHAR=20 _st --stdin >/dev/null 2>&1; _st_idle
-    _ok "...a ** line first in a press: no breath (control)" [ "$(_runs 1)" = "7000*$(_n 15 20)" ]
+    _ok "...a ** line first in a press: no breath (control)" [ "$(_runs 1)" = "7000*$(_n 11 20)" ]
     _st_arm breath-queue; _st_file "$P2"; _hold
     echo "aaaa bbbb cccc" | STANDIN_MS_PER_CHAR=100 _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $(($(_n 14 100) * 2))
     printf '**Next.** dd ee\n' | STANDIN_MS_PER_CHAR=100 _st --stdin --queue --profile simone_fast >/dev/null 2>&1
     _release; _st_idle
-    _ok "...but queued after another voice: 200 ms in front (v12)" [ "$(_runs 1)" = "7000*$(_n 14 100) 0*9600 -9000*$(_n 15 100)" ]
+    _ok "...but queued after another voice: 200 ms in front (v12)" [ "$(_runs 1)" = "7000*$(_n 14 100) 0*9600 -9000*$(_n 11 100)" ]
     out="$(printf 'Before.\n```\nonly an opening fence\n' | _st --print --stdin)"
     _ok "...an unclosed fence is read as it is (control)"   [ "$out" = 'Before. ``` only an opening fence' ]
     out="$(printf '**Saved.** done \xc2\xb7 low risk.\n' | _st --print --stdin)"
-    _ok "a middle dot between words becomes a comma"        [ "$out" = '**Saved.** done, low risk.' ]
+    _ok "a middle dot between words becomes a full stop (v12)" [ "$out" = 'Saved. done. low risk.' ]
+    out="$(printf 'Intro.\n\xe2\x9d\xaf **Pause words.** \xe2\x9c\x93 done \xc2\xb7 \xe2\x9d\x95 low risk.\n' | _st --print --stdin)"
+    _ok "...and bold stars round a span ending in . go (v12)" [ "$out" = 'Intro. {{{breath}}} Pause words. done. low risk.' ]
+    out="$(printf 'Say **this one** now, **Why?** fine, **What it means for you:** you.\n' | _st --print --stdin)"
+    _ok "...not round a span without . ! ? at its end (control)" \
+        [ "$out" = 'Say **this one** now, Why? fine, **What it means for you:** you.' ]
     out="$(printf 'Open ~/CODE/a/b/notes.txt, then ../up/two/three and docs/reference/a.md.\n' | _st --print --stdin)"
     _ok "a path is spoken as its last part"                 [ "$out" = 'Open notes.txt, then three and a.md.' ]
     out="$(printf 'See https://github.com/x/say2, on 12/10/2026, and/or/not, docs/reference/dir.\n' | _st --print --stdin)"
@@ -3305,7 +3321,7 @@ notify=off
     _st_cleanup
     trap - EXIT INT TERM
     echo
-    local ran=$((pass + fail)) expected=242
+    local ran=$((pass + fail)) expected=244
     if [ "$fail" -eq 0 ] && [ $((ran + skipped)) -eq "$expected" ]; then
         if [ "$skipped" -eq 0 ]; then echo "speak-clipboard --selftest: all $pass checks passed.";
         else echo "speak-clipboard --selftest: all $pass checks passed, $skipped skipped (said above why)."; fi

@@ -418,18 +418,40 @@ after it. A breath also goes before every line that starts a section: one that
 starts with `**` (a bold label) or with the `❯` status mark (Q3: 1). Detail
 lines (`⋅`) and list items get none.
 
-### Pause words (Gavin, 13 Oct, Q4 and Q5)
+### Pause words (Gavin, 13 Oct, Q4, Q5 and Q7)
 
 Between Gavin and the agents, a pause is written as a word in triple curly
 braces inside an example, such as `{{{breath}}}`. They are notes, never
 commands: the speak key does not obey them. `--print` shows a breath it will
 make the same way.
 
-- `{{{tick}}}`: a comma, about 0.1 s.
-- `{{{stop}}}`: a full stop, about 0.2-0.3 s.
-- `{{{breath}}}`: a full stop and a comma, about 0.35 s.
-- `{{{beat}}}`: two full stops, about 0.5 s.
-- `{{{hold}}}`: about 1 second.
+**Every time an agent shows Gavin a pause word, it also shows this table**
+(Gavin, Q7: 2, "I'm not going to remember it and I don't want cognitive
+load"). It belongs to speak-clipboard work, not to the reply style.
+
+| Word | How long | Made from | Where the speak key uses it now |
+|---|---|---|---|
+| `{{{tick}}}` | About 0.1 s. | A comma. | Wherever the text has one. |
+| `{{{stop}}}` | About 0.25 s. | A full stop or a middle dot. | Wherever the text has one. |
+| `{{{breath}}}` | About 0.35 s. | A full stop plus a short silence. | Before and after code blocks, and before section lines. |
+| `{{{beat}}}` | About 0.5 s. | Not made yet. | Nowhere yet. |
+| `{{{hold}}}` | About 1 second. | Not made yet. | Nowhere yet. |
+
+Measured ranges: tick 0.03-0.09 s, stop 0.22-0.36 s, breath 0.28-0.42 s.
+
+### Status lines (Gavin's marked-up line, 13 Oct, D-20261013-A04)
+
+Gavin marked the line he wanted:
+`{{{breath}}} ❯ **Pause words.** {{{stop}}} ✓ done · {{{stop}}} ❕ low risk. {{{stop}}}`
+
+- A middle dot is now a full stop (a comma since v10).
+- Bold stars round a span ending in `.`, `!` or `?` are dropped. With them the
+  voice lost the full stop's pause before a small letter: "**Pause words.**
+  done" 0.04 s, without the stars 0.22 s; before a capital, 0.22 s either
+  way. A label ending in a colon keeps its stars: without them its pause was
+  shorter (0.17 s became 0.11 s).
+- Measured on that line after the change: breath 0.28 s, 0.25 s after "Pause
+  words", 0.36 s after "done". Before: 0.31 s, 0.05 s and 0.09 s.
 
 ### How a breath is made
 
