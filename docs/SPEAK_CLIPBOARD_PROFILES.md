@@ -541,12 +541,12 @@ v12 a press is cut at every breath into several voices, and the line player
 started up to three renders at once. Whichever request got there first was
 rendered first, and the player can only play voice 1 first:
 
-| Press | Order the requests arrived (characters) | Result |
-|---|---|---|
-| 11:23 PM | 481 first; voice 1 (165) never started | stopped at 3 s, silent |
-| 11:34 PM | 481, 737, then voice 1 (165), which waited 8 s | silent, then cut (below) |
-| 11:38 PM | 2,611 first, then voice 1 (437) | stopped at 3 s, silent |
-| 11:38 PM, next press | voice 1 (437) first | heard after 0.68 s |
+| Press                | Order the requests arrived (characters)        | Result                   |
+| -------------------- | ---------------------------------------------- | ------------------------ |
+| 11:23 PM             | 481 first; voice 1 (165) never started         | stopped at 3 s, silent   |
+| 11:34 PM             | 481, 737, then voice 1 (165), which waited 8 s | silent, then cut (below) |
+| 11:38 PM             | 2,611 first, then voice 1 (437)                | stopped at 3 s, silent   |
+| 11:38 PM, next press | voice 1 (437) first                            | heard after 0.68 s       |
 
 Ruled out, with the same log: the audio set-up (every ffplay, silent or not,
 went through the same steps, and the device ran); Bluetooth (the same warnings
@@ -568,7 +568,8 @@ waiting now counts.
 after the first audio went into ffplay, a new ffplay is started, once per
 line, and every voice it held is written again. It was chosen on the first
 reading (the device), so it would likely not have helped these presses. It is
-a safety net for a device that really does not start.
+a safety net for a device that really does not start. Kept as that (Gavin,
+14 Oct, Q11: 1).
 
 **Code-block count (Q9 v2: 1).** "Comprising of N lines" counts only lines
 with text; a blank line, or one of only spaces and tabs, is not counted.
