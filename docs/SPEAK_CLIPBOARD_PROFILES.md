@@ -411,6 +411,13 @@ Added the same evening (v11, Gavin, after listening to v10): a path ending in
 command, except a top-level folder name (`/tmp`, `/etc`, `/Users` and the like),
 which stays as it is.
 
+Changed 13 Oct (v12, Gavin, dotfiles-main, D-20261013-A02): a fenced code block is spoken as
+"A code block. Comprising of N lines." (1 line, 0 lines), where N is the
+lines between the fences, then a pause of two full stops. A full stop is about
+290 ms and `[[slnc 500]]` about 590 ms (see "What the voice can do"), so the
+cleaner writes `[[slnc 500]]` in place of the last full stop. Not yet heard by
+Gavin; if the pause sounds wrong, the number is in `_pause_speak`.
+
 ### The measuring runs and the speak key
 
 At about 9:31 PM a `pauses.py` run with six Siri renders at once, while
