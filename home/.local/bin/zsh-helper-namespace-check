@@ -54,6 +54,7 @@ FILES=(
   ~/.zsh_welcome
   ~/.zsh_tmux
   ~/.zsh_claude_launch
+  ~/.zsh_engage
 )
 
 # A public function we KNOW these files define. If it is absent after sourcing,

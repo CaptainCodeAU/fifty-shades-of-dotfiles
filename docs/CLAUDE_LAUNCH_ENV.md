@@ -1,13 +1,11 @@
 # What the Claude launch sets, and why
 
-`home/.zsh_claude_launch` holds the shared launch blocks (`__cl_*`, one piece of launch
-work each, ids L1 to L11) and engage's own part: `__engage_screen` and `__claude_launch`,
+`home/.zsh_claude_launch` holds engage's launch blocks (`__cl_*`, one piece of launch
+work each, ids L1 to L11) and its own part: `__engage_screen` and `__claude_launch`,
 the list engage runs. `engage` (`~/CODE/CaptainCodeAU/engage`) sources it for every
-engage session. `.zshrc` also sources it but calls nothing in it: `ci`, its last caller
-there, was removed on 2026-10-14. `makeitso`
-(`~/CODE/CaptainCodeAU/v2/makeitso`) keeps its own list in its own script, reads this file
-only for the blocks it names, and removes every function that is not `__cl_*`. Split into
-blocks on 2026-10-13; before that it was one function. This page lists every variable
+engage session. `home/.zsh_engage` (loaded by `.zshrc`) also sources it but calls nothing
+in it: `ci`, its last caller there, was removed on 2026-10-14. No other launcher reads it.
+Split into blocks on 2026-10-13; before that it was one function. This page lists every variable
 `__claude_launch` puts on the `claude` process, each checked against Claude Code's own
 references on 2026-10-06 (Claude Code 2.1.290), and how each change was tested.
 

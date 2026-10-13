@@ -1,20 +1,14 @@
-# ~/.zsh_claude_launch -- the shared Claude Code launch blocks, and engage's launch function.
+# ~/.zsh_claude_launch -- engage's Claude Code launch: its blocks, and its launch function.
 #
-# TWO PARTS (split 2026-10-13, so more than one launcher can share the blocks without
-# stepping on each other):
-#   1. SHARED BLOCKS, every one named __cl_*: each does one piece of launch work, and any
-#      launcher may call any of them. Each carries its id from the launcher-pieces list
-#      (L1 to L11). The name is the contract: __cl_* means shared.
+# TWO PARTS (split 2026-10-13):
+#   1. BLOCKS, every one named __cl_*: each does one piece of launch work. Each carries its id
+#      from the launcher-pieces list (L1 to L11). No other launcher reads this file; one that
+#      wants a piece keeps its own copy.
 #   2. ENGAGE'S OWN, named anything but __cl_*: __engage_screen (the only piece that reads
 #      an engage variable) and __claude_launch, the list engage runs. Sourced by the `engage`
-#      launcher (~/CODE/CaptainCodeAU/engage, every engage session); ~/.zshrc also sources
-#      this file but calls nothing in it. Its other caller, the `ci` alias, was removed on
-#      2026-10-14 (Gavin), so this part goes with engage when engage goes.
-# A launcher with its own list (makeitso, today) keeps that list in its own script, sources
-# this file only for the blocks it names, and removes every function here that is not
-# __cl_*, so engage's part can never run inside it.
-# THE RULE THAT KEEPS THEM APART: change a shared block, check every launcher that names
-# it; change engage's part, check engage.
+#      launcher (~/CODE/CaptainCodeAU/engage, every engage session); ~/.zsh_engage (loaded by
+#      ~/.zshrc) also sources this file but calls nothing in it. Its other caller, the `ci`
+#      alias, was removed on 2026-10-14 (Gavin), so this whole file goes with engage.
 #
 # HOW A BLOCK HANDS A SETTING TO CLAUDE: the launch function declares `local -a __cl_env`,
 # a block hands NAME=value to __cl_add, which appends it there (zsh's dynamic scope lets a
@@ -24,9 +18,7 @@
 # key) in your shell.
 # SOURCING THIS FILE ONLY DEFINES FUNCTIONS: it sets no variable, prints nothing and runs
 # nothing, so a launcher that sources it inherits nothing it did not ask for. Keep it that
-# way. makeitso refuses to start when reading this file changes its exported variables or
-# shell options, calls exit, or replaces makeitso's own check; a stray command that changes
-# neither still runs, so do not add one.
+# way: every interactive shell sources it through ~/.zsh_engage.
 #
 # It lived inside .zshrc until F3 (2026-09-21), when it moved here so a launcher SCRIPT
 # (pj then, engage since pj retired on 4-5 Oct 2026) can source one small file instead of

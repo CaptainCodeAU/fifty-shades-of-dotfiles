@@ -1,6 +1,8 @@
 #!/usr/bin/env zsh
-# zsh-claude-paneguard-selftest -- prove .zshrc's claude() herdr pane guard refuses and passes
-# what it claims to (W-20260924-A59, D-20260924-A05).
+# zsh-claude-paneguard-selftest -- prove the claude() herdr pane guard refuses and passes
+# what it claims to (W-20260924-A59, D-20260924-A05). Since 2026-10-14 the guard lives in
+# ~/.zsh_engage, which .zshrc loads unless MAKEITSO=1; this test sources .zshrc as a pane does,
+# then the .zsh_engage under test, and mutates .zsh_engage.
 #
 # THE SEAM is a real INTERACTIVE zsh (`zsh -i`) that sources the .zshrc under test, exactly as a
 # herdr pane does, so any alias that ends in `claude` would expand and route through the function the way
@@ -18,9 +20,10 @@
 # for --help only, never started as a session.
 #
 # Usage:
-#   zsh-claude-paneguard-selftest            test <repo>/home/.zshrc   (exit 0 = all passed)
+#   zsh-claude-paneguard-selftest            test <repo>/home/.zshrc + .zsh_engage (exit 0 = all passed)
 #   zsh-claude-paneguard-selftest --mutants  also prove four one-fault mutants each turn arms red
 #   ZSHRC_UNDER_TEST=<file> zsh-claude-paneguard-selftest   test another copy (master's, say)
+#   ZSH_ENGAGE_UNDER_TEST=<file> ...                         the same for .zsh_engage
 # Exit: 0 all passed; 1 an arm failed; 2 REFUSED (stub not first, driver did not finish: NOT a pass).
 
 setopt no_unset pipe_fail 2>/dev/null
@@ -37,6 +40,7 @@ _resolve_repo() {
 }
 REPO="$(_resolve_repo)"
 UNDER_TEST="${ZSHRC_UNDER_TEST:-$REPO/home/.zshrc}"
+ENGAGE_UNDER_TEST="${ZSH_ENGAGE_UNDER_TEST:-$REPO/home/.zsh_engage}"
 MUTANTS=0
 for arg in "$@"; do
     case "$arg" in
@@ -46,6 +50,7 @@ for arg in "$@"; do
     esac
 done
 [[ -f "$UNDER_TEST" ]] || { print -ru2 -- "REFUSED: no .zshrc at $UNDER_TEST"; exit 2; }
+[[ -f "$ENGAGE_UNDER_TEST" ]] || { print -ru2 -- "REFUSED: no .zsh_engage at $ENGAGE_UNDER_TEST"; exit 2; }
 
 T="$(mktemp -d "${TMPDIR:-/tmp}/zsh-cpg.XXXXXX")" || { print -ru2 -- "REFUSED: mktemp failed"; exit 2; }
 [[ -d "$T" ]] || { print -ru2 -- "REFUSED: no temp dir"; exit 2; }
@@ -67,6 +72,9 @@ chmod +x "$T/bin/claude" "$T/bin/cpg-script-caller" || exit 2
 
 cat > "$T/zdot/.zshrc" <<'EOF'
 source "$CPG_UNDER_TEST"
+# .zshrc loaded the deployed ~/.zsh_engage; load the copy under test over it (a mutant, say),
+# except in a makeitso session, which must get no guard at all.
+[[ "${MAKEITSO-}" != 1 ]] && source "$CPG_ENGAGE_UNDER_TEST"
 __claude_launch() { "$@"; }
 path=("$CPG_STUB_BIN" ${path:#$HOME/.local/bin})
 # The abort's own negative control (--mutants): drop the stub dir and the check below must fire.
@@ -170,14 +178,14 @@ fi
 print -r -- "CPG_DRIVER_DONE $n"
 EOF
 
-# run_suite <zshrc> <quiet 0|1> -> sets S_PASS S_FAIL S_STATE (ok|refused)
+# run_suite <zshrc> <quiet 0|1> [<zsh_engage>] -> sets S_PASS S_FAIL S_STATE (ok|refused)
 run_suite() {
-    local zrc="$1" quiet="$2" mode out rc done_n got l
+    local zrc="$1" quiet="$2" eng="${3:-$ENGAGE_UNDER_TEST}" mode out rc done_n got l
     local -a lines pl fl dl envset
     S_PASS=0; S_FAIL=0; S_STATE=ok
     for mode in herdr plain; do
-        envset=(env -u HERDR_ENV -u PJ_WORKERS_CONTROL -u CONV_HOOK_LOG
-            ZDOTDIR="$T/zdot" CPG_UNDER_TEST="$zrc" CPG_STUB_BIN="$T/bin" CPG_MODE="$mode"
+        envset=(env -u HERDR_ENV -u PJ_WORKERS_CONTROL -u CONV_HOOK_LOG -u MAKEITSO
+            ZDOTDIR="$T/zdot" CPG_UNDER_TEST="$zrc" CPG_ENGAGE_UNDER_TEST="$eng" CPG_STUB_BIN="$T/bin" CPG_MODE="$mode"
             CPG_SUBCMDS="$SUBCMDS" CONV_HOOK_LOG="$T/hooks-security.log" HERDR_PANE_ID=w0:cpg-selftest)
         [[ "$mode" == herdr ]] && envset+=(HERDR_ENV=1)
         out="$("${envset[@]}" zsh -i -c "source ${(q)T}/driver.zsh" 2>/dev/null)"; rc=$?
@@ -204,10 +212,21 @@ run_suite() {
 
 echo "claude() herdr pane guard selftest"
 echo "  under test: $UNDER_TEST"
+echo "              $ENGAGE_UNDER_TEST"
 [[ -n "$SUBCMDS" ]] && echo "  real CLI: $REAL_CLAUDE ($(print -r -- ${=SUBCMDS} | wc -w | tr -d ' ') subcommand names)"
 echo
 run_suite "$UNDER_TEST" 0
 PASS=$S_PASS; FAIL=$S_FAIL; STATE=$S_STATE
+# A makeitso session (MAKEITSO=1) gets none of .zsh_engage: claude is the plain program, and
+# c, claude-clean and lifeos do not exist. Same pane shell, same stub, guard file not loaded.
+mk_out="$(env -u PJ_WORKERS_CONTROL MAKEITSO=1 HERDR_ENV=1 ZDOTDIR="$T/zdot" CPG_UNDER_TEST="$UNDER_TEST" \
+    CPG_ENGAGE_UNDER_TEST="$ENGAGE_UNDER_TEST" CPG_STUB_BIN="$T/bin" zsh -i -c 'whence -w claude c claude-clean lifeos; claude -p hi' 2>&1)"
+if [[ "$mk_out" == *"claude: command"* && "$mk_out" == *"c: none"* && "$mk_out" == *"claude-clean: none"* \
+      && "$mk_out" == *"lifeos: none"* && "$mk_out" == *"STUB_ARGV: [-p] [hi]"* ]]; then
+    PASS=$(( PASS + 1 )); printf '  \033[32mPASS\033[0m  [makeitso] MAKEITSO=1: no guard, no c, claude-clean or lifeos; claude -p runs the program\n'
+else
+    FAIL=$(( FAIL + 1 )); printf '  \033[31mFAIL\033[0m  [makeitso] MAKEITSO=1 shell :: %s\n' "${mk_out//$'\n'/ | }"
+fi
 echo; echo "  $PASS passed, $FAIL failed"
 
 if (( MUTANTS )) && [[ "$STATE" == ok ]]; then
@@ -227,11 +246,11 @@ if (( MUTANTS )) && [[ "$STATE" == ok ]]; then
     )
     local m
     for m in ${(ko)MUT}; do
-        sed -E "${MUT[$m]}" "$UNDER_TEST" > "$T/$m.zshrc"
-        if cmp -s "$UNDER_TEST" "$T/$m.zshrc"; then
+        sed -E "${MUT[$m]}" "$ENGAGE_UNDER_TEST" > "$T/$m.zsh_engage"
+        if cmp -s "$ENGAGE_UNDER_TEST" "$T/$m.zsh_engage"; then
             FAIL=$(( FAIL + 1 )); printf '  \033[31mFAIL\033[0m  %s: the sed changed nothing (mutant not built)\n' "$m"; continue
         fi
-        run_suite "$T/$m.zshrc" 1
+        run_suite "$UNDER_TEST" 1 "$T/$m.zsh_engage"
         if [[ "$S_STATE" == ok ]] && (( S_FAIL > 0 )); then
             PASS=$(( PASS + 1 )); printf '  \033[32mPASS\033[0m  %s turns %d arm(s) red\n' "$m" "$S_FAIL"
         else

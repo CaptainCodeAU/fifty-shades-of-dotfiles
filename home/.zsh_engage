@@ -1,0 +1,176 @@
+# ~/.zsh_engage -- the old Claude setup's shell parts, split out of ~/.zshrc (2026-10-14).
+#
+# Everything here belongs to engage and the setup around it, not to your shell preferences:
+# the launch file it runs, the c() signpost, claude-clean, the claude() herdr pane guard,
+# the lifeos alias and the plain-Claude switch. ~/.zshrc loads this file in every shell
+# EXCEPT when MAKEITSO=1, which only the makeitso launcher sets, for its own sessions; so a
+# makeitso session gets all of ~/.zshrc and none of this. When engage is deleted, delete
+# this file and the one line in ~/.zshrc that loads it.
+#
+# Order inside matters in one place: the plain-Claude switch at the end unsets claude() and
+# c(), so it must come after them.
+
+# __claude_launch, engage's launch function, and the shared launch blocks it is built from
+# (__cl_*) live in ~/.zsh_claude_launch, so the `engage` launcher (~/CODE/CaptainCodeAU/engage)
+# sources the same definition. One copy: edit it there, never paste it back here. Nothing in
+# this file calls it since `ci` went (2026-10-14, below).
+[[ -f ~/.zsh_claude_launch ]] && source ~/.zsh_claude_launch
+
+# THE c-FAMILY ALIASES ARE RETIRED (Gavin, 2026-10-06): cb, cr, ct, cpr, cd_ and cskip
+# were removed, and with them _LIFEOS_SP, the LifeOS system-prompt array only they used.
+# engage replaced them. Two of them were
+# broken when they went: cd_ passed `--debug "filter"` (the filter only binds as
+# --debug=filter) and cr's "resume last session" was bare --resume, which opens a picker.
+# Restore any of them from git history (commit before this note) if one is ever needed.
+# `ci` (one-shot `claude -p`) went too, on 2026-10-14 (Gavin, dotfiles-main): it was kept
+# "because scripts may pipe into it", but scripts never see aliases, and since Q10
+# (2026-10-06) the claude() guard below refused it everywhere, so nothing could use it
+# (measured 2026-10-13: `ci hello` refused, rc 1). The one-shot form now is
+# `command claude -p "..."`, which runs with no rules and no launch blocks.
+
+# `c` IS A SIGNPOST NOW, NOT A LAUNCHER (F5c, ruled by Gavin 2026-09-22).
+#
+# It used to be the standard launch, and it is the habit that predates the pj framework:
+# typing it in a project got a session with no start card, no open items, no rulings and
+# no wrap-up -- the whole framework silently absent, which looks exactly like a framework
+# that has nothing to say. A launcher reached for out of habit cannot be fixed by writing
+# something down somewhere else.
+#
+# Measured before changing it: `alias c=` has exactly ONE definition on this machine, this
+# line, and it lives in THIS repo rather than in a LifeOS-owned file. Nothing can call it
+# programmatically either -- an alias is not visible to a script, a hook or a cron job --
+# so the only caller was a human at a prompt. `c-legacy` kept the original launch, unchanged,
+# from 2026-09-22 until P10 the same day, when Gavin ruled it out: nothing had needed it
+# (it was never the LifeOS launch; that is `lifeos`).
+#
+# A FUNCTION, not an alias, because it has to EXIT 1: a signpost that exits 0 is
+# indistinguishable from a launcher that started something and printed nothing. The text
+# and every arm of its behaviour live in ~/.local/bin/pj-launcher-menu (stowed from this
+# repo), which has a --selftest; an alias could not be tested at all, since a
+# non-interactive shell never sees one. Same reasoning that made `pj` a script in F3.
+c() { pj-launcher-menu; }
+
+# pj IS RETIRED (4-5 Oct 2026). ~/.local/bin/pj now only prints "pj is retired. Type
+# engage." engage (~/CODE/CaptainCodeAU/engage) is the project launcher; it sources
+# ~/.zsh_claude_launch like pj did. pj's design notes (why a script and not an alias, the
+# --setting-sources hook gap, the glued system-prompt file) live in this file's git history
+# before 2026-10-06 and in docs/PJ_PROFILES.md. There is still NO `alias pj` here on
+# purpose: an alias would shadow the retirement message on PATH.
+
+# Clean-room Claude for measuring front-loaded context (CLAUDE.md, memory,
+# skills, MCP) one piece at a time. Measured 2026-09-06 (Claude Code 2.1.263):
+#   --bare            : the official minimal mode, but it never reads OAuth or
+#                       the keychain -> "Not logged in" on a Max account.
+#   CLAUDE_CONFIG_DIR : a fresh config dir is logged out for the same reason.
+#   THIS              : login intact. An EMPTY cwd means no project CLAUDE.md
+#                       and no auto-memory (both keyed by folder); empty
+#                       --setting-sources drops user/project/local settings,
+#                       and with them hooks, loadAtStartup files and even the
+#                       global ~/.claude/CLAUDE.md; --strict-mcp-config with no
+#                       --mcp-config means zero MCP servers. A fresh session
+#                       launched this way reported: no PAI, no CLAUDE.md from
+#                       any path, no memory, 0 MCP tools.
+# Not routed through __claude_launch on purpose: that injects $NVD_API_KEY (and
+# injected $GH_TOKEN until 2026-09-18), exactly the kind of ambient context this exists to
+# exclude. No permission flags either -- default mode prompts before acting,
+# which is the safe default for an untrusted-by-design scratch folder; add
+# --dangerously-skip-permissions yourself when a test needs to act.
+#
+# Usage: claude-clean [extra claude flags...]
+#   claude-clean --append-system-prompt-file ~/draft-CLAUDE.md
+#   claude-clean --disable-slash-commands      # also drop the built-in skills
+# Inside: /context shows the token breakdown per source -- the measuring stick.
+# Each run gets its own empty folder under ~/.cache/claude-clean/; drop a
+# CLAUDE.md in there and relaunch WITHOUT --setting-sources '' to test a
+# project CLAUDE.md the way a real project injects it. Folders are yours to
+# delete; nothing else references them.
+claude-clean() {
+    local dir="$HOME/.cache/claude-clean/$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$dir" || return 1
+    echo "clean-room cwd: $dir" >&2
+    ( builtin cd "$dir" && command claude --setting-sources '' --strict-mcp-config "$@" )
+}
+
+# claude() IS THE HERDR PANE GUARD (W-20260924-A59, ruled by Gavin 2026-09-24, D-20260924-A05).
+#
+# Since 2026-10-06 (Gavin, Q10) it guards OUTSIDE herdr too: a plain `claude` typed in
+# any interactive zsh is refused, naming engage. Until then HERDR_ENV unset meant `command
+# claude "$@"` and nothing else. Scripts never see this function, and `command claude` is the
+# way round in both places. The refusal says where it happened ("in a herdr pane" or
+# "outside herdr").
+#
+# It refuses to start a Claude session that carries no system-prompt file,
+# i.e. one with none of pj's (or LifeOS's) rules. WHY A SHELL FUNCTION: herdr TYPES
+# `claude <args>` into the pane's interactive zsh for `agent start --kind claude`, `pane run`,
+# `send-text` and `send-keys` letter by letter, and every `c` alias ends in `claude` too
+# (measured with a decoy function, redteam-3 H1). A Bash PreToolUse hook sees none of the
+# indirect routes; the shell that finally runs the word sees them all.
+#
+# PASSES (inside or outside herdr): any argv holding --append-system-prompt-file or --system-prompt-file
+# (pj, cb, cr, ct, cpr, cd_, cskip); --help/-h/--version/-v anywhere; a first word that is a
+# `claude --help` subcommand (the selftest diffs this list against the real CLI); and
+# PJ_WORKERS_CONTROL=<item id> in the environment, the one named override, which is logged with
+# the pane id to hooks-security.log and REFUSED when that log cannot be written.
+# REFUSES: everything else, `claude -p` included (a headless session is still a session
+# without the rules, it counts against the per-project cap, and `pj -p` exists).
+# Gavin typing a bare `claude` in a herdr pane is refused too (ruled): the guard cannot tell his
+# typing from herdr's, and the refusal names the escape.
+#
+# ESCAPES, by design: `command claude` (the human's, and pj-worker --cleanroom's route, as in
+# claude-clean above); `sudo claude` (already `command claude`); a path such as
+# ~/.local/bin/claude. Scripts never see this function: pj and lifeos run claude from PATH.
+# It DOES reach an agent's Bash tool, through Claude Code's shell snapshot, where HERDR_ENV is
+# set in every herdr-hosted session. Blind to: panes whose shell started before this landed,
+# a non-zsh pane shell, and a machine without these dotfiles. Proof: zsh-claude-paneguard-selftest.
+claude() {
+    local __cpg_where="outside herdr"   # Gavin Q10, 2026-10-06: refuse outside herdr too
+    [[ "${HERDR_ENV-}" == 1 ]] && __cpg_where="in a herdr pane"
+    local __cpg_a MATCH MBEGIN MEND   # =~ below sets MATCH; keep it out of the caller's shell
+    local -a match mbegin mend
+    for __cpg_a in "$@"; do
+        case "$__cpg_a" in
+            --append-system-prompt-file|--append-system-prompt-file=*|--system-prompt-file|--system-prompt-file=*|-h|--help|-v|--version)
+                command claude "$@"; return ;;
+        esac
+    done
+    case "${1-}" in
+        agents|attach|auth|auto-mode|doctor|gateway|import|install|logs|mcp|plugin|plugins|project|purge|respawn|rm|setup-token|stop|kill|ultrareview|update|upgrade)
+            command claude "$@"; return ;;
+    esac
+    local __cpg_log="${CONV_HOOK_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/hooks-security.log}"
+    local __cpg_argv="${${(j: :)${(q)@}}//$'\n'/ }" __cpg_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [[ -n "${PJ_WORKERS_CONTROL-}" ]]; then
+        if [[ "$PJ_WORKERS_CONTROL" =~ '^W-[0-9]{8}-[A-Za-z0-9]+$' ]] \
+            && { mkdir -p "${__cpg_log:h}" && print -r -- "[$__cpg_ts] OVERRIDE claude-paneguard \"PJ_WORKERS_CONTROL=$PJ_WORKERS_CONTROL pane=${HERDR_PANE_ID-unknown}\" \"claude $__cpg_argv\"" >> "$__cpg_log"; } 2>/dev/null; then
+            print -ru2 -- "claude: herdr pane guard OVERRIDDEN by PJ_WORKERS_CONTROL=$PJ_WORKERS_CONTROL (logged to $__cpg_log)"
+            command claude "$@"; return
+        fi
+        print -ru2 -- "claude: REFUSED $__cpg_where: PJ_WORKERS_CONTROL must be an item id like W-20260924-A59 and must log to $__cpg_log; one failed. Workers: engage-worker start. To run it anyway: command claude $__cpg_argv"
+        return 1
+    fi
+    { mkdir -p "${__cpg_log:h}" && print -r -- "[$__cpg_ts] BLOCKED claude-paneguard \"no system-prompt file pane=${HERDR_PANE_ID-unknown}\" \"claude $__cpg_argv\"" >> "$__cpg_log"; } 2>/dev/null
+    print -ru2 -- "claude: REFUSED $__cpg_where: this session would carry no rules. Workers: engage-worker start. Yourself: engage. To run it anyway: command claude $__cpg_argv"
+    return 1
+}
+
+
+# LifeOS launch command — without this, LifeOS Core is installed but launches
+# un-constituted (plain `claude`, no mode banner / verification / security layer).
+# LifeOS is PAUSED since 2026-09-28 (option D: switched off, every file kept, feature
+# review pending). Its hook registrations moved out of ~/.claude/settings.json into
+# ~/.claude/settings.lifeos.json, so plain `claude` runs without them and only this
+# launcher loads them (lifeos.ts forwards everything after a bare `--` to claude).
+# Its background service (com.lifeos.pulse) is disabled; for a full LifeOS session start it
+# first with: launchctl enable gui/$(id -u)/com.lifeos.pulse && launchctl bootstrap
+# gui/$(id -u) ~/Library/LaunchAgents/com.lifeos.pulse.plist
+alias lifeos='bun "$HOME/.claude/LIFEOS/TOOLS/lifeos.ts" -s "$HOME/.claude/LIFEOS/LIFEOS_SYSTEM_PROMPT.md" -- --settings "$HOME/.claude/settings.lifeos.json"'
+
+
+# DOTFILES_PLAIN_CLAUDE: written by `install.sh --skip-claude` (the codebox profile)
+# for a box with no ~/.claude, no engage and no pj. The claude() pane guard above
+# refuses a bare `claude` and names engage, which such a box cannot follow, and
+# `c` points at pj-launcher-menu for the same framework. Plain Claude Code is the
+# whole point there (codebox Q17), so both go. docs/INSTALL_PROFILES.md.
+if [[ -n "$DOTFILES_PLAIN_CLAUDE" ]]; then
+    unset -f claude c 2>/dev/null
+fi

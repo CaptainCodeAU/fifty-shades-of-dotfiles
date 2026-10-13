@@ -1636,10 +1636,12 @@ _stow_skip_names() {
     if [[ "$SKIP_CLAUDE" == true ]]; then
         # Gavin's Claude and pj tooling, none of which belongs on a plain Claude Code
         # box (codebox Q17): the hooks and skills, the pj profiles, the pj and Claude
-        # tools in ~/.local/bin (with their selftests) and the shared launch function.
+        # tools in ~/.local/bin (with their selftests), the shared launch function and
+        # .zsh_engage, the old setup's shell parts (~/.zshrc loads it only if present).
         echo ".claude"
         echo ".config/pj"
         echo ".zsh_claude_launch"
+        echo ".zsh_engage"
         echo ".local/bin/pj"
         echo ".local/bin/pj-*"
         echo ".local/bin/claude-hooks-sync*"
