@@ -411,12 +411,25 @@ Added the same evening (v11, Gavin, after listening to v10): a path ending in
 command, except a top-level folder name (`/tmp`, `/etc`, `/Users` and the like),
 which stays as it is.
 
-Changed 13 Oct (v12, Gavin, dotfiles-main, D-20261013-A02): a fenced code block is spoken as
-"A code block. Comprising of N lines." (1 line, 0 lines), where N is the
-lines between the fences, then a pause of two full stops. A full stop is about
-290 ms and `[[slnc 500]]` about 590 ms (see "What the voice can do"), so the
-cleaner writes `[[slnc 500]]` in place of the last full stop. Not yet heard by
-Gavin; if the pause sounds wrong, the number is in `_pause_speak`.
+Changed 13 Oct (v12, Gavin, dotfiles-main, D-20261013-A02): a fenced code block
+is spoken as "A code block. Comprising of N lines." (1 line, 0 lines), where N
+is the lines between the fences, then a pause of two full stops.
+
+Checked by ear the same evening, at Gavin's suggestion: each case rendered to a
+WAV with the remote's voice (Aaron, 460 wpm), timed, and written back to text
+with the Whisper model already on the Mac (`whisper-large-v3-turbo`).
+
+- A full stop is a 0.21 s pause at this rate, so two are about 0.42 s. Typing
+  `..` adds no pause.
+- `[[slnc 500]]` is 0.51 s between two words but only 0.34 s at the end of the
+  text. Gavin's remote sends a reply in pieces, so a code block often ends one.
+  The cleaner now writes `[[slnc 680]]` at the end (0.50 s, measured) and
+  `[[slnc 500]]` elsewhere (0.51 s, measured).
+- Heard back: "Run this a code block, comprising of two lines, then check."
+  No pause command was spoken.
+- A reply that quotes a pause command in its text, such as `[[slnc 500]]` in
+  backticks, is read as "S L N C 500": the cleaner splits every `[[` so
+  copied text can never command the voice. Do not quote one in a reply.
 
 ### The measuring runs and the speak key
 

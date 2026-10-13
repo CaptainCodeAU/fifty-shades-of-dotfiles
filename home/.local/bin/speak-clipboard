@@ -1779,9 +1779,13 @@ sub _code_block {
 }
 sub _pause_speak {
     my $t = shift;
-    # Two full stops (v12): a full stop is about 290 ms, [[slnc 500]] about
-    # 590 ms (Pauses, above), so it stands in for the code block's own full
-    # stop and a second one.
+    # Two full stops (v12): it stands in for the code block's own full stop
+    # and a second one. MEASURED 13 Oct (Aaron, 460 wpm, rendered and timed):
+    # a full stop is 0.21 s; [[slnc 500]] is 0.51 s between two words but
+    # only 0.34 s at the end of the text, and Gavin's remote sends a reply
+    # in pieces, so a code block often ends one. [[slnc 680]] there is about
+    # 0.50 s, the same as in the middle. Typing ".." adds no pause.
+    $t =~ s/\.\x05$/ [[slnc 680]]/;
     $t =~ s/\.\x05/ [[slnc 500]]/g;
     $t =~ s/\x02([.)])/_pause_form($P_NUMBER, $1)/ge;
     $t =~ s/\x03:/_pause_form($P_LABEL, ':')/ge;
@@ -3165,7 +3169,8 @@ lead_in=0
     out="$(printf 'Before.\n```\none\n\nthree\n```\nAfter.\n' | _st --print --stdin)"
     _ok "...3 lines, a blank line counted (v12)"           [ "$out" = 'Before. A code block. Comprising of 3 lines [[slnc 500]] After.' ]
     out="$(printf 'Done:\n```\n```\n' | _st --print --stdin)"
-    _ok "...an empty one is 0 lines, at the end (v12)"     [ "$out" = 'Done: A code block. Comprising of 0 lines [[slnc 500]]' ]
+    _ok "...an empty one is 0 lines; at the end, a longer pause (v12)" \
+        [ "$out" = 'Done: A code block. Comprising of 0 lines [[slnc 680]]' ]
     out="$(printf 'One.\x05 Two.\n' | _st --print --stdin)"
     _ok "...a \\x05 in the clipboard makes no pause (control)" [ "$out" = 'One. Two.' ]
     out="$(printf 'Before.\n```\nonly an opening fence\n' | _st --print --stdin)"
