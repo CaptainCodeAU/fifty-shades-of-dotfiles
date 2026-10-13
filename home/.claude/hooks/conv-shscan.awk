@@ -1616,7 +1616,8 @@ function reset_check(    k, j, n, b, a, w, rec, p, c, v, chain, exited, shown) {
 #       is re-scanned as the pane's zsh would run it, and denied when the COMMAND
 #       WORD of any command in it is claude (bare or by path) or a .zshrc alias or
 #       function that launches it (cb cr ci cpr cd_ cskip ct lifeos claude-clean,
-#       __claude_launch claude). claude's info forms pass: --version, --help and
+#       __claude_launch claude, and the launch blocks __cl_ssh_agent and __cl_run_with_env
+#       in front of claude). claude's info forms pass: --version, --help and
 #       the subcommands in pj_info().
 # Seen through: $(...), backticks, function bodies, and the string argument of
 #   bash/sh/zsh/dash/ksh -c, eval, and ssh's remote command (all re-scanned).
@@ -1742,7 +1743,9 @@ function pj_pane_claude(k, j,    n, a, v, w) {
         for (a = j; a <= n; a++) { w = base(unq(WR[k, a])); if (w == "claude" || pj_alias(w)) return w " (after an expansion)" }
         return ""
     }
-    if (base(v) == "__claude_launch" || base(v) == "_claude_launch") {
+    # The launch function, and the two shared launch blocks (~/.zsh_claude_launch, split
+    # 2026-10-13) that take a command and run it: seen through, in a chain, to that command.
+    while (base(v) ~ /^(__claude_launch|_claude_launch|__cl_ssh_agent|__cl_run_with_env)$/) {
         for (j++; j <= n && WR[k, j] ~ /^[A-Za-z_][A-Za-z0-9_]*=/; j++) ;
         if (j > n) return ""
         v = unq(WR[k, j])

@@ -295,6 +295,12 @@ EOF
   conv_arm deny "pane run: claude -p (headless is a session too)" "herdr pane run w1:p1 \"claude -p 'hi'\""
   conv_arm deny "pane run: claude-clean (ruled: pj-worker --cleanroom)" 'herdr pane run w1:p1 "claude-clean"'
   conv_arm deny "pane run: __claude_launch claude"               'herdr pane run w1:p1 "__claude_launch claude --resume"'
+  # The launch blocks that take a command (~/.zsh_claude_launch, split 2026-10-13), alone and chained.
+  conv_arm deny "pane run: __cl_run_with_env claude by path"     'herdr pane run w1:p1 "__cl_run_with_env /opt/homebrew/bin/claude"'
+  conv_arm deny "pane run: __cl_ssh_agent __cl_run_with_env claude" 'herdr pane run w1:p1 "__cl_ssh_agent __cl_run_with_env claude"'
+  conv_arm deny "A36 __cl_run_with_env claude -p x"              '__cl_run_with_env claude -p x'
+  conv_arm allow "pane run: __cl_ssh_agent ls (not claude)"      'herdr pane run w1:p1 "__cl_ssh_agent ls"'
+  conv_arm allow "__cl_run_with_env claude --version (info form)" '__cl_run_with_env claude --version'
   conv_arm deny "pane run: command word is an expansion, then claude" 'herdr pane run "$pid" "${(j: :)envs} claude --resume"'
   conv_arm deny "pane run: claude in \$(...) in the pane"        'herdr pane run w1:p1 "x=\$(claude -p hi)"'
   conv_arm deny "pane run: bash -c inside the pane string"       "herdr pane run w1:p1 \"bash -c 'cd /tmp && claude'\""

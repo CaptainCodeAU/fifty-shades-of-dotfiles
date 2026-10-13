@@ -1,15 +1,21 @@
 # What the Claude launch sets, and why
 
-`home/.zsh_claude_launch` defines `__claude_launch`, the one function that starts Claude
-Code on this machine. `engage` (`~/CODE/CaptainCodeAU/engage`) sources it for every
-engage session, and `.zshrc` uses it for `ci`. This page lists every variable it puts on
-the `claude` process, each checked against Claude Code's own references on 2026-10-06
-(Claude Code 2.1.290), and how each change was tested.
+`home/.zsh_claude_launch` holds the shared launch blocks (`__cl_*`, one piece of launch
+work each, ids L1 to L11) and engage's own part: `__engage_screen` and `__claude_launch`,
+the list engage runs. `engage` (`~/CODE/CaptainCodeAU/engage`) sources it for every
+engage session, and `.zshrc` uses `__claude_launch` for `ci`. `makeitso`
+(`~/CODE/CaptainCodeAU/v2/makeitso`) keeps its own list in its own script, reads this file
+only for the blocks it names, and removes every function that is not `__cl_*`. Split into
+blocks on 2026-10-13; before that it was one function. This page lists every variable
+`__claude_launch` puts on the `claude` process, each checked against Claude Code's own
+references on 2026-10-06 (Claude Code 2.1.290), and how each change was tested.
 
-## The launch chain (both branches identical)
+## The launch chain
 
-The function has two chains, one with the throwaway SSH agent and one without (no key
-file). They must stay identical; a variable added to one belongs in both.
+Each setting below comes from one block, which hands it to `__cl_add`; `__cl_run_with_env`
+exports them for the `claude` process alone, inside the throwaway SSH agent when the key
+file exists (`__cl_ssh_agent`) and without one when it does not. Since the split there is
+one chain, so the two can no longer drift apart.
 
 | Variable                               | Value                                     | Why                                                                                                                                                                      |
 | -------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -22,8 +28,8 @@ file). They must stay identical; a variable added to one belongs in both.
 | `CLAUDE_AUTO_BACKGROUND_TASKS` | `1` | Long subagents move to the background. Engage sessions already launch subagents async, so no visible effect here; kept on Gavin's pick (Q15.1: 2). |
 | `CLAUDE_CODE_WORKER_CHECKIN_SCHEDULE` | `600` | Reminds Claude every 10 minutes to check background work still running. Live test with 60: the check-in arrived at 60.0 s; none without it. |
 
-`GH_TOKEN` was removed from both chains on 2026-09-18; the note in the `if` branch says
-why and how to revert.
+`GH_TOKEN` was removed from the launch on 2026-09-18; the note above `__cl_run_with_env`
+says why.
 
 ## Removed on 2026-10-06
 

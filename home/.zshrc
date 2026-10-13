@@ -989,9 +989,10 @@ alias repomix='pnpm dlx repomix@1.16.1'
 # Use system ripgrep for Claude Code search (faster than bundled ripgrep).
 export USE_BUILTIN_RIPGREP=0
 
-# __claude_launch, the shared launch function, lives in ~/.zsh_claude_launch so the
-# `engage` launcher (~/CODE/CaptainCodeAU/engage) sources the same definition. One copy:
-# edit it there, never paste it back here. `ci` below is the last alias that calls it.
+# __claude_launch, engage's launch function, and the shared launch blocks it is built from
+# (__cl_*) live in ~/.zsh_claude_launch, so the `engage` launcher (~/CODE/CaptainCodeAU/engage)
+# sources the same definition. One copy: edit it there, never paste it back here. `ci` below
+# is the last alias that calls it.
 [[ -f ~/.zsh_claude_launch ]] && source ~/.zsh_claude_launch
 
 # THE c-FAMILY ALIASES ARE RETIRED (Gavin, 2026-10-06): cb, cr, ct, cpr, cd_ and cskip

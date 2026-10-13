@@ -1,75 +1,88 @@
-# ~/.zsh_claude_launch -- the shared Claude Code launch function, __claude_launch.
+# ~/.zsh_claude_launch -- the shared Claude Code launch blocks, and engage's launch function.
 #
-# Sourced by the `engage` launcher (~/CODE/CaptainCodeAU/engage, every engage session)
-# and by ~/.zshrc for `ci`, the one c-family alias left (the rest retired 2026-10-06).
+# TWO PARTS (split 2026-10-13, so more than one launcher can share the blocks without
+# stepping on each other):
+#   1. SHARED BLOCKS, every one named __cl_*: each does one piece of launch work, and any
+#      launcher may call any of them. Each carries its id from the launcher-pieces list
+#      (L1 to L11). The name is the contract: __cl_* means shared.
+#   2. ENGAGE'S OWN (and `ci`'s), named anything but __cl_*: __engage_screen (the only piece
+#      that reads an engage variable) and __claude_launch, the list engage runs. Sourced by
+#      the `engage` launcher (~/CODE/CaptainCodeAU/engage, every engage session) and by
+#      ~/.zshrc for `ci`. `ci` has no working caller today: the claude() guard in ~/.zshrc
+#      refuses its bare -p (measured by dotfiles-main, 13 Oct 2026). Decide `ci` before
+#      deleting this part with engage.
+# A launcher with its own list (makeitso, today) keeps that list in its own script, sources
+# this file only for the blocks it names, and removes every function here that is not
+# __cl_*, so engage's part can never run inside it.
+# THE RULE THAT KEEPS THEM APART: change a shared block, check every launcher that names
+# it; change engage's part, check engage and `ci`.
+#
+# HOW A BLOCK HANDS A SETTING TO CLAUDE: the launch function declares `local -a __cl_env`,
+# a block hands NAME=value to __cl_add, which appends it there (zsh's dynamic scope lets a
+# called function see its caller's locals), and the launcher exports the list for claude
+# alone (engage and `ci`: __cl_run_with_env, in a subshell). __cl_add refuses when __cl_env
+# is not a local of the caller, so a block typed at a prompt cannot leave a value (the NVD
+# key) in your shell.
+# SOURCING THIS FILE ONLY DEFINES FUNCTIONS: it sets no variable, prints nothing and runs
+# nothing, so a launcher that sources it inherits nothing it did not ask for. Keep it that
+# way. makeitso refuses to start when reading this file changes its exported variables or
+# shell options, calls exit, or replaces makeitso's own check; a stray command that changes
+# neither still runs, so do not add one.
+#
 # It lived inside .zshrc until F3 (2026-09-21), when it moved here so a launcher SCRIPT
 # (pj then, engage since pj retired on 4-5 Oct 2026) can source one small file instead of
 # all of .zshrc, and so there is ONE definition of the launch steps. Edit it here, never
 # copy it back into .zshrc.
 #
 # Nothing LifeOS-specific lives here. Paths under ~ only; the two keychain reads are
-# inside the function and their values are never printed.
+# inside their blocks and their values are never printed.
 #
 # Every variable in the launch chain below is checked against Claude Code's env-var
 # reference and the installed program (docs/CLAUDE_LAUNCH_ENV.md). Three that Claude Code
 # no longer reads were removed on 2026-10-06, each after a live A/B test in a herdr pane:
 # CLAUDE_CODE_HIDE_ACCOUNT_INFO, ENABLE_EXPERIMENTAL_MCP_CLI and ENABLE_TOOL_SEARCH=1.
 #
-# Listed in zsh-helper-namespace-check's FILES (D-20260917-06): the function is named
+# Listed in zsh-helper-namespace-check's FILES (D-20260917-06): every function here is named
 # __double_underscore so Claude Code's shell snapshot keeps it.
 
-# Isolated ephemeral SSH agent per Claude Code session.
-# Spins up a dedicated ssh-agent in a subshell so the GitHub key is never
-# loaded into macOS's system-wide launchd agent. The agent (and key) die
-# when Claude Code exits; a 12h timeout is a safety net for SIGKILL.
-#
-# Per-process telemetry exception: clears DISABLE_TELEMETRY and DO_NOT_TRACK
-# for the claude process ONLY (the global shell stays opt-out for every other
-# tool) so GrowthBook feature flags evaluate and Remote Control can start.
-# OTEL metrics (CLAUDE_CODE_ENABLE_TELEMETRY=0) and error reporting stay off.
-# Pairs with remoteControlAtStartup:true, which engage sessions read from ~/.claude.json
-# (an older-version value Claude Code still honours: engage loads no user settings.json
-# and its template does not set the key); also requires a full-scope token from
-# `claude auth login`.
-__claude_launch() {
-  # Print what the last commit touched, on screen, before Claude takes over the terminal.
-  # WHY HERE AND NOT IN A HOOK: hooks/LastCommitFiles.sh is wired to SessionStart and feeds the
-  # AGENT, but Claude Code stores SessionStart stdout as a context ATTACHMENT and never prints it,
-  # and it spawns hooks with NO controlling terminal, so the hook cannot write to /dev/tty either.
-  # Both measured 2026-09-15: a probe inside the hook logged `w_test=yes real_write=FAIL`, i.e.
-  # `[ -w /dev/tty ]` passes while the open() fails. The shell, unlike the hook, owns the terminal.
-  # Writing to /dev/tty rather than stdout is deliberate: it can never pollute a pipe, so `ci`
-  # (piped -p) stays clean with no flag sniffing. Fails silently when there is no tty.
+# ===========================================================================================
+# PART 1: SHARED BLOCKS
+# ===========================================================================================
+
+# The one way a block adds a setting: NAME=value words appended to the caller's local
+# __cl_env. Refuses (rc 1, message on stderr, nothing appended) when __cl_env is missing or
+# global, i.e. when no launch function declared it.
+__cl_add() {
+  if [[ ${(t)__cl_env-} != *local* ]]; then
+    print -ru2 -- "__cl_add: no local __cl_env here; call launch blocks from a launch function (local -a __cl_env first)."
+    return 1
+  fi
+  __cl_env+=("$@")
+}
+
+# L1, last commit files. Print what the last commit touched, on screen, before Claude takes
+# over the terminal. Note: it runs the hook script from the old home, ~/.claude/hooks.
+# WHY HERE AND NOT IN A HOOK: hooks/LastCommitFiles.sh is wired to SessionStart and feeds the
+# AGENT, but Claude Code stores SessionStart stdout as a context ATTACHMENT and never prints it,
+# and it spawns hooks with NO controlling terminal, so the hook cannot write to /dev/tty either.
+# Both measured 2026-09-15: a probe inside the hook logged `w_test=yes real_write=FAIL`, i.e.
+# `[ -w /dev/tty ]` passes while the open() fails. The shell, unlike the hook, owns the terminal.
+# Writing to /dev/tty rather than stdout is deliberate: it can never pollute a pipe, so `ci`
+# (piped -p) stays clean with no flag sniffing. Fails silently when there is no tty.
+__cl_last_commit() {
   if [[ -x "$HOME/.claude/hooks/LastCommitFiles.sh" ]]; then
     { "$HOME/.claude/hooks/LastCommitFiles.sh" </dev/null > /dev/tty; } 2>/dev/null || true
   fi
+}
 
-  local key="$HOME/.ssh/captaincodeau"
-  # Read-only GitHub API token (macOS Keychain). Used ONLY by the status-cache curl
-  # below; it is NOT exported to the Claude session (GH_TOKEN removed 2026-09-18, see
-  # the note at the launch chain). Empty on non-macOS; the cache refresh then skips.
-  # Never run `gh auth login`.
+# L2 + L3, GitHub token check. Refresh the read-only GH API status cache that the welcome
+# banner reads. Background, 6h-gated; never blocks the launch.
+# The read-only GitHub API token (macOS Keychain) is used ONLY by the status-cache curl
+# below; it is NOT exported to the Claude session (GH_TOKEN removed 2026-09-18, see the note
+# at __cl_run_with_env) and it is local to this block. Empty on non-macOS; the refresh then
+# skips. Never run `gh auth login`.
+__cl_github_status() {
   local gh_token="$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)"
-  # NVD API key (macOS Keychain) -> $NVD_API_KEY for this Claude session. UNLIKE
-  # $GH_TOKEN this is NOT a credential: it grants no access to anything and only
-  # lifts NVD's anonymous rate limit from 5 to 50 requests/30s, which is what makes
-  # a 231-formula Homebrew sweep ~2min instead of ~20min. Free + instantly
-  # regenerable at https://nvd.nist.gov/developers/request-an-api-key.
-  # toolchain-cve-check ALSO reads this same Keychain entry directly, so a manual
-  # run outside a Claude session is authenticated too; this export just saves it
-  # the `security` call. Empty on non-macOS -> the sweep degrades to slow, never wrong.
-  local nvd_key="$(security find-generic-password -a "$USER" -s nvd-api-key -w 2>/dev/null)"
-  # The classic-renderer lock (CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN, set on the launch below):
-  # 1 by default, from Gavin's June 2026 rejection of fullscreen's mouse capture. pj lifts it
-  # by exporting PJ_RENDERER=fullscreen, which it does for every session unless the profile,
-  # --classic or /classic asks for classic (D-20260927-A11; pj exports PJ_RENDERER on every
-  # launch, so it is never inherited). The `c` family never sets it and stays locked. W-20260923-A12: the lock outranks /tui and NO_FLICKER, so a
-  # docked Mods pane needed a way past it.
-  local _pj_alt_off=1
-  [[ "${PJ_RENDERER-}" == fullscreen ]] && _pj_alt_off=0
-
-  # Refresh the read-only GH API status cache that the welcome banner reads.
-  # Background, 6h-gated, uses the token we just read; never blocks the launch.
   if [[ -n "$gh_token" ]]; then
     local _ghc="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/gh_api_status" _ghn=$(date +%s) _ghl=0
     # GNU `stat -c` FIRST, then BSD `-f`. The order is load-bearing, not style: on
@@ -88,8 +101,63 @@ __claude_launch() {
         printf 'status=%s\nchecked=%s\nexpires=%s\n' "$_s" "$_ghn" "$_e" > "$_ghc" ) &!
     fi
   fi
+  return 0
+}
 
-  if [[ -f "$key" ]]; then
+# L4, NVD key. NVD API key (macOS Keychain) -> $NVD_API_KEY for this Claude session. UNLIKE
+# $GH_TOKEN this is NOT a credential: it grants no access to anything and only lifts NVD's
+# anonymous rate limit from 5 to 50 requests/30s, which is what makes a 231-formula Homebrew
+# sweep ~2min instead of ~20min. Free + instantly regenerable at
+# https://nvd.nist.gov/developers/request-an-api-key.
+# toolchain-cve-check ALSO reads this same Keychain entry directly, so a manual run outside a
+# Claude session is authenticated too; this export just saves it the `security` call. Empty on
+# non-macOS -> the sweep degrades to slow, never wrong (the variable is still set, empty).
+__cl_nvd_key() {
+  local nvd_key="$(security find-generic-password -a "$USER" -s nvd-api-key -w 2>/dev/null)"
+  __cl_add "NVD_API_KEY=$nvd_key"
+}
+
+# L7 + L8, telemetry exception. Clears DISABLE_TELEMETRY and DO_NOT_TRACK for the claude
+# process ONLY (the global shell stays opt-out for every other tool) so GrowthBook feature
+# flags evaluate and Remote Control can start. OTEL metrics (CLAUDE_CODE_ENABLE_TELEMETRY=0)
+# and error reporting stay off. Clearing DISABLE_TELEMETRY re-enables the "How is Claude
+# doing?" survey, so CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 travels with it (added 2026-10-06).
+# For engage: pairs with remoteControlAtStartup:true, which engage sessions read from ~/.claude.json
+# (an older-version value Claude Code still honours: engage loads no user settings.json
+# and its template does not set the key); also requires a full-scope token from
+# `claude auth login`.
+__cl_telemetry_exception() {
+  __cl_add DISABLE_TELEMETRY= DO_NOT_TRACK= CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1
+}
+
+# L9, no freeze. A terminal that stops reading (paused pane, stalled SSH) cannot freeze
+# Claude. Added 2026-10-06.
+__cl_no_freeze() {
+  __cl_add CLAUDE_CODE_NONBLOCKING_STDOUT=1
+}
+
+# L10, auto background. Long subagents move to the background. Added 2026-10-06.
+__cl_auto_background() {
+  __cl_add CLAUDE_AUTO_BACKGROUND_TASKS=1
+}
+
+# L11, 10-minute reminder. Reminds Claude every 10 minutes (600 s) to check background work
+# still running. Added 2026-10-06.
+__cl_checkin_reminder() {
+  __cl_add CLAUDE_CODE_WORKER_CHECKIN_SCHEDULE=600
+}
+
+# L5, private SSH agent: a WRAPPER, so it goes last and takes the command to run.
+# Isolated ephemeral SSH agent per Claude Code session.
+# Spins up a dedicated ssh-agent in a subshell so the GitHub key is never
+# loaded into macOS's system-wide launchd agent. The agent (and key) die
+# when Claude Code exits; a 12h timeout is a safety net for SIGKILL.
+# No key file: the command runs with no agent.
+# Its one local is named __cl_key, not key: a local is still in scope while claude runs, and
+# it would hide an inherited exported variable of the same name from claude.
+__cl_ssh_agent() {
+  local __cl_key="$HOME/.ssh/captaincodeau"
+  if [[ -f "$__cl_key" ]]; then
     (
       eval "$(ssh-agent -s -t 43200)" >/dev/null
       trap 'ssh-agent -k >/dev/null 2>&1' EXIT INT TERM HUP
@@ -104,41 +172,64 @@ __claude_launch() {
       # `--apple-load-keychain` (a different command).
       # The fallback keeps this portable: the flag is macOS-only, so a non-macOS box
       # fails the first form and runs the original.
-      ssh-add --apple-use-keychain "$key" 2>/dev/null || ssh-add "$key"
-      # GH_TOKEN REMOVED 2026-09-18 from BOTH launch chains (this one and the else
-      # branch below). It used to be injected as:
-      #     GH_TOKEN="$gh_token" \
-      # To revert, restore that line into each chain (NOT as a comment inside it:
-      # the chain is backslash-continued, so a '#' line would swallow the rest).
-      # Why it went: every session started with a GitHub key in its environment, where
-      # any command could read it and any transcript could record it. That is the route
-      # by which tokens reached transcripts from June 2026. All consumers now fetch
-      # their own credential and fail closed (toolchain-cve-check, ci-watch,
-      # zed-version-check, and LifeOS's five), so nothing needed it here.
-      # $gh_token is still read above and still used for the local status-cache curl.
-      # Ordering rule D-20260917-03 is satisfied: the keyring was repointed at the
-      # narrow PAT and the old broad token revoked BEFORE this line was removed.
-      DISABLE_TELEMETRY= \
-        DO_NOT_TRACK= \
-        NVD_API_KEY="$nvd_key" \
-        CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN="$_pj_alt_off" \
-        CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 \
-        CLAUDE_CODE_NONBLOCKING_STDOUT=1 \
-        CLAUDE_AUTO_BACKGROUND_TASKS=1 \
-        CLAUDE_CODE_WORKER_CHECKIN_SCHEDULE=600 \
-        "$@"
+      ssh-add --apple-use-keychain "$__cl_key" 2>/dev/null || ssh-add "$__cl_key"
+      "$@"
     )
   else
-    # No SSH key file: same chain, no ssh-agent. GH_TOKEN note: see the if branch above.
-    # Keep the two chains identical; a variable added to one belongs in both.
-    DISABLE_TELEMETRY= \
-      DO_NOT_TRACK= \
-      NVD_API_KEY="$nvd_key" \
-      CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN="$_pj_alt_off" \
-      CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 \
-      CLAUDE_CODE_NONBLOCKING_STDOUT=1 \
-      CLAUDE_AUTO_BACKGROUND_TASKS=1 \
-      CLAUDE_CODE_WORKER_CHECKIN_SCHEDULE=600 \
-      "$@"
+    "$@"
   fi
+}
+
+# The runner: export the settings the blocks collected in __cl_env, then run the command.
+# Always in a subshell, so nothing is exported into the calling shell (`ci` runs in your
+# interactive shell). The count guard matters: `export` with no names PRINTS every exported
+# variable, so an empty list must never reach it. `builtin` so an alias or function named
+# export cannot silently drop the settings.
+# The subshell (not `env`) keeps shell functions callable: `ci` hands over `claude`, which in
+# an interactive shell is the claude() pane guard from .zshrc, and `env` cannot run a function.
+# GH_TOKEN REMOVED 2026-09-18 from the launch chain. It used to be injected as
+# GH_TOKEN="$gh_token" beside the settings below. Why it went: every session started with a
+# GitHub key in its environment, where any command could read it and any transcript could
+# record it. That is the route by which tokens reached transcripts from June 2026. All
+# consumers now fetch their own credential and fail closed (toolchain-cve-check, ci-watch,
+# zed-version-check, and LifeOS's five), so nothing needed it here. Ordering rule
+# D-20260917-03 was satisfied: the keyring was repointed at the narrow PAT and the old broad
+# token revoked BEFORE the line was removed. Do not add a token to __cl_env.
+__cl_run_with_env() {
+  (
+    (( ${+__cl_env} )) && (( ${#__cl_env} )) && builtin export "${__cl_env[@]}"
+    "$@"
+  )
+}
+
+# ===========================================================================================
+# PART 2: ENGAGE'S OWN
+# ===========================================================================================
+
+# L6, the screen switch (engage only: it reads PJ_RENDERER, an engage variable).
+# The classic-renderer lock (CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN): 1 by default, from
+# Gavin's June 2026 rejection of fullscreen's mouse capture. engage lifts it by exporting
+# PJ_RENDERER=fullscreen, which it does for every session unless the profile, --classic or
+# /classic asks for classic (D-20260927-A11; engage exports PJ_RENDERER on every launch, so it
+# is never inherited). `ci` never sets it and stays locked. W-20260923-A12: the lock outranks
+# /tui and NO_FLICKER, so a docked Mods pane needed a way past it.
+__engage_screen() {
+  local alt_off=1
+  [[ "${PJ_RENDERER-}" == fullscreen ]] && alt_off=0
+  __cl_add "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=$alt_off"
+}
+
+# engage's list (and `ci`'s): every piece, in the order the single function ran them before
+# the split. Takes the claude command line as its arguments.
+__claude_launch() {
+  local -a __cl_env=()
+  __cl_last_commit           # L1
+  __cl_github_status         # L2 + L3
+  __cl_nvd_key               # L4
+  __engage_screen            # L6
+  __cl_telemetry_exception   # L7 + L8
+  __cl_no_freeze             # L9
+  __cl_auto_background       # L10
+  __cl_checkin_reminder      # L11
+  __cl_ssh_agent __cl_run_with_env "$@"   # L5, then claude
 }
