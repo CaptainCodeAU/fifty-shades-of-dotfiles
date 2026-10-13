@@ -301,14 +301,14 @@ to about 290 ms.
 
 Each mark measured in three sentences (`chars.py`, below); the middle value:
 
-| Pause                         | After                                            |
-| ----------------------------- | ------------------------------------------------ |
-| none                          | a space, `"` `/` `*` `#`                         |
-| about 80 ms                   | `,` `...` `-` `--` dashes `)` `\|`               |
-| 110-130 ms, uneven            | `;` `:` `. . .`                                  |
-| 270-290 ms                    | `.` `!` `?` `..` and any line break              |
-| 150 ms, steady                | `[[slnc N]]` for any N from 50 to 450            |
-| N plus about 90 ms            | `[[slnc N]]` from 500 up (500 -> 590, 1000 -> 1090) |
+| Pause              | After                                               |
+| ------------------ | --------------------------------------------------- |
+| none               | a space, `"` `/` `*` `#`                            |
+| about 80 ms        | `,` `...` `-` `--` dashes `)` `\|`                  |
+| 110-130 ms, uneven | `;` `:` `. . .`                                     |
+| 270-290 ms         | `.` `!` `?` `..` and any line break                 |
+| 150 ms, steady     | `[[slnc N]]` for any N from 50 to 450               |
+| N plus about 90 ms | `[[slnc N]]` from 500 up (500 -> 590, 1000 -> 1090) |
 
 So there is no pause between about 150 and 500 ms, and no punctuation gives
 a short steady one; `[[slnc]]` does. After a list number, `[[slnc 150]]`
@@ -429,13 +429,13 @@ make the same way.
 (Gavin, Q7: 2, "I'm not going to remember it and I don't want cognitive
 load"). It belongs to speak-clipboard work, not to the reply style.
 
-| Word | How long | Made from | Where the speak key uses it now |
-|---|---|---|---|
-| `{{{tick}}}` | About 0.1 s. | A comma. | Wherever the text has one. |
-| `{{{stop}}}` | About 0.25 s. | A full stop or a middle dot. | Wherever the text has one. |
-| `{{{breath}}}` | About 0.35 s. | A full stop plus a short silence. | Before and after code blocks, and before section lines. |
-| `{{{beat}}}` | About 0.5 s. | Not made yet. | Nowhere yet. |
-| `{{{hold}}}` | About 1 second. | Not made yet. | Nowhere yet. |
+| Word           | How long        | Made from                         | Where the speak key uses it now                         |
+| -------------- | --------------- | --------------------------------- | ------------------------------------------------------- |
+| `{{{tick}}}`   | About 0.1 s.    | A comma.                          | Wherever the text has one.                              |
+| `{{{stop}}}`   | About 0.25 s.   | A full stop or a middle dot.      | Wherever the text has one.                              |
+| `{{{breath}}}` | About 0.35 s.   | A full stop plus a short silence. | Before and after code blocks, and before section lines. |
+| `{{{beat}}}`   | About 0.5 s.    | Not made yet.                     | Nowhere yet.                                            |
+| `{{{hold}}}`   | About 1 second. | Not made yet.                     | Nowhere yet.                                            |
 
 Measured ranges: tick 0.03-0.09 s, stop 0.22-0.36 s, breath 0.28-0.42 s.
 
@@ -523,8 +523,60 @@ play it. `fed=no` means the voice was still rendering.
 One, at 11:38 PM, was stopped after 3.14 s with nothing heard (it ran before
 `fed` existed). One more silent press, at 11:34 PM, ended itself after about
 10 s with "ffplay's clock has not moved for 5 s ... (a stuck audio device?)".
-So the silent presses look like the audio device not starting, not the text;
-likely, not yet proven.
+That first reading (the audio device not starting) was wrong: see "Why some
+presses were silent" below.
 
 Tests: 14 checks (258 in all). A copy with the logging switched off fails the
 13 that need it; the 14th, a sound file left by another player, is a control.
+
+## Why some presses were silent (14 Oct)
+
+Found by reading the Mac's own log (`/usr/bin/log show`, processes sirittsd,
+say2, ffplay, coreaudiod, bluetoothd) for three silent presses and one that
+worked, on 13 Oct.
+
+**Cause: the voice parts reached the Siri voice service out of order.**
+`sirittsd` renders one request at a time, in the order requests arrive. Since
+v12 a press is cut at every breath into several voices, and the line player
+started up to three renders at once. Whichever request got there first was
+rendered first, and the player can only play voice 1 first:
+
+| Press | Order the requests arrived (characters) | Result |
+|---|---|---|
+| 11:23 PM | 481 first; voice 1 (165) never started | stopped at 3 s, silent |
+| 11:34 PM | 481, 737, then voice 1 (165), which waited 8 s | silent, then cut (below) |
+| 11:38 PM | 2,611 first, then voice 1 (437) | stopped at 3 s, silent |
+| 11:38 PM, next press | voice 1 (437) first | heard after 0.68 s |
+
+Ruled out, with the same log: the audio set-up (every ffplay, silent or not,
+went through the same steps, and the device ran); Bluetooth (the same warnings
+in the good press); other audio at the same time (one iTerm alert at 11:38 PM,
+absent from the other two); the stop at 11:38:12 PM (coreaudiod cleaned up in
+8 ms); slow rendering (thermal state 0, normal sentence timings).
+
+**Fix: renders in order.** A voice's render starts only once the voice before
+it has sent audio, or ended. The service is serial anyway, so nothing is lost.
+
+**Second fault: a false "stuck audio device".** The stall check timed
+ffplay's clock from ffplay's start, not from its first audio. At 11:34 PM
+voice 1 arrived 8 s late and was cut 10 ms after it went in. The clock is now
+timed from the first audio. Also found by a new test: a stuck ffplay holding
+under 0.5 s of audio never ended at all; with nothing played, any audio
+waiting now counts.
+
+**The restart (Q10: 1).** Built as asked: when nothing has played 1.5 s
+after the first audio went into ffplay, a new ffplay is started, once per
+line, and every voice it held is written again. It was chosen on the first
+reading (the device), so it would likely not have helped these presses. It is
+a safety net for a device that really does not start.
+
+**Code-block count (Q9 v2: 1).** "Comprising of N lines" counts only lines
+with text; a blank line, or one of only spaces and tabs, is not counted.
+
+**Leftover processes.** Gavin asked whether jammed players of the same kind
+were checked for. At 12:03 AM on 14 Oct none were running: no line player,
+say2 or ffplay. A press stops the previous player as a whole process group,
+and the restart kills its own ffplay before starting another.
+
+Tests: 270 in all. Each fix was taken out of a copy in turn, and each copy
+fails its own new checks.

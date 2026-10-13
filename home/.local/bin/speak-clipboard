@@ -1344,7 +1344,7 @@ _trim_log() {
     [ -f "$f" ] || return 0
     n="$(wc -l <"$f" 2>/dev/null)" || return 0
     [ "${n:-0}" -gt "$max" ] || return 0
-    tail -n "$max" "$f" >"$f.tmp" 2>/dev/null && command mv -f "$f.tmp" "$f" 2>/dev/null
+    { tail -n "$max" "$f" >"$f.tmp"; } 2>/dev/null && command mv -f "$f.tmp" "$f" 2>/dev/null
 }
 _on_exit() {
     [ "$mode" != "selftest" ] || return 0
@@ -1824,9 +1824,10 @@ sub _pause_form {
     return $orig;
 }
 # A code block (v12, Gavin: "A code block. Comprising of N line(s).", a
-# breath before and after).
+# breath before and after). N counts only lines with text (Gavin, 14 Oct,
+# Q9 v2: 1): a blank line inside the block is not a line you can read.
 sub _code_block {
-    my $n = () = $_[0] =~ /\n/g;
+    my $n = () = $_[0] =~ /^.*\S.*$/mg;
     return "\x06A code block. Comprising of $n line" . ($n == 1 ? '' : 's') . ".\x06";
 }
 sub _pause_speak {
@@ -1865,7 +1866,7 @@ $t =~ s/\e\][^\a\e]*(?:\a|\e\\)//g;            # OSC (titles, hyperlinks), one a
 # A fenced code block (``` lines) is "A code block. Comprising of N
 # lines." and no more (v12, Gavin; "Code block." in v10, Q7): a command
 # read out symbol by symbol took 2.9 s and said nothing to listen to. N is
-# the lines between the fences. First, so a bar or a rule inside one is
+# the lines with text between the fences (Q9 v2). First, so a bar or a rule inside one is
 # never taken for a table. An unclosed fence is read as it is. \x06 marks
 # a breath (BREATHS, below); one already in the clipboard is dropped
 # first, so every \x06 is ours.
@@ -1971,8 +1972,9 @@ my $fed;          # when its first audio went into ffplay; undef before
 my $BPS     = 96000;   # 48 kHz mono s16le: bytes per second (96 per ms)
 my $LEAD    = 0.3;     # the next voice goes in when this much is left
 my $END     = 0.1;     # the line is over when this much is left
-my $RENDERS = 3;       # voices rendering at once: the current and the next two
+my $RENDERS = 3;       # voices rendered ahead: the current and the next two, each started after the one before sends audio
 my $STALL   = 5;       # ffplay's clock still this long with audio waiting: give up
+my $RESTART = 1.5;     # nothing played this long after the first audio went in: a new ffplay, once (Q10)
 my @FFPLAY  = qw(ffplay -nodisp -autoexit -infbuf -stats -loglevel error -volume 100
                  -f s16le -ar 48000 -ch_layout mono -i -);
 
@@ -2158,6 +2160,30 @@ sub ff_kill {
     %ff = ();
 }
 
+# Q10 (Gavin, 14 Oct: 1). Some presses made no sound: audio went into
+# ffplay and its clock never left "nan", while a fresh press a few seconds
+# later played in 0.7 s (press log, 13 Oct, 11:23, 11:34 and 11:38 PM).
+# So when nothing at all has played $RESTART seconds after the first audio
+# went into this ffplay, it is replaced once per line, and every voice it
+# held is rewound and written again into the new one, as drop() does. A
+# second stuck ffplay is left to check_stall, which ends the line.
+my $restarts = 0;
+sub check_restart {
+    return if $restarts || defined $began || !$ff{pid} || !defined $ff{t0};
+    return unless time - $ff{t0} > $RESTART && ff_played() == 0;
+    $restarts++;
+    note("ffplay played nothing for $RESTART s with audio waiting: a new ffplay, once");
+    press_log(sprintf('outcome=restart after=%.2fs', time - $T0));
+    ff_kill();
+    my $first;
+    for my $i (0 .. $#v) {
+        next unless defined $v[$i]{start};
+        $first //= $i;
+        $v[$i]{pos} = 0; delete $v[$i]{start};
+    }
+    $cur = $first if defined $first;
+}
+
 # A clock that stops while audio waits to be played is a stuck audio
 # device, and the line would never end (2026-10-10 review): after $STALL
 # seconds the line ends, with a note.
@@ -2165,7 +2191,11 @@ sub check_stall {
     return unless $ff{pid};
     my $p = ff_played();
     if ($p != $ff{seen}) { $ff{seen} = $p; $ff{moved} = time; $ff_fails = 0; return }
-    return unless ff_left() > 0.5 && time - $ff{moved} > $STALL;
+    # Nothing played at all counts with any audio waiting: a voice under
+    # 0.5 s in a device that never started held the line for ever
+    # (selftest, 14 Oct). Once something has played, the last half second
+    # is the tail, not a stall.
+    return unless ff_left() > ($p > 0 ? 0.5 : 0) && time - $ff{moved} > $STALL;
     note("ffplay's clock has not moved for $STALL s with audio waiting (a stuck audio device?): the line ends here");
     finish(1);
 }
@@ -2205,6 +2235,10 @@ sub feed {
         $x->{pos} += $n; $ff{written} += $n;
         $ff{t0} = time unless defined $ff{t0};
         if (!defined $fed) { $fed = time; sound_state() }
+        # check_stall times the clock from the first audio, not from
+        # ffplay's start: a voice that came 8 s late was taken for a
+        # stuck device and cut at once (11:34 PM, 13 Oct).
+        $ff{moved} = time if $ff{written} == $n;
     }
 }
 
@@ -2344,9 +2378,18 @@ while (1) {
     read_pipe();
     reap();
     watchdog();
+    # A voice's render starts only once the one before it has sent audio
+    # (or ended). sirittsd renders one request at a time, in the order the
+    # requests reach it, so renders started together could put voice 1
+    # behind a longer one: at 11:34 PM on 13 Oct a 165-character voice 1
+    # waited 8 s behind a 737-character voice 3, and the press was silent
+    # (sirittsd's log; write-up "Why some presses were silent").
     for my $i ($cur .. $#v) {
         last if $i >= $cur + $RENDERS;
-        start_render($v[$i]) unless $v[$i]{started} || $v[$i]{gone};
+        my $x = $v[$i];
+        next if $x->{gone};
+        start_render($x) unless $x->{started};
+        last unless $x->{got} || $x->{done};
     }
     while ($cur <= $#v && ($v[$cur]{gone} || ($v[$cur]{done} && $v[$cur]{pos} >= length $v[$cur]{buf}))) {
         $cur++;
@@ -2359,6 +2402,7 @@ while (1) {
         next;
     }
     check_sound();
+    check_restart();
     check_stall();
     free_played();
     my $rin = '';
@@ -2481,6 +2525,8 @@ STANDIN
 #                               long after the first audio (a cold device)
 #   STANDIN_FFPLAY_FREEZE_AT=s  the clock stops there (a stuck device)
 #   STANDIN_FFPLAY_DIE_AT=s     the first ffplay exits 9 there
+#   STANDIN_FFPLAY_STUCK=N      the first N ffplays print "nan" and never
+#                               play (a device that will not start, Q10)
 #   file $STANDIN_DIR/hold      the clock stands still while it exists
 use strict; use warnings; use Time::HiRes qw(time);
 my $d = $ENV{STANDIN_DIR} or die "STANDIN_DIR is not set\n";
@@ -2503,7 +2549,8 @@ while (1) {
         if (!$k) { $eof = 1 } else { syswrite($cap, $b); $got += $k; $first //= time }
     }
     my $now = time;
-    my $cold = defined $ENV{STANDIN_FFPLAY_NAN} && (!defined $first || $now < $first + $ENV{STANDIN_FFPLAY_NAN});
+    my $cold = (defined $ENV{STANDIN_FFPLAY_NAN} && (!defined $first || $now < $first + $ENV{STANDIN_FFPLAY_NAN}))
+            || (defined $ENV{STANDIN_FFPLAY_STUCK} && $n <= $ENV{STANDIN_FFPLAY_STUCK});
     $played += ($now - $last) * 96000 unless -e "$d/hold" || $cold;
     $last = $now;
     $played = $got if $played > $got;
@@ -2579,7 +2626,7 @@ STANDIN
         local -a pe=()
         local w
         for w in STANDIN_MS_PER_CHAR STANDIN_VOICES STANDIN_SAY2_SLOW STANDIN_SAY2_FAIL STANDIN_SAY2_HANG \
-                 STANDIN_FFPLAY_QUIET STANDIN_FFPLAY_NAN STANDIN_FFPLAY_FREEZE_AT STANDIN_FFPLAY_DIE_AT \
+                 STANDIN_FFPLAY_QUIET STANDIN_FFPLAY_NAN STANDIN_FFPLAY_FREEZE_AT STANDIN_FFPLAY_DIE_AT STANDIN_FFPLAY_STUCK \
                  STANDIN_OSASCRIPT_FAIL LC_ALL _SPEAK_CLIPBOARD_RENDER_TIMEOUT; do
             if eval "[ -n \"\${$w+x}\" ]"; then eval "pe+=(\"$w=\${$w}\")"; fi
         done
@@ -3145,6 +3192,7 @@ notify=off
     echo "$t2" | STANDIN_FFPLAY_NAN=1.0 _st --stdin >/dev/null 2>&1; _st_idle
     a1="$(_after)"
     _ok "...1 s or more after a cold start of 1 s"          perl -e 'exit !($ARGV[0] >= 1.0)' "${a1:-0}"
+    _ok "...and a 1 s cold start is no restart (Q10 control)" eval '[ -n "$a1" ] && _lacks "$(_line_log)" "outcome=restart" && [ ! -e "$A/standin/ffplay.2.pcm" ]'
     _st_arm sound-none; _st_file "$P2"; _hold
     echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
     _st --stop >/dev/null 2>&1; _release
@@ -3175,6 +3223,35 @@ notify=off
     _st --stop >/dev/null 2>&1
     _ok "--stop while the voice still renders: fed=no"      _has "$(_log_last)" "outcome=stopped sound=none ran=0."
     _ok "...and fed=no"                                     _has "$(_log_last)" " fed=no"
+
+    echo "A new ffplay when the first plays nothing (Q10)"
+    _st_arm restart; _st_file "$P2"
+    echo "$t2" | STANDIN_FFPLAY_STUCK=1 _st --stdin >/dev/null 2>&1
+    echo "$t2" | _st --stdin --queue --profile simone_fast >/dev/null 2>&1; _st_idle
+    _ok "a stuck first ffplay: both voices play whole in a second" eval '[ "$(_runs 2)" = "7000*$n2 -9000*$n2" ] && [ -e "$A/standin/ffplay.2.exit" ]'
+    _ok "...the stuck one was killed, and nothing is left running" eval '[ ! -e "$A/standin/ffplay.1.exit" ] && _all_gone'
+    _ok "...logged as a restart, then heard"                eval '_has "$(_line_log)" "outcome=restart after=" && _has "$(_line_log)" "outcome=sound"'
+    _ok "...with a note in the render log"                  _has "$(_render_log)" "a new ffplay, once"
+    _st_arm restart-once; _st_file "$P2"
+    echo "$t2" | STANDIN_FFPLAY_STUCK=9 _st --stdin >/dev/null 2>&1; _st_idle
+    _ok "two stuck ffplays: one restart only, then the line ends" eval '[ -e "$A/standin/ffplay.2.pcm" ] && [ ! -e "$A/standin/ffplay.3.pcm" ]'
+    _ok "...logged as no-sound (a 0.5 s voice no longer hangs it)" _has "$(_line_log)" "outcome=no-sound"
+
+    echo "Renders in order (the cause of the silent presses)"
+    _st_arm order; _st_file "$P2"
+    echo "$t2" | STANDIN_SAY2_SLOW=Aaron=1 _st --stdin >/dev/null 2>&1
+    echo "$t2" | _st --stdin --queue --profile simone_fast >/dev/null 2>&1; sleep 0.5
+    early="$(_n_lines "$A/standin/say2.log")"; _st_idle
+    _ok "voice 2's render waits for voice 1's first audio"  [ "$early" = 1 ]
+    _ok "...then both play whole, in order"                 eval '[ "$(_runs 1)" = "7000*$n2 -9000*$n2" ] && [ "$(_n_lines "$A/standin/say2.log")" = 2 ]'
+    _st_arm order-control; _st_file "$P2"
+    echo "$t2" | _st --stdin >/dev/null 2>&1
+    echo "$t2" | _st --stdin --queue --profile simone_fast >/dev/null 2>&1; sleep 0.5
+    early="$(_n_lines "$A/standin/say2.log")"; _st_idle
+    _ok "...with voice 1 not slow, voice 2 renders at once (control)" [ "$early" = 2 ]
+    _st_arm late-voice; _st_file "$P2"
+    echo "$t1" | STANDIN_SAY2_SLOW=Aaron=6 _st --stdin >/dev/null 2>&1; _st_idle
+    _ok "a voice 6 s late plays whole: no stall from ffplay's start" eval '[ "$(_runs 1)" = "7000*$n1" ] && _lacks "$(_render_log)" "clock has not moved"'
     unset STANDIN_MS_PER_CHAR
 
     echo "Locale (d78e8de: lstart follows the locale)"
@@ -3333,7 +3410,9 @@ lead_in=0
     _ok "a fenced code block is spoken as A code block, 1 line (v12)" \
         [ "$out" = 'Before. {{{breath}}} A code block. Comprising of 1 line. {{{breath}}} After.' ]
     out="$(printf 'Before.\n```\none\n\nthree\n```\nAfter.\n' | _st --print --stdin)"
-    _ok "...3 lines, a blank line counted (v12)"           [ "$out" = 'Before. {{{breath}}} A code block. Comprising of 3 lines. {{{breath}}} After.' ]
+    _ok "...2 lines: a blank line is not counted (Q9 v2)"  [ "$out" = 'Before. {{{breath}}} A code block. Comprising of 2 lines. {{{breath}}} After.' ]
+    out="$(printf 'Before.\n```\n\n  \t\nrun\n\n```\nAfter.\n' | _st --print --stdin)"
+    _ok "...nor one of only spaces and tabs: 1 line"       [ "$out" = 'Before. {{{breath}}} A code block. Comprising of 1 line. {{{breath}}} After.' ]
     out="$(printf 'Done:\n```\n```\n' | _st --print --stdin)"
     _ok "...an empty one is 0 lines; at the end, a breath by [[slnc 250]] (v12)" \
         [ "$out" = 'Done: {{{breath}}} A code block. Comprising of 0 lines. [[slnc 250]]' ]
@@ -3445,7 +3524,7 @@ notify=off
     _st_cleanup
     trap - EXIT INT TERM
     echo
-    local ran=$((pass + fail)) expected=258
+    local ran=$((pass + fail)) expected=270
     if [ "$fail" -eq 0 ] && [ $((ran + skipped)) -eq "$expected" ]; then
         if [ "$skipped" -eq 0 ]; then echo "speak-clipboard --selftest: all $pass checks passed.";
         else echo "speak-clipboard --selftest: all $pass checks passed, $skipped skipped (said above why)."; fi
