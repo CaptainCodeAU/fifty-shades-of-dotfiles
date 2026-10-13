@@ -3860,6 +3860,7 @@ _snapshot_links() {
     fi
     _install_links_watch "$dir"
     _zshenv_links_warning
+    _zshenv_colours_block
 }
 
 # A marked block in the REAL ~/.zshenv (not stowed, so it survives a failed
@@ -3894,6 +3895,41 @@ fi
 # <<< fifty-shades links-warning <<<
 BLOCK
     } > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f" && success "links-warning block added to ~/.zshenv" \
+        || warn "could not write ~/.zshenv"
+}
+
+# The colours-and-pager block (Gavin, engage-main Q13: 2, 2026-10-14): LESS, LSCOLORS and
+# LS_COLORS set in the REAL ~/.zshenv, so every zsh has them wherever it starts, a makeitso
+# session's commands included (they never load oh-my-zsh, which sets them from ~/.zshrc).
+# Each is set only when unset, as oh-my-zsh does. Same shape as _zshenv_links_warning:
+# kept if present, refused when half there, added with consent by temp + rename. The text
+# matches the block engage-main wrote on 2026-10-14, so a machine that has it sees "present".
+_zshenv_colours_block() {
+    local f="$HOME/.zshenv" begin="# >>> shell colours and pager (Q13) >>>" end="# <<< shell colours and pager (Q13) <<<"
+    local nb ne
+    nb=$(grep -cxF "$begin" "$f" 2>/dev/null) || nb=0
+    ne=$(grep -cxF "$end" "$f" 2>/dev/null) || ne=0
+    if [[ "$nb" == 1 && "$ne" == 1 ]]; then verbose "~/.zshenv colours-and-pager block present"; return 0; fi
+    if [[ "$nb" != 0 || "$ne" != 0 ]]; then
+        warn "~/.zshenv has a half colours-and-pager block (markers not one each); fix it by hand, then re-run."
+        return 0
+    fi
+    if [[ -L "$f" ]]; then warn "~/.zshenv is a symlink; not adding the colours-and-pager block to it."; return 0; fi
+    info "A marked block in ~/.zshenv sets LESS, LSCOLORS and LS_COLORS for every zsh, only where they are unset."
+    confirm "Add the colours-and-pager block to ~/.zshenv?" "y" || return 0
+    {
+        [[ -f "$f" ]] && cat "$f"
+        cat <<'BLOCK'
+# >>> shell colours and pager (Q13) >>>
+# Set here so every zsh has them wherever it starts, Claude's commands included (Gavin, Q13: 2,
+# 14 Oct 2026). The same values oh-my-zsh sets from ~/.zshrc on this Mac (lib/misc.zsh and
+# lib/theme-and-appearance.zsh; no dircolors here), and like oh-my-zsh only when not already set.
+[[ -n "${LESS-}" ]] || export LESS=-R
+[[ -n "${LSCOLORS-}" ]] || export LSCOLORS="Gxfxcxdxbxegedabagacad"
+[[ -n "${LS_COLORS-}" ]] || export LS_COLORS="di=1;36:ln=35:so=32:pi=33:ex=31:bd=34;46:cd=34;43:su=30;41:sg=30;46:tw=30;42:ow=30;43"
+# <<< shell colours and pager (Q13) <<<
+BLOCK
+    } > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f" && success "colours-and-pager block added to ~/.zshenv" \
         || warn "could not write ~/.zshenv"
 }
 

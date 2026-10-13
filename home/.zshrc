@@ -993,7 +993,19 @@ export USE_BUILTIN_RIPGREP=0
 # claude() pane guard, the lifeos alias and the plain-Claude switch) live in ~/.zsh_engage,
 # split out 2026-10-14. makeitso sets MAKEITSO=1 for its own sessions, which then load
 # everything in this file except that one.
-[[ ${MAKEITSO-} != 1 && -f ~/.zsh_engage ]] && source ~/.zsh_engage
+# A MISSING file says so (Gavin, dotfiles-main Q5 (v2) C1, 2026-10-14): ~/.zsh_engage is a
+# stow link, and a machine that pulled this repo without restowing has none, so the claude()
+# guard, c, claude-clean and lifeos would vanish with no message. Only in an interactive shell
+# with stderr on a terminal (never into a script or a Claude command's output), never under
+# MAKEITSO=1 (makeitso skips the file on purpose), and never on the plain-Claude profile
+# (DOTFILES_PLAIN_CLAUDE, set in ~/.zshrc.private.early, leaves the file out on purpose).
+if [[ ${MAKEITSO-} != 1 ]]; then
+    if [[ -f ~/.zsh_engage ]]; then
+        source ~/.zsh_engage
+    elif [[ -o interactive && -t 2 && -z ${DOTFILES_PLAIN_CLAUDE-} ]]; then
+        print -ru2 -- "⚠️  ~/.zsh_engage is missing, so the claude() guard, c, claude-clean and lifeos are not loaded. Restow the dotfiles: ./install.sh --stow-only (from the repo)"
+    fi
+fi
 
 # Intercepting the use of a command like 'sudo claude update' :P
 # pnpm branch: pnpm keeps global packages/config in the invoking user's home
