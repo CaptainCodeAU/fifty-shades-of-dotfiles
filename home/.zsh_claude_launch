@@ -50,10 +50,10 @@
 # ===========================================================================================
 
 # The one way a block adds a setting: NAME=value words appended to the caller's local
-# __cl_env. Refuses (rc 1, message on stderr, nothing appended) when __cl_env is missing or
-# global, i.e. when no launch function declared it.
+# __cl_env. Refuses (rc 1, message on stderr, nothing appended) when __cl_env is missing,
+# global, or not a plain array, i.e. when no launch function declared it with local -a.
 __cl_add() {
-  if [[ ${(t)__cl_env-} != *local* ]]; then
+  if [[ ${(t)__cl_env-} != array-local* ]]; then
     print -ru2 -- "__cl_add: no local __cl_env here; call launch blocks from a launch function (local -a __cl_env first)."
     return 1
   fi
