@@ -1863,6 +1863,19 @@
   # really need it.
   typeset -g POWERLEVEL9K_DISABLE_HOT_RELOAD=true
 
+  # Per-machine colours for the folder box and the OS icon, so machines are told apart
+  # at a glance: `herdr --remote` runs the shell on the far box, where the context
+  # segment (user@host, SSH only) stays hidden. Gavin's picks, 2026-10-15: fonzmini 18,
+  # codebox 52; any other machine keeps 4 and 7 above. On macOS the key is
+  # LocalHostName: `hostname` and %m follow the network (fonzwifi.lan on Wi-Fi). Inside
+  # the Claude sandbox scutil answers "Mac-mini", which only matters to a test run there.
+  local _p10k_host=${HOST%%.*}
+  [[ $OSTYPE == darwin* ]] && _p10k_host=$(scutil --get LocalHostName 2>/dev/null || print -r -- $_p10k_host)
+  case $_p10k_host in
+    fonzmini) typeset -g POWERLEVEL9K_DIR_BACKGROUND=18 POWERLEVEL9K_OS_ICON_BACKGROUND=18 ;;
+    codebox)  typeset -g POWERLEVEL9K_DIR_BACKGROUND=52 POWERLEVEL9K_OS_ICON_BACKGROUND=52 ;;
+  esac
+
   # If p10k is already loaded, reload configuration.
   # This works even with POWERLEVEL9K_DISABLE_HOT_RELOAD=true.
   (( ! $+functions[p10k] )) || p10k reload
