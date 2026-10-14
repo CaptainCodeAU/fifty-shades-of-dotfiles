@@ -30,6 +30,23 @@ one chain, so the two can no longer drift apart.
 `GH_TOKEN` was removed from the launch on 2026-09-18; the note above `__cl_run_with_env`
 says why.
 
+## A plain-Claude box (codebox), since 2026-10-15
+
+A box installed with `--skip-claude` (`DOTFILES_PLAIN_CLAUDE=1`; the codebox profile) has no
+`.zsh_claude_launch`, so before this date `claude` started bare there: the shell's
+`DISABLE_TELEMETRY` and `DO_NOT_TRACK` stayed set, feature flags did not load and Remote
+Control could not start. Gavin chose (dotfiles-main Q10: 1) a small `claude()` function in
+`home/.zshrc`, defined only on such a box, that adds the table above minus `NVD_API_KEY`
+(such a box holds no keys): telemetry emptied with the survey kept off, non-blocking stdout
+(codebox is reached through `herdr --remote`, so a stalled link is a real case), the classic
+renderer (`1`; no `PJ_RENDERER` there), auto-background and the 600 s check-in. No SSH agent,
+hooks, pj or engage. Tested with a stand-in `claude` that prints its environment: all six
+arrive and `NVD_API_KEY` stays unset; the control (no `DOTFILES_PLAIN_CLAUDE`) gets none.
+
+Blind spot: only a `claude` typed in zsh reaches the function. A launch that skips the shell
+starts bare. Claude's own settings file (`env`) would cover every start path, but whether it
+can empty `DISABLE_TELEMETRY` early enough for feature flags is not measured.
+
 ## Removed on 2026-10-06
 
 | Variable                          | Why it went                                                                                                                    | Live test                                                                                                           |

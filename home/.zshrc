@@ -1036,6 +1036,23 @@ if [[ ${MAKEITSO-} != 1 ]]; then
     fi
 fi
 
+# Plain-Claude launch settings (Gavin, dotfiles-main Q10: 1, 2026-10-15). A box with
+# DOTFILES_PLAIN_CLAUDE (codebox) has no ~/.zsh_claude_launch, so `claude` started bare.
+# This adds the Mac launch's settings minus NVD_API_KEY (no keys on such a box):
+# telemetry emptied for claude only, so feature flags load and Remote Control can start
+# (~/.zshenv sets it back for Claude's own commands), with the survey kept off; the
+# non-blocking stdout guard for a stalled `herdr --remote` link; the classic renderer;
+# auto-background and its 10-minute check-in. Why each: docs/CLAUDE_LAUNCH_ENV.md.
+# Only a `claude` typed in zsh reaches it; a launch that skips the shell starts bare.
+if [[ -n ${DOTFILES_PLAIN_CLAUDE-} ]]; then
+    claude() {
+        DISABLE_TELEMETRY= DO_NOT_TRACK= CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 \
+        CLAUDE_CODE_NONBLOCKING_STDOUT=1 CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
+        CLAUDE_AUTO_BACKGROUND_TASKS=1 CLAUDE_CODE_WORKER_CHECKIN_SCHEDULE=600 \
+            command claude "$@"
+    }
+fi
+
 # Intercepting the use of a command like 'sudo claude update' :P
 # pnpm branch: pnpm keeps global packages/config in the invoking user's home
 # dir, not root's -- sudo would silently operate on root's home instead
