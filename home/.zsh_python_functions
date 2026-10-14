@@ -509,7 +509,11 @@ echo -e "│     Shell:   \033[36m$SHELL\033[0m"
 echo "│"
 echo "│  📁 VSCode Settings Check:"
 echo "│  ─────────────────────────"
-if [[ "$(uname -s)" == "Darwin" ]]; then
+if [[ "$(hostname)" == *codebox* ]]; then
+    # codebox runs no editor server, so direnvrc writes no editor settings there
+    # and nothing is checked (Gavin, 2026-10-15).
+    echo "│     Not used on this box (codebox)"
+elif [[ "$(uname -s)" == "Darwin" ]]; then
     # macOS - check local app settings
     if grep -q "titleBar.activeBackground" "$HOME/Library/Application Support/Code/User/settings.json" 2>/dev/null; then
         echo -e "│     VSCode:  \033[32m✓ Configured\033[0m"

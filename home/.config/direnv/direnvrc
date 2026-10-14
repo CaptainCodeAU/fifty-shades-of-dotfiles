@@ -81,9 +81,10 @@ _setup_vscode_machine_colors() {
 
     elif [[ "$is_linux" == true ]]; then
         case "$(hostname)" in
-            *codebox*|*105*)
-                profile_name="forest-green"
-                machine_name="Linux-Codebox"
+            *codebox*)
+                # codebox runs no editor server: writing settings here would only
+                # create ~/.vscode-server and ~/.cursor-server (Gavin, 2026-10-15).
+                return 0
                 ;;
             *)
                 profile_name="burnt-orange"
