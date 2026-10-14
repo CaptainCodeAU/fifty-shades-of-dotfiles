@@ -30,11 +30,11 @@
 #     that starts a section: one that starts with ** or the status mark
 #     (v12). See BREATHS below
 #   * a beat (about 0.5 s, a longer breath) goes before each list item (- *
-#     + a bullet dot or a detail dot, at any indent), and a hold (about 1
-#     s) after a list of two or more (14 Oct, Gavin)
+#     + a bullet dot or a detail dot, at any indent), and a rest (about
+#     0.75 s) after a list of two or more (14 Oct, Gavin): with only a full
+#     stop between them, the items ran into each other
 #   * a beat after a bold label at the start of a line, of any length,
-#     ending in . ! ? or : (14 Oct, Gavin, Q4); not on a status line (Q6): with only a full stop between them, the items
-#     ran into each other
+#     ending in . ! ? or : (14 Oct, Gavin, Q4); not on a status line (Q6)
 #   * a middle dot between words becomes a full stop (v12; a comma in
 #     v10), so a status line "done. low risk." is not one run-together phrase
 #   * bold stars round a span ending in . ! or ? are dropped (v12): the
@@ -1480,17 +1480,17 @@ skip_speaker() {
 # A breath (\x06, see BREATHS in the cleaner) splits the text: each part
 # is its own voice, with $_breath_gap_ms of silence in front (v12). One at
 # the very start counts only for a voice joining a line ($2 = join).
-# A beat (\x07, 14 Oct, Gavin: before each list item) and a hold (\x01,
-# 14 Oct, Gavin: after a list) are the same cut with $_beat_gap_ms and
-# $_hold_gap_ms in front.
+# A beat (\x07, 14 Oct, Gavin: before each list item) and a rest (\x01,
+# 14 Oct, Gavin, Q10: after a list) are the same cut with $_beat_gap_ms
+# and $_rest_gap_ms in front.
 _breath_gap_ms=200
 _beat_gap_ms=350
-_hold_gap_ms=850
+_rest_gap_ms=600
 _send_voice() {
     local gap="$1" part rest="$text" mark cut
     mark="${rest:0:1}"
     case "$mark" in
-        $'\x01') cut="$_hold_gap_ms" ;;
+        $'\x01') cut="$_rest_gap_ms" ;;
         $'\x07') cut="$_beat_gap_ms" ;;
         $'\x06') cut="$_breath_gap_ms" ;;
         *) cut="" ;;
@@ -1505,7 +1505,7 @@ _send_voice() {
         [ "$part" != "$rest" ] || break
         mark="${rest:${#part}:1}"; rest="${rest:$((${#part} + 1))}"
         case "$mark" in
-            $'\x01') gap="$_hold_gap_ms" ;;
+            $'\x01') gap="$_rest_gap_ms" ;;
             $'\x07') gap="$_beat_gap_ms" ;;
             *) gap="$_breath_gap_ms" ;;
         esac
@@ -1876,15 +1876,15 @@ sub _pause_speak {
     # s with 200 ms). Where a breath and a beat meet, the beat wins. At the
     # end, a full stop and [[slnc 680]], measured 0.50 s at the end of a
     # text on 13 Oct (without the full stop).
-    # HOLDS (14 Oct, Gavin: after a list): the same cut with _hold_gap_ms
-    # (850) in front, for about 1 s; NOT MEASURED, worked out the same way.
-    # At the end, a full stop and [[slnc 1200]], from the two end-of-text
-    # measures above (500: 0.34 s, 680: 0.50 s). Where marks meet, the
-    # longest wins.
+    # RESTS (14 Oct, Gavin, Q10: after a list): the same cut with
+    # _rest_gap_ms (600) in front, for about 0.75 s; NOT MEASURED, worked
+    # out the same way. At the end, a full stop and [[slnc 950]], from the
+    # two end-of-text measures above (500: 0.34 s, 680: 0.50 s). Where
+    # marks meet, the longest wins.
     $t =~ s/[ ]*([\x01\x06\x07](?:[ ]*[\x01\x06\x07])*)[ ]*/$1 =~ y|\x01|| ? "\x01" : $1 =~ y|\x07|| ? "\x07" : "\x06"/ge;
     $t =~ s/\x06$/ [[slnc 250]]/;
     $t =~ s/\x07$/ [[slnc 680]]/;
-    $t =~ s/\x01$/ [[slnc 1200]]/;
+    $t =~ s/\x01$/ [[slnc 950]]/;
     $t =~ s/\x02([.)])/_pause_form($P_NUMBER, $1)/ge;
     $t =~ s/\x03:/_pause_form($P_LABEL, ':')/ge;
     $t =~ s/\x04/_pause_form($P_TITLE, '')/ge;
@@ -1918,10 +1918,11 @@ $t =~ s/\p{Pd}/-/g;                             # every dash
 $t =~ s/\x{2026}/.../g;                         # ellipsis
 $t =~ s/\p{Zs}/ /g;                             # every space separator (NBSP etc.)
 # A list item gets a beat in front, and the end of a list of two or more
-# items gets a hold (about 1 s), in front of the next line, or at the end
-# of the text if the list ends it (14 Oct, Gavin): with only a full stop between
-# items, a list ran together. An item is a line starting with - * + a bullet dot or the
-# reply format's detail dot, and a space, at any indent; its marker goes.
+# items gets a rest (about 0.75 s), in front of the next line, or at the
+# end of the text if the list ends it (14 Oct, Gavin): with only a full
+# stop between items, a list ran together. An item is a line starting
+# with - * + a bullet dot or the reply format's detail dot, and a space,
+# at any indent; its marker goes.
 # A line deeper than the marker is the item wrapping and gets none. A
 # numbered item keeps its own pause (pause_number) and gets no beat.
 # After the tables and the dash mapping, so a table row is never touched
@@ -3487,20 +3488,20 @@ lead_in=0
     _ok "...a \\x06 in the clipboard makes no breath (control)" [ "$out" = 'One. Two.' ]
     out="$(printf 'Intro.\n\n**What it means:** text.\n\xe2\x9d\xaf **Item.** done.\n  \xe2\x8b\x85 **Proof.** detail.\n- **Listed.** item.\n' | _st --print --stdin)"
     _ok "a breath before a ** line and a status-mark line (v12)" \
-        [ "$out" = 'Intro. {{{breath}}} **What it means:** {{{beat}}} text. {{{breath}}} Item. done. {{{beat}}} Proof. {{{beat}}} detail. {{{beat}}} Listed. {{{beat}}} item. [[slnc 1200]]' ]
+        [ "$out" = 'Intro. {{{breath}}} **What it means:** {{{beat}}} text. {{{breath}}} Item. done. {{{beat}}} Proof. {{{beat}}} detail. {{{beat}}} Listed. {{{beat}}} item. [[slnc 950]]' ]
     out="$(printf ' Easy to miss:\n  - One thing.\n  - Two things.\nAfter.\n' | _st --print --stdin)"
-    _ok "a beat before each list item, a hold after the list (14 Oct)" \
-        [ "$out" = 'Easy to miss: {{{beat}}} One thing. {{{beat}}} Two things. {{{hold}}} After.' ]
+    _ok "a beat before each list item, a rest after the list (14 Oct)" \
+        [ "$out" = 'Easy to miss: {{{beat}}} One thing. {{{beat}}} Two things. {{{rest}}} After.' ]
     out="$(printf 'Intro.\n- One thing that\n  wraps.\n- Two.\n' | _st --print --stdin)"
-    _ok "...a deeper line is the item wrapping: none; a list that ends the text, [[slnc 1200]]" \
-        [ "$out" = 'Intro. {{{beat}}} One thing that wraps. {{{beat}}} Two. [[slnc 1200]]' ]
+    _ok "...a deeper line is the item wrapping: none; a list that ends the text, [[slnc 950]]" \
+        [ "$out" = 'Intro. {{{beat}}} One thing that wraps. {{{beat}}} Two. [[slnc 950]]' ]
     out="$(printf 'Top.\n  \xe2\x8b\x85 One.\n  \xe2\x8b\x85 Two.\n\n\xe2\x9d\xaf **Next.** done.\n' | _st --print --stdin)"
-    _ok "...detail lines are list items; a hold wins over a breath (14 Oct)" \
-        [ "$out" = 'Top. {{{beat}}} One. {{{beat}}} Two. {{{hold}}} Next. done.' ]
+    _ok "...detail lines are list items; a rest wins over a breath (14 Oct)" \
+        [ "$out" = 'Top. {{{beat}}} One. {{{beat}}} Two. {{{rest}}} Next. done.' ]
     out="$(printf 'One.\x07 Two.\n' | _st --print --stdin)"
     _ok "...a \\x07 in the clipboard makes no beat (control)" [ "$out" = 'One. Two.' ]
     out="$(printf 'One.\x01 Two.\n' | _st --print --stdin)"
-    _ok "...a \\x01 in the clipboard makes no hold (control)" [ "$out" = 'One. Two.' ]
+    _ok "...a \\x01 in the clipboard makes no rest (control)" [ "$out" = 'One. Two.' ]
     out="$(printf 'One - two.\n3 - 4.\n' | _st --print --stdin)"
     _ok "...a dash inside a line is no list item (control)" [ "$out" = 'One - two. 3 - 4.' ]
     _st_arm breath; _st_file "$P2"
@@ -3508,7 +3509,7 @@ lead_in=0
     _ok "a breath cuts the text into voices, 200 ms apart (v12)" [ "$(_runs 1)" = "7000*$(_n 3 20) 0*9600 7000*$(_n 35 20) 0*9600 7000*$(_n 3 20)" ]
     _st_arm beat; _st_file "$P2"
     printf 'Aa.\n- bb.\n- cc.\nDd.\n' | STANDIN_MS_PER_CHAR=20 _st --stdin >/dev/null 2>&1; _st_idle
-    _ok "a beat cuts the text into voices 350 ms apart, a hold 850 ms (14 Oct)" [ "$(_runs 1)" = "7000*$(_n 3 20) 0*16800 7000*$(_n 3 20) 0*16800 7000*$(_n 3 20) 0*40800 7000*$(_n 3 20)" ]
+    _ok "a beat cuts the text into voices 350 ms apart, a rest 600 ms (14 Oct)" [ "$(_runs 1)" = "7000*$(_n 3 20) 0*16800 7000*$(_n 3 20) 0*16800 7000*$(_n 3 20) 0*28800 7000*$(_n 3 20)" ]
     _st_arm breath-lone; _st_file "$P2"
     printf '**Next.** dd ee\n' | STANDIN_MS_PER_CHAR=20 _st --stdin >/dev/null 2>&1; _st_idle
     _ok "...a ** line first in a press: no breath in front, a beat after its label (control)" [ "$(_runs 1)" = "7000*$(_n 5 20) 0*16800 7000*$(_n 5 20)" ]
@@ -3834,10 +3835,10 @@ if [ "$mode" = "print" ]; then
     fi
     # A cut for a breath shows as Gavin's marker (v12, Q5: triple braces).
     # A breath at the very start is spoken only by a queued press: not shown.
-    # A beat and a hold (14 Oct) the same way.
+    # A beat and a rest (14 Oct) the same way.
     text="${text#[$'\x01\x06\x07']}"
     text="${text//$'\x06'/ {{{breath\}\}\} }"
-    text="${text//$'\x01'/ {{{hold\}\}\} }"
+    text="${text//$'\x01'/ {{{rest\}\}\} }"
     printf '%s\n' "${text//$'\x07'/ {{{beat\}\}\} }"
     exit 0
 fi

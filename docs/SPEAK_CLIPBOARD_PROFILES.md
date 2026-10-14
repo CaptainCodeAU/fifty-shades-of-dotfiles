@@ -418,8 +418,8 @@ after it. A breath also goes before every line that starts a section: one that
 starts with `**` (a bold label) or with the `❯` status mark (Q3: 1). Detail
 lines (`⋅`) and list items get none.
 
-Changed 14 Oct (Gavin, dotfiles-main, D-20261014-A05): every list item now
-gets a beat in front, and a list of two or more items gets a hold after it:
+Changed 14 Oct (Gavin, dotfiles-main, D-20261014-A08): every list item now
+gets a beat in front, and a list of two or more items gets a rest after it:
 in front of the next line, or at the end of the text if the list ends it.
 With only a full stop between them, the items of a list ran together. A
 list item is a line that starts with `-`, `*`, `+`, a bullet dot (`•`) or a
@@ -428,18 +428,19 @@ indented deeper than the marker is the item wrapping and gets none. Where
 two pauses meet, such as a `❯` line right after a list, the longer one
 wins. Numbered items are unchanged.
 
-The same day went through three versions: a breath around list items
+The same day went through four versions: a breath around list items
 (D-20261014-A03), then a beat before each item and after the list, with the
 detail lines (`⋅`) counted as list items, which reverses that part of
-D-20261013-A03 (D-20261014-A04), then a hold after the list (D-20261014-A05).
+D-20261013-A03 (D-20261014-A04), then a hold after the list (D-20261014-A05),
+then a rest, a new pause word of about 0.75 s (Q9, Q10, D-20261014-A08).
 
-A beat and a hold are made like a breath: a cut, with 350 ms (beat) or
-850 ms (hold) of silence in front instead of 200 ms. At the end of a text a
-beat is a full stop and `[[slnc 680]]`, a hold a full stop and
-`[[slnc 1200]]`. **Not measured yet.** The gaps are worked out from the
+A beat and a rest are made like a breath: a cut, with 350 ms (beat) or
+600 ms (rest) of silence in front instead of 200 ms. At the end of a text a
+beat is a full stop and `[[slnc 680]]`, a rest a full stop and
+`[[slnc 950]]`. **Not measured yet.** The gaps are worked out from the
 breaths (0.31-0.41 s with 200 ms); at the end of a text, `[[slnc 500]]` was
 0.34 s and `[[slnc 680]]` 0.50 s on 13 Oct, without a full stop in front,
-and 1200 is that line carried on to 1 s.
+and 950 is that line carried on to 0.75 s.
 
 Changed 14 Oct (Gavin, dotfiles-main, Q4: "every bold label gets 0.5",
 D-20261014-A06): a bold label gets a beat after it. A bold label is a bold
@@ -472,7 +473,8 @@ load"). It belongs to speak-clipboard work, not to the reply style.
 | `{{{stop}}}`   | About 0.25 s.   | A full stop or a middle dot.      | Wherever the text has one.                                                                  |
 | `{{{breath}}}` | About 0.35 s.   | A full stop plus a short silence. | Before and after code blocks, and before section lines. |
 | `{{{beat}}}`   | About 0.5 s (not measured). | A full stop plus a longer silence. | Before each list item, and after a bold label.                                                                                |
-| `{{{hold}}}`   | About 1 second (not measured). | A full stop plus a long silence. | After a list of two or more items.                                                                                |
+| `{{{rest}}}`   | About 0.75 s (not measured). | A full stop plus a long silence. | After a list of two or more items. |
+| `{{{hold}}}`   | About 1 second. | Not made yet. | Nowhere yet.                                                                                |
 
 Measured ranges: tick 0.03-0.09 s, stop 0.22-0.36 s, breath 0.28-0.42 s.
 
