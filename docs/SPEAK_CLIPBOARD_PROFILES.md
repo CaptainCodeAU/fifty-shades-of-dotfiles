@@ -416,7 +416,8 @@ fenced code block is spoken as "A code block. Comprising of N lines." (1 line,
 0 lines), where N is the lines between the fences, with a breath before and
 after it. A breath also goes before every line that starts a section: one that
 starts with `**` (a bold label) or with the `❯` status mark (Q3: 1). Detail
-lines (`⋅`) and list items get none.
+lines (`⋅`) and list items get none (changed 14 Oct, below: they now get a
+beat).
 
 Changed 14 Oct (Gavin, dotfiles-main, D-20261014-A08): every list item now
 gets a beat in front, and a list of two or more items gets a rest after it:
@@ -520,11 +521,13 @@ and no stray words.
 
 - A code block copied from the terminal by mouse has no fence lines, so it is
   still read out (W-20261013-A01). `/copy`, which copies the Markdown, works.
-- A terminal copy has no `**` either, so only `❯` lines get a section breath.
+- A terminal copy has no `**` either, so only `❯` lines get a section breath,
+  and no bold label gets its beat (14 Oct). `/copy` keeps the stars.
 - A reply that quotes a pause command, such as `[[slnc 500]]` in backticks, is
   read as "S L N C 500": the cleaner splits every `[[` so copied text can
   never command the voice. Do not quote one in a reply.
-- `--skip` skips one voice, so a press cut by breaths needs one skip per part.
+- `--skip` skips one voice, so a press cut by breaths, beats or rests needs
+  one skip per part. A long list is now one part per item.
 
 ### The measuring runs and the speak key
 
