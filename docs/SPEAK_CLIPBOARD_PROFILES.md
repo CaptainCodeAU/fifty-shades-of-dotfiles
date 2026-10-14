@@ -418,25 +418,28 @@ after it. A breath also goes before every line that starts a section: one that
 starts with `**` (a bold label) or with the `❯` status mark (Q3: 1). Detail
 lines (`⋅`) and list items get none.
 
-Changed 14 Oct (Gavin, dotfiles-main, D-20261014-A03 and D-20261014-A04):
-every list item now gets a beat in front, and a list of two or more items
-gets a beat after it too: in front of the next line, or at the end of the
-text if the list ends it. With only a full stop between them, the items of
-a list ran together. A list item is a line that starts with `-`, `*`, `+`,
-a bullet dot (`•`) or a detail dot (`⋅`) and a space, at any indent; the
-marker is dropped. A line indented deeper than the marker is the item
-wrapping and gets none. Where a beat and a breath meet, such as a `❯` line
-right after a list, the beat wins. Numbered items are unchanged.
+Changed 14 Oct (Gavin, dotfiles-main, D-20261014-A05): every list item now
+gets a beat in front, and a list of two or more items gets a hold after it:
+in front of the next line, or at the end of the text if the list ends it.
+With only a full stop between them, the items of a list ran together. A
+list item is a line that starts with `-`, `*`, `+`, a bullet dot (`•`) or a
+detail dot (`⋅`) and a space, at any indent; the marker is dropped. A line
+indented deeper than the marker is the item wrapping and gets none. Where
+two pauses meet, such as a `❯` line right after a list, the longer one
+wins. Numbered items are unchanged.
 
-The first version that day used a breath; Gavin asked for a beat instead,
-and for the detail lines (`⋅`) to count as list items, which reverses that
-part of D-20261013-A03.
+The same day went through three versions: a breath around list items
+(D-20261014-A03), then a beat before each item and after the list, with the
+detail lines (`⋅`) counted as list items, which reverses that part of
+D-20261013-A03 (D-20261014-A04), then a hold after the list (D-20261014-A05).
 
-A beat is made like a breath: a cut, with 350 ms of silence in front
-instead of 200 ms. At the end of a text it is a full stop and
-`[[slnc 680]]`. **Not measured yet.** The 350 ms is worked out from the
-breaths (0.31-0.41 s with 200 ms); `[[slnc 680]]` was 0.50 s at the end of
-a text on 13 Oct, without a full stop in front.
+A beat and a hold are made like a breath: a cut, with 350 ms (beat) or
+850 ms (hold) of silence in front instead of 200 ms. At the end of a text a
+beat is a full stop and `[[slnc 680]]`, a hold a full stop and
+`[[slnc 1200]]`. **Not measured yet.** The gaps are worked out from the
+breaths (0.31-0.41 s with 200 ms); at the end of a text, `[[slnc 500]]` was
+0.34 s and `[[slnc 680]]` 0.50 s on 13 Oct, without a full stop in front,
+and 1200 is that line carried on to 1 s.
 
 ### Pause words (Gavin, 13 Oct, Q4, Q5 and Q7)
 
@@ -454,8 +457,8 @@ load"). It belongs to speak-clipboard work, not to the reply style.
 | `{{{tick}}}`   | About 0.1 s.    | A comma.                          | Wherever the text has one.                                                                  |
 | `{{{stop}}}`   | About 0.25 s.   | A full stop or a middle dot.      | Wherever the text has one.                                                                  |
 | `{{{breath}}}` | About 0.35 s.   | A full stop plus a short silence. | Before and after code blocks, and before section lines. |
-| `{{{beat}}}`   | About 0.5 s (not measured). | A full stop plus a longer silence. | Before each list item, and after a list of two or more.                                                                                |
-| `{{{hold}}}`   | About 1 second. | Not made yet.                     | Nowhere yet.                                                                                |
+| `{{{beat}}}`   | About 0.5 s (not measured). | A full stop plus a longer silence. | Before each list item.                                                                                |
+| `{{{hold}}}`   | About 1 second (not measured). | A full stop plus a long silence. | After a list of two or more items.                                                                                |
 
 Measured ranges: tick 0.03-0.09 s, stop 0.22-0.36 s, breath 0.28-0.42 s.
 
