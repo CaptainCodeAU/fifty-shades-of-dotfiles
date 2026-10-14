@@ -801,7 +801,7 @@ __show_welcome_minimal() {
 # Quick Reference — Full
 # ------------------------------------------------------------------------------
 # The tool hints, one per entry, each only where its command works on this box: a
-# box that left out Docker, tmux or the media tools (codebox) is not offered them
+# box that left out Docker or the media tools (codebox) is not offered them
 # (W-20261015-A07). Joined with " | " by the two callers.
 __quickref_tool_hints() {
     local -a git=() hints=()
@@ -809,7 +809,6 @@ __quickref_tool_hints() {
     (( $+commands[lazydocker] )) && git+=(lzd)
     (( ${#git} )) && hints+=("Git/Docker: ${(j:, :)git}")
     (( $+functions[docker_help] )) && hints+=("Docker: docker_help")
-    (( $+functions[tdev] )) && hints+=("Tmux: tdev, gs, gstatus")
     (( $+functions[yt] && $+commands[ffmpeg] )) && hints+=("Media: yt --help")
     print -rl -- "${hints[@]}"
 }

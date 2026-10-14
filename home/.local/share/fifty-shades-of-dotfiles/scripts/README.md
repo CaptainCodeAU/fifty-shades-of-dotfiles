@@ -16,7 +16,6 @@ Use other files for other concerns:
   - `home/.zsh_node_functions`
   - `home/.zsh_docker_functions`
   - `home/.zsh_cursor_functions`
-  - `home/.zsh_tmux`
 
 ## Architecture
 

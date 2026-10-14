@@ -112,7 +112,7 @@ NO_SUDO_SKIPPED=()
 SKIP_CLAUDE=false            # home/.claude, Claude hook registration, pj settings and pj checks
 SKIP_SSH=false               # home/.ssh
 SKIP_SYSTEM_PACKAGES=false   # the package-manager (apt/dnf/pacman/zypper/brew) tool installs
-SKIP_TMUX=false              # home/.tmux.conf, home/.zsh_tmux, TPM
+SKIP_TMUX=false              # home/.tmux.conf, TPM
 SKIP_DOCKER=false            # home/.zsh_docker_functions, lazydocker
 SKIP_RUST=false              # rustup
 SKIP_YAZI=false              # yazi
@@ -1649,7 +1649,7 @@ _stow_skip_names() {
         echo ".local/bin/ccw-watch*"
     fi
     [[ "$SKIP_SSH" == true ]]    && echo ".ssh"
-    [[ "$SKIP_TMUX" == true ]]   && { echo ".tmux.conf"; echo ".zsh_tmux"; }
+    [[ "$SKIP_TMUX" == true ]]   && echo ".tmux.conf"
     [[ "$SKIP_DOCKER" == true ]] && echo ".zsh_docker_functions"
     return 0
 }
@@ -4949,7 +4949,7 @@ show_help() {
     echo -e "  --skip-claude             home/.claude, Claude hook registration, pj settings and checks"
     echo -e "  --skip-ssh                home/.ssh"
     echo -e "  --skip-system-packages    apt/dnf/pacman/zypper/brew tool installs"
-    echo -e "  --skip-tmux               .tmux.conf, .zsh_tmux, TPM"
+    echo -e "  --skip-tmux               .tmux.conf, TPM"
     echo -e "  --skip-docker             .zsh_docker_functions, lazydocker"
     echo -e "  --skip-rust --skip-yazi --skip-fonts --skip-git-hooks --skip-git-identity"
     echo -e "  --skip-nvm --skip-pnpm --skip-bun --skip-uv --skip-herdr --skip-omz"

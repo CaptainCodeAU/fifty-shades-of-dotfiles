@@ -52,7 +52,6 @@ FILES=(
   ~/.zsh_cursor_functions
   ~/.zsh_onboarding
   ~/.zsh_welcome
-  ~/.zsh_tmux
   ~/.zsh_claude_launch
   ~/.zsh_engage
 )

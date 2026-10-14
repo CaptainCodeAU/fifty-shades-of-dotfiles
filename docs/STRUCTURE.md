@@ -27,7 +27,6 @@ All files in `home/` are deployed directly to your home directory (`~/`).
 | `.zsh_node_functions`   | Node.js helper functions              | `~/.zsh_node_functions`   |
 | `.zsh_docker_functions` | Docker helper functions               | `~/.zsh_docker_functions` |
 | `.zsh_cursor_functions` | Cursor/VSCode integration             | `~/.zsh_cursor_functions` |
-| `.zsh_tmux`             | Tmux integration functions            | `~/.zsh_tmux`             |
 | `.zsh_onboarding`       | Cross-platform onboarding script      | `~/.zsh_onboarding`       |
 | `.zsh_welcome`          | Unified cross-platform welcome script | `~/.zsh_welcome`          |
 
