@@ -794,9 +794,38 @@ pnpm() {
 # A shell function only guards interactive use and Claude's Bash tool (which
 # sources the snapshotted functions). Scripts calling the binary by path are
 # not covered; none in this estate start a server. Measured 2026-09-06.
+#
+# A third vector, makeitso's (#1468, engage-main Q10: 1, 2026-10-14): a server
+# started from inside a makeitso session (MAKEITSO=1) would hand every pane it
+# opens later makeitso's Claude home, its private SSH agent (which dies with
+# that session) and its keys. So there, nothing that can start a server runs:
+# `herdr server`, a launch or attach (no command, `--session` included) and
+# `herdr session attach`. API commands, --help and --version pass. Tested by
+# makeitso's tests/launch-test.zsh check 13, which reads this function.
 herdr() {
     local _unit="$HOME/.config/systemd/user/herdr.service"
     local _plist="$HOME/Library/LaunchAgents/homebrew.mxcl.herdr.plist"
+    if [[ "${MAKEITSO-}" == 1 ]]; then
+        local -i _i=1
+        local _cmd="" _next=""
+        while (( _i <= $# )); do
+            case "${@[_i]}" in
+                --help|-h|--version|-V|--default-config|--skill) _cmd=print; break ;;
+                --session|--machine|--remote|--remote-keybindings) (( _i += 2 )); continue ;;
+                -*) ;;
+                *) _cmd="${@[_i]}"; _next="${@[_i+1]-}"; break ;;
+            esac
+            (( _i++ ))
+        done
+        if [[ -z "$_cmd" || ( "$_cmd" == server && -z "$_next" ) || ( "$_cmd" == session && "$_next" == attach ) ]]; then
+            echo "${err}BLOCKED: herdr${*:+ $*} inside a makeitso session${done}" >&2
+            echo >&2
+            echo "  A herdr server started here would hand makeitso's Claude home and its" >&2
+            echo "  ${warn}private SSH agent to every pane it opens later.${done}" >&2
+            echo "  Start herdr from a plain terminal instead." >&2
+            return 1
+        fi
+    fi
     if [[ "$1" == "server" && -z "$2" ]]; then
         if [[ -L "$_unit" ]] && command -v systemctl &>/dev/null; then
             echo "${err}BLOCKED: herdr server${done}"
