@@ -3963,6 +3963,10 @@ _zshenv_optouts_block() {
 # Same values as ~/.zshrc; only when empty or unset. Claude's own process is not a zsh.
 [[ -n "${DISABLE_TELEMETRY-}" ]] || export DISABLE_TELEMETRY=true
 [[ -n "${DO_NOT_TRACK-}" ]] || export DO_NOT_TRACK=1
+# Claude also deletes every OTEL_ setting from the commands it runs, so the OpenTelemetry
+# opt-out comes back here too (Gavin, engage-main Q1 (v2): 1 and Q2: 1, 14 Oct 2026). One command
+# can still turn it off by writing OTEL_SDK_DISABLED=false at its front.
+[[ -n "${OTEL_SDK_DISABLED-}" ]] || export OTEL_SDK_DISABLED=true
 # <<< telemetry opt-outs for commands (Q14) <<<
 BLOCK
     } > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f" && success "telemetry opt-outs block added to ~/.zshenv" \
