@@ -1654,6 +1654,17 @@ _stow_skip_names() {
     return 0
 }
 
+# The skip flags in effect, one per line, as typed without `--skip-` (claude,
+# system-packages, ...). Used by the Mode line and written to links/skips.
+_skip_flag_names() {
+    local v n
+    for v in CLAUDE SSH SYSTEM_PACKAGES TMUX DOCKER RUST YAZI FONTS GIT_HOOKS NVM PNPM BUN UV HERDR OMZ GIT_IDENTITY; do
+        n="SKIP_$v"
+        [[ "${!n}" == true ]] && printf '%s\n' "$v" | tr 'A-Z_' 'a-z-'
+    done
+    return 0
+}
+
 # `--ignore=...` arguments for stow, one per skipped glob (empty when nothing is
 # skipped): `.` escaped, `*` becomes `[^/]*`, anchored at both ends.
 _stow_ignore_args() {
@@ -3809,6 +3820,12 @@ _write_stow_state() {
     local dir="$1"
     _stow_skip_names > "$dir/stow-skip.tmp.$$" && mv -f "$dir/stow-skip.tmp.$$" "$dir/stow-skip" \
         || warn "could not write $(pretty_path "$dir/stow-skip")"
+    # `skips`: every part this run left out, as the flag names (system-packages,
+    # docker, ...). The login checks read it so a tool a profile leaves out on purpose
+    # is not reported as missing (W-20261015-A07); stow-skip cannot say this, because
+    # --skip-system-packages stows nothing differently.
+    _skip_flag_names > "$dir/skips.tmp.$$" && mv -f "$dir/skips.tmp.$$" "$dir/skips" \
+        || warn "could not write $(pretty_path "$dir/skips")"
     if [[ -n "$PROFILE" ]]; then
         printf '%s\n' "$PROFILE" > "$dir/profile.tmp.$$" && mv -f "$dir/profile.tmp.$$" "$dir/profile" \
             || warn "could not write $(pretty_path "$dir/profile")"
@@ -5781,13 +5798,10 @@ if [[ -n "$PROFILE" || "$NO_QUESTIONS" == true || "$NO_SUDO" == true || "$_FLAGS
     [[ -n "$PROFILE" ]] && _mode+=" profile=$PROFILE"
     [[ "$NO_QUESTIONS" == true ]] && _mode+=" no-questions"
     [[ "$NO_SUDO" == true ]] && _mode+=" no-sudo"
-    _skips=""
-    for _v in CLAUDE SSH SYSTEM_PACKAGES TMUX DOCKER RUST YAZI FONTS GIT_HOOKS NVM PNPM BUN UV HERDR OMZ GIT_IDENTITY; do
-        _n="SKIP_$_v"
-        [[ "${!_n}" == true ]] && _skips+=" $(printf '%s' "$_v" | tr 'A-Z_' 'a-z-')"
-    done
-    info "Mode:${_mode:- (no profile)}${_skips:+ · skipping:${_skips}}"
-    unset _mode _skips _v _n
+    _skips=$(_skip_flag_names | tr '\n' ' ')
+    _skips="${_skips% }"
+    info "Mode:${_mode:- (no profile)}${_skips:+ · skipping: ${_skips}}"
+    unset _mode _skips
 fi
 
 # W-20260921-A23: the two actions that run _check_pj_prereqs exit NON-ZERO when pj

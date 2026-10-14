@@ -128,5 +128,82 @@ if [[ -n "${NGT:-}" ]]; then
     else bad "no nvm versions: silent" "rc=$RC out='$OUT'"; fi
 fi
 
+# --- 4. parts left out on purpose (W-20261015-A07): codebox state vs none -------
+# The real functions from both files, a fixture state dir and a fixture gitconfig.
+# Every "codebox says nothing wrong" arm has a control arm with no state that still
+# prints the old warning, so a check that never ran cannot pass.
+ONB="${ONBOARDING_OVERRIDE:-$REPO/home/.zsh_onboarding}"
+echo
+for fn in __dotfiles_skipped __tool_left_out __run_section __ensure_command __show_docker_guidance; do
+    src=$(sed -n "/^$fn() {/,/^}/p" "$ONB")
+    if [[ -n "$src" ]]; then eval "$src"; else bad "$fn is defined in .zsh_onboarding" "not found in $ONB"; fi
+done
+gl_src=$(sed -n '/^__welcome_github_line() {/,/^}/p' "$WELCOME")
+if [[ -n "$gl_src" ]]; then eval "$gl_src"; ok "__welcome_github_line is defined"
+else bad "__welcome_github_line is defined" "not found in $WELCOME"; fi
+if code_of "$full_src" | grep -qE '^[[:space:]]+__welcome_github_line$'; then ok "GitHub line is called from __show_welcome_full"
+else bad "GitHub line is called from __show_welcome_full" "defined but never invoked"; fi
+if code_of "$full_src" | grep -q 'DOTFILES_PLAIN_CLAUDE'; then ok "GH API line is skipped on a plain-Claude box"
+else bad "GH API line is skipped on a plain-Claude box" "no DOTFILES_PLAIN_CLAUDE test in __show_welcome_full"; fi
+
+FX=$(mktemp -d "${TMPDIR:-/tmp}/zsh-welcome-skip.XXXXXX") || { bad "skip fixture" "mktemp failed -- INVALID"; FX=""; }
+if [[ -n "$FX" ]]; then
+    info=""
+    __check_github_forward_drift() { echo nokey; }   # the old path's worst case
+    export GIT_CONFIG_NOSYSTEM=1
+    mkdir -p "$FX/cb/dotfiles/links" "$FX/old/dotfiles/links" "$FX/none" "$FX/bin"
+    printf '%s\n' claude ssh system-packages tmux docker rust >| "$FX/cb/dotfiles/links/skips"
+    printf '%s\n' .claude .ssh .tmux.conf .zsh_tmux .zsh_docker_functions >| "$FX/cb/dotfiles/links/stow-skip"
+    printf '%s\n' .claude .ssh .tmux.conf .zsh_tmux .zsh_docker_functions >| "$FX/old/dotfiles/links/stow-skip"
+    printf '[credential "https://github.com"]\n\thelper = !~/.local/bin/gh-broker-ssh git-credential\n' >| "$FX/broker.gitconfig"
+    : >| "$FX/empty.gitconfig"
+    for t in git curl rg tree lazygit; do printf '#!/bin/sh\n' >| "$FX/bin/$t"; chmod +x "$FX/bin/$t"; done
+    gh_line() { XDG_STATE_HOME="$FX/$1" GIT_CONFIG_GLOBAL="$FX/$2.gitconfig" __welcome_github_line 2>&1; }
+    left()    { XDG_STATE_HOME="$FX/$1" __tool_left_out "$2"; }
+    section() { ( XDG_STATE_HOME="$FX/$1"; PATH="$FX/bin"; rehash
+                  _PKG_MANAGER_NAME=apt _PKG_MANAGER_CMD="sudo apt-get install -y" _PKG_MANAGER_NEEDS_ROOT=1
+                  __run_section "CLI tools" rg ripgrep ripgrep nvim neovim neovim tree tree tree \
+                      fastfetch fastfetch fastfetch lazygit lazygit lazygit lazydocker lazydocker lazydocker ) 2>&1; }
+
+    OUT=$(gh_line cb broker)
+    if [[ "$OUT" == *"token broker"* && "$OUT" != *ssh-add* && "$OUT" != *"NO KEY"* ]]; then ok "codebox + broker: says HTTPS via the broker, no key advice"
+    else bad "codebox + broker: says HTTPS via the broker, no key advice" "out='$OUT'"; fi
+    OUT=$(gh_line none broker)
+    if [[ "$OUT" == *"token broker"* && "$OUT" != *ssh-add* ]]; then ok "broker helper alone (no state file): still the broker line"
+    else bad "broker helper alone (no state file): still the broker line" "out='$OUT'"; fi
+    OUT=$(gh_line cb empty)
+    if [[ "$OUT" == *"no HTTPS helper"* && "$OUT" != *ssh-add* ]]; then ok "ssh left out, no helper: says so, no key advice"
+    else bad "ssh left out, no helper: says so, no key advice" "out='$OUT'"; fi
+    OUT=$(gh_line none empty)
+    if [[ "$OUT" == *"NO KEY"* && "$OUT" == *ssh-add* ]]; then ok "control: other boxes keep the forwarded-key check"
+    else bad "control: other boxes keep the forwarded-key check" "out='$OUT'"; fi
+
+    left cb nvim && left cb fastfetch && left cb docker && left cb lazydocker \
+        && ok "codebox: nvim, fastfetch, docker, lazydocker are left out on purpose" \
+        || bad "codebox: nvim, fastfetch, docker, lazydocker are left out on purpose"
+    ! left cb jq && ! left cb trash-put && ! left cb lazygit \
+        && ok "codebox: jq, trash-put, lazygit still count as missing" \
+        || bad "codebox: jq, trash-put, lazygit still count as missing"
+    left old docker && ! left old nvim \
+        && ok "older state (stow-skip only): docker from it, apt tools not (needs a restow)" \
+        || bad "older state (stow-skip only): docker from it, apt tools not"
+    ! left none nvim && ! left none docker \
+        && ok "control: no state, nothing is left out" \
+        || bad "control: no state, nothing is left out"
+
+    OUT=$(section cb)
+    if [[ "$OUT" == *"left out on purpose: nvim · fastfetch · lazydocker"* && "$OUT" != *"Tool missing"* && "$OUT" != *"ask an admin"* ]]; then
+        ok "codebox CLI tools: left-out tools named once, no missing line"
+    else bad "codebox CLI tools: left-out tools named once, no missing line" "out='$OUT'"; fi
+    OUT=$(section none)
+    if [[ "$OUT" == *"Tool missing: 'nvim'"* && "$OUT" == *"ask an admin"* && "$OUT" != *"left out"* ]]; then
+        ok "control: no state, the same tools are reported missing"
+    else bad "control: no state, the same tools are reported missing" "out='$OUT'"; fi
+    OUT=$( (XDG_STATE_HOME="$FX/cb"; PATH="$FX/bin"; rehash; __show_docker_guidance) 2>&1)
+    OUT2=$( (XDG_STATE_HOME="$FX/none"; PATH="$FX/bin"; rehash; __show_docker_guidance) 2>&1)
+    if [[ -z "$OUT" && "$OUT2" == *"Tool missing: 'docker'"* ]]; then ok "docker guidance: silent on codebox, shown with no state"
+    else bad "docker guidance: silent on codebox, shown with no state" "codebox='$OUT' none='$OUT2'"; fi
+fi
+
 echo; echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))

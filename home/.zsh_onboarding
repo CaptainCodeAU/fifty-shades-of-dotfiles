@@ -467,6 +467,40 @@ _PKG_MANAGER_CHECK=""
 # instead of the prompt; run the printed command yourself.
 _PKG_MANAGER_NEEDS_ROOT=""
 
+# ------------------------------------------------------------------------------
+# Parts install.sh left out on purpose (W-20261015-A07)
+# ------------------------------------------------------------------------------
+# install.sh's last real stow records its skip flags in links/skips (system-packages,
+# docker, ...). A box stowed before that file existed still has links/stow-skip, which
+# shows the stow skips (claude, ssh, tmux, docker); both are read. Used here and by
+# ~/.zsh_welcome, so a tool a profile leaves out (codebox: no Docker, no apt installs)
+# is not reported as missing, and its fix is not offered.
+__dotfiles_skipped() {  # $1 = flag name without --skip-
+    local d="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/links" l
+    if [[ -r "$d/skips" ]]; then
+        for l in "${(@f)$(<"$d/skips")}"; do [[ "$l" == "$1" ]] && return 0; done
+    fi
+    [[ -r "$d/stow-skip" ]] || return 1
+    for l in "${(@f)$(<"$d/stow-skip")}"; do
+        case "$1:$l" in
+            claude:.claude|ssh:.ssh|tmux:.zsh_tmux|docker:.zsh_docker_functions) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# Is this tool left out on purpose? Only tools that nothing but the skipped part
+# installs: the package-manager-only CLI tools, and Docker's two. The essential and
+# UX tools stay reported, because the dotfiles need them (jq, trash-put) or root
+# provides them, so their absence is a real fault.
+__tool_left_out() {
+    case "$1" in
+        rg|nvim|tree|fastfetch|ffmpeg|aria2c) __dotfiles_skipped system-packages ;;
+        docker|lazydocker) __dotfiles_skipped docker ;;
+        *) return 1 ;;
+    esac
+}
+
 __user_can_sudo() {
     [[ "$EUID" == 0 ]] && return 0
     local g
@@ -846,6 +880,7 @@ __show_docker_guidance() {
     if command -v docker &>/dev/null; then
         return 0
     fi
+    __tool_left_out docker && return 0
 
     echo "${warn}Tool missing: 'docker' not found.${done}"
 
@@ -872,19 +907,25 @@ __run_section() {
     local -a miss_cmds=()
     local -a miss_brew=()
     local -a miss_apt=()
+    local -a left_out=()
 
     while (( $# >= 3 )); do
         local cmd="$1" pkg_brew="$2" pkg_apt="$3"
         shift 3   # shift-lint: ok the loop condition (( $# >= 3 )) guarantees three
-        all_names+=("$cmd")
         if ! command -v "$cmd" &>/dev/null; then
+            if __tool_left_out "$cmd"; then
+                left_out+=("$cmd")
+                continue
+            fi
             miss_cmds+=("$cmd")
             miss_brew+=("$pkg_brew")
             miss_apt+=("$pkg_apt")
         fi
+        all_names+=("$cmd")
     done
 
     local tool_list="${(j: · :)all_names}"
+    (( ${#left_out[@]} )) && tool_list+="  ${info}(left out on purpose: ${(j: · :)left_out})${done}"
     if (( ${#miss_cmds[@]} == 0 )); then
         printf "  ${ok}✓${done} %-18s %s\n" "$section_name" "$tool_list"
     else

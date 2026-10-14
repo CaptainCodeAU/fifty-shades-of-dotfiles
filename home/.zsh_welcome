@@ -591,8 +591,13 @@ __show_welcome_full() {
     # The status cache is written in the BACKGROUND by __claude_launch during
     # Claude sessions (the only place $GH_TOKEN exists). The banner only reads
     # it here - fast, and no token access in plain shells.
+    # A box stowed without Gavin's Claude tooling (DOTFILES_PLAIN_CLAUDE=1, codebox)
+    # has no __claude_launch, so the cache is never written: no line, rather than a
+    # "pending" that never ends (W-20261015-A07).
     local gh_cache="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/gh_api_status"
-    if [[ -f "$gh_cache" ]]; then
+    if [[ -n "${DOTFILES_PLAIN_CLAUDE-}" ]]; then
+        :
+    elif [[ -f "$gh_cache" ]]; then
         local _gst=$(grep '^status=' "$gh_cache" 2>/dev/null | cut -d= -f2)
         local _gexp=$(grep '^expires=' "$gh_cache" 2>/dev/null | cut -d= -f2-)
         local _gdate="${_gexp%% *}" _gdisp
@@ -648,7 +653,7 @@ __show_welcome_full() {
             desktop_ver=$(defaults read /Applications/Docker.app/Contents/Info.plist CFBundleShortVersionString 2>/dev/null || echo 'N/A')
             echo "    Docker Desktop: ${ok}${desktop_ver}${done}"
         fi
-    else
+    elif ! { (( $+functions[__tool_left_out] )) && __tool_left_out docker; }; then
         echo "    Docker Engine: ${err}Not Installed${done}"
     fi
 
@@ -683,19 +688,39 @@ __show_welcome_full() {
     # resolution does not apply there; only consumer boxes push to bare
     # git@github.com over a forwarded key and need `identitiesonly no`.
     if [[ "$IS_MAC" != "true" ]]; then
-        case "$(__check_github_forward_drift)" in
-            ok)
-                echo "    SSH github: ${ok}OK${done} ${info}(forwarded key present, identitiesonly no)${done}" ;;
-            broken)
-                echo "    SSH github: ${err}BROKEN${done} ${warn}(identitiesonly=yes; forwarded pushes fail)${done}"
-                echo "    ${warn}  -> fix: restore 'Host github.com git-cc' in ~/.ssh/config.local${done}" ;;
-            nokey)
-                echo "    SSH github: ${err}NO KEY${done} ${warn}(config OK but forwarded agent is empty; pushes fail)${done}"
-                echo "    ${warn}  -> on the Mac: ssh-add ~/.ssh/captaincodeau, then reconnect${done}" ;;
-            noagent)
-                echo "    SSH github: ${warn}no agent forwarded${done} ${info}(ForwardAgent inactive this session)${done}" ;;
-        esac
+        __welcome_github_line
     fi
+}
+
+# The GitHub line of the full banner (consumer boxes). A box whose git reaches
+# GitHub over HTTPS through the token broker (codebox: tcp 22 blocked, agent
+# forwarding off on purpose) gets one line saying so, and NEVER the forwarded-key
+# check: its "ssh-add on the Mac" fix would push Gavin's GitHub key into a
+# throwaway box (W-20261015-A07). A box that left ~/.ssh out of stow and has no
+# broker is told that, also without key advice.
+__welcome_github_line() {
+    local _helper
+    _helper=$(git config --get-all credential.https://github.com.helper 2>/dev/null)
+    if [[ "$_helper" == *gh-broker-ssh* ]]; then
+        echo "    GitHub: ${ok}HTTPS via the token broker${done} ${info}(gh-broker-ssh; no SSH key on this box, by design)${done}"
+        return 0
+    fi
+    if (( $+functions[__dotfiles_skipped] )) && __dotfiles_skipped ssh; then
+        echo "    GitHub: ${warn}no HTTPS helper for github.com${done} ${info}(~/.ssh left out by install.sh; pushes need a credential helper)${done}"
+        return 0
+    fi
+    case "$(__check_github_forward_drift)" in
+        ok)
+            echo "    SSH github: ${ok}OK${done} ${info}(forwarded key present, identitiesonly no)${done}" ;;
+        broken)
+            echo "    SSH github: ${err}BROKEN${done} ${warn}(identitiesonly=yes; forwarded pushes fail)${done}"
+            echo "    ${warn}  -> fix: restore 'Host github.com git-cc' in ~/.ssh/config.local${done}" ;;
+        nokey)
+            echo "    SSH github: ${err}NO KEY${done} ${warn}(config OK but forwarded agent is empty; pushes fail)${done}"
+            echo "    ${warn}  -> on the Mac: ssh-add ~/.ssh/captaincodeau, then reconnect${done}" ;;
+        noagent)
+            echo "    SSH github: ${warn}no agent forwarded${done} ${info}(ForwardAgent inactive this session)${done}" ;;
+    esac
 }
 
 # ------------------------------------------------------------------------------

@@ -35,6 +35,27 @@ nothing was skipped, which is a positive answer, not an absent file). Then:
   `stow-skip`, so a skipped tree is never reported as "NOT linked" at login.
   `install.sh` passes its own list to the checker (`DOTFILES_STOW_SKIP`) during a
   run, so a run's flags win over the file while it runs.
+- Since 2026-10-15 (W-20261015-A07) the same stow also writes `links/skips`: every
+  skip flag in effect, one per line, without `--skip-` (`system-packages`, `docker`).
+  `stow-skip` cannot carry `--skip-system-packages`, because that flag stows nothing
+  differently. The login checks read both files (`__dotfiles_skipped` in
+  `home/.zsh_onboarding`):
+  - A tool only the skipped part installs is shown once as `left out on purpose`,
+    never as `Tool missing` with an admin command: with `system-packages`, `rg`,
+    `nvim`, `tree`, `fastfetch`, `ffmpeg`, `aria2c`; with `docker`, `docker` and
+    `lazydocker` (and the banner's `Docker Engine: Not Installed` line goes). The
+    essential and UX tools (`jq`, `trash-put` and the rest) are still reported:
+    the dotfiles need them, or root provides them, so their absence is a fault.
+  - A box whose git uses the token broker for `https://github.com`
+    (`gh-broker-ssh`) gets `GitHub: HTTPS via the token broker`, and never the
+    forwarded-key check or its `ssh-add` advice. A box with `ssh` left out and no
+    broker is told it has no HTTPS helper, also without key advice.
+  - With `DOTFILES_PLAIN_CLAUDE` set, the `GH API` line is left out: no
+    `__claude_launch` exists there to fill its cache.
+  - A box stowed before this change has no `skips` file: `docker`, `ssh` and
+    `claude` are still read from `stow-skip`, but the apt tools are reported
+    missing until one `./install.sh --stow-only` (it re-applies the stored profile)
+    writes the file.
 
 ### Where the no-questions answers live
 
