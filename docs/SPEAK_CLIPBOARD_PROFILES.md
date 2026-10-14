@@ -441,6 +441,16 @@ breaths (0.31-0.41 s with 200 ms); at the end of a text, `[[slnc 500]]` was
 0.34 s and `[[slnc 680]]` 0.50 s on 13 Oct, without a full stop in front,
 and 1200 is that line carried on to 1 s.
 
+Changed 14 Oct (Gavin, dotfiles-main, Q4: "every bold label gets 0.5",
+D-20261014-A06): a bold label gets a beat after it. A bold label is a bold
+span at the start of a line, after any list marker, `❯` or list number,
+that ends in `.`, `!`, `?` or `:` and has more text after it on the line.
+Any length, so "What it means for you:" counts. Before, a label ending in a
+full stop got a stop (about 0.22 s, D-20261013-A04) and one ending in a
+colon got the shorter label pause (`pause_label`, 0.11-0.17 s), and only up
+to three words. Bold inside a sentence, and a bold line on its own, are
+unchanged. Not measured, like every beat.
+
 ### Pause words (Gavin, 13 Oct, Q4, Q5 and Q7)
 
 Between Gavin and the agents, a pause is written as a word in triple curly
@@ -457,7 +467,7 @@ load"). It belongs to speak-clipboard work, not to the reply style.
 | `{{{tick}}}`   | About 0.1 s.    | A comma.                          | Wherever the text has one.                                                                  |
 | `{{{stop}}}`   | About 0.25 s.   | A full stop or a middle dot.      | Wherever the text has one.                                                                  |
 | `{{{breath}}}` | About 0.35 s.   | A full stop plus a short silence. | Before and after code blocks, and before section lines. |
-| `{{{beat}}}`   | About 0.5 s (not measured). | A full stop plus a longer silence. | Before each list item.                                                                                |
+| `{{{beat}}}`   | About 0.5 s (not measured). | A full stop plus a longer silence. | Before each list item, and after a bold label.                                                                                |
 | `{{{hold}}}`   | About 1 second (not measured). | A full stop plus a long silence. | After a list of two or more items.                                                                                |
 
 Measured ranges: tick 0.03-0.09 s, stop 0.22-0.36 s, breath 0.28-0.42 s.
