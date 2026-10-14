@@ -418,6 +418,13 @@ after it. A breath also goes before every line that starts a section: one that
 starts with `**` (a bold label) or with the `❯` status mark (Q3: 1). Detail
 lines (`⋅`) and list items get none.
 
+Changed 14 Oct (Gavin, dotfiles-main, D-20261014-A03): every list item now gets a breath in
+front, and the first line after a list gets one too. With only a full stop
+between them, the items of a list ran together. A list item is a line that
+starts with `-`, `*`, `+` or a bullet dot (`•`) and a space, at any indent;
+the marker is dropped. A line indented deeper than the marker is the item
+wrapping and gets none. Detail lines (`⋅`) and numbered items are unchanged.
+
 ### Pause words (Gavin, 13 Oct, Q4, Q5 and Q7)
 
 Between Gavin and the agents, a pause is written as a word in triple curly
@@ -429,13 +436,13 @@ make the same way.
 (Gavin, Q7: 2, "I'm not going to remember it and I don't want cognitive
 load"). It belongs to speak-clipboard work, not to the reply style.
 
-| Word           | How long        | Made from                         | Where the speak key uses it now                         |
-| -------------- | --------------- | --------------------------------- | ------------------------------------------------------- |
-| `{{{tick}}}`   | About 0.1 s.    | A comma.                          | Wherever the text has one.                              |
-| `{{{stop}}}`   | About 0.25 s.   | A full stop or a middle dot.      | Wherever the text has one.                              |
-| `{{{breath}}}` | About 0.35 s.   | A full stop plus a short silence. | Before and after code blocks, and before section lines. |
-| `{{{beat}}}`   | About 0.5 s.    | Not made yet.                     | Nowhere yet.                                            |
-| `{{{hold}}}`   | About 1 second. | Not made yet.                     | Nowhere yet.                                            |
+| Word           | How long        | Made from                         | Where the speak key uses it now                                                             |
+| -------------- | --------------- | --------------------------------- | ------------------------------------------------------------------------------------------- |
+| `{{{tick}}}`   | About 0.1 s.    | A comma.                          | Wherever the text has one.                                                                  |
+| `{{{stop}}}`   | About 0.25 s.   | A full stop or a middle dot.      | Wherever the text has one.                                                                  |
+| `{{{breath}}}` | About 0.35 s.   | A full stop plus a short silence. | Before and after code blocks, before section lines, before each list item and after a list. |
+| `{{{beat}}}`   | About 0.5 s.    | Not made yet.                     | Nowhere yet.                                                                                |
+| `{{{hold}}}`   | About 1 second. | Not made yet.                     | Nowhere yet.                                                                                |
 
 Measured ranges: tick 0.03-0.09 s, stop 0.22-0.36 s, breath 0.28-0.42 s.
 
