@@ -443,13 +443,17 @@ and 1200 is that line carried on to 1 s.
 
 Changed 14 Oct (Gavin, dotfiles-main, Q4: "every bold label gets 0.5",
 D-20261014-A06): a bold label gets a beat after it. A bold label is a bold
-span at the start of a line, after any list marker, `❯` or list number,
+span at the start of a line, after any list marker or list number,
 that ends in `.`, `!`, `?` or `:` and has more text after it on the line.
 Any length, so "What it means for you:" counts. Before, a label ending in a
 full stop got a stop (about 0.22 s, D-20261013-A04) and one ending in a
 colon got the shorter label pause (`pause_label`, 0.11-0.17 s), and only up
 to three words. Bold inside a sentence, and a bold line on its own, are
 unchanged. Not measured, like every beat.
+
+Then (Gavin, Q6, D-20261014-A07): a status line, one that starts with `❯`,
+keeps the stop after its bold name, as Gavin marked it on 13 Oct
+(D-20261013-A04). Only the other bold labels get the beat.
 
 ### Pause words (Gavin, 13 Oct, Q4, Q5 and Q7)
 

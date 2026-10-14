@@ -33,7 +33,7 @@
 #     + a bullet dot or a detail dot, at any indent), and a hold (about 1
 #     s) after a list of two or more (14 Oct, Gavin)
 #   * a beat after a bold label at the start of a line, of any length,
-#     ending in . ! ? or : (14 Oct, Gavin, Q4): with only a full stop between them, the items
+#     ending in . ! ? or : (14 Oct, Gavin, Q4); not on a status line (Q6): with only a full stop between them, the items
 #     ran into each other
 #   * a middle dot between words becomes a full stop (v12; a comma in
 #     v10), so a status line "done. low risk." is not one run-together phrase
@@ -1942,12 +1942,13 @@ $t =~ s/\p{Zs}/ /g;                             # every space separator (NBSP et
     $t = join "\n", @l;
 }
 # A bold label gets a beat after it (14 Oct, Gavin, Q4: "every bold label
-# gets 0.5"): a bold span at the start of a line, after any mark, status
-# mark or list number, that ends in . ! ? or : with more text after it on
-# the line. Any length. It takes the place of the stop after "**Proof.**"
-# (about 0.22 s, D-20261013-A04) and of the label pause after "**Found:**"
-# (0.11-0.17 s): the label rule below needs a space after the stars.
-$t =~ s/^([ \t]*[\x01\x06\x07]?[ \t]*(?:\x{276F}[ \t]*)?(?:\d{1,3}[.)][ \t]+)?\*\*[^*\n]+?[.!?:]\*\*)(?=[ \t]*[^\s\x01\x06\x07])/$1\x07/mg;
+# gets 0.5"): a bold span at the start of a line, after any mark or list
+# number, that ends in . ! ? or : with more text after it on the line. Any
+# length. It takes the place of the stop after "**Proof.**" (about 0.22 s)
+# and of the label pause after "**Found:**" (0.11-0.17 s): the label rule
+# below needs a space after the stars. A status line (the status mark
+# first) keeps its stop (Q6, Gavin's marked-up line, D-20261013-A04).
+$t =~ s/^([ \t]*[\x01\x06\x07]?[ \t]*(?:\d{1,3}[.)][ \t]+)?\*\*[^*\n]+?[.!?:]\*\*)(?=[ \t]*[^\s\x01\x06\x07])/$1\x07/mg;
 $t = NFD($t);                                   # split letters from their accents
 $t =~ s/\p{Mn}//g;                              # drop the accents, keep the letters
 # Letters with no decomposition: NFD cannot help, so map the common ones.
@@ -3486,7 +3487,7 @@ lead_in=0
     _ok "...a \\x06 in the clipboard makes no breath (control)" [ "$out" = 'One. Two.' ]
     out="$(printf 'Intro.\n\n**What it means:** text.\n\xe2\x9d\xaf **Item.** done.\n  \xe2\x8b\x85 **Proof.** detail.\n- **Listed.** item.\n' | _st --print --stdin)"
     _ok "a breath before a ** line and a status-mark line (v12)" \
-        [ "$out" = 'Intro. {{{breath}}} **What it means:** {{{beat}}} text. {{{breath}}} Item. {{{beat}}} done. {{{beat}}} Proof. {{{beat}}} detail. {{{beat}}} Listed. {{{beat}}} item. [[slnc 1200]]' ]
+        [ "$out" = 'Intro. {{{breath}}} **What it means:** {{{beat}}} text. {{{breath}}} Item. done. {{{beat}}} Proof. {{{beat}}} detail. {{{beat}}} Listed. {{{beat}}} item. [[slnc 1200]]' ]
     out="$(printf ' Easy to miss:\n  - One thing.\n  - Two things.\nAfter.\n' | _st --print --stdin)"
     _ok "a beat before each list item, a hold after the list (14 Oct)" \
         [ "$out" = 'Easy to miss: {{{beat}}} One thing. {{{beat}}} Two things. {{{hold}}} After.' ]
@@ -3495,7 +3496,7 @@ lead_in=0
         [ "$out" = 'Intro. {{{beat}}} One thing that wraps. {{{beat}}} Two. [[slnc 1200]]' ]
     out="$(printf 'Top.\n  \xe2\x8b\x85 One.\n  \xe2\x8b\x85 Two.\n\n\xe2\x9d\xaf **Next.** done.\n' | _st --print --stdin)"
     _ok "...detail lines are list items; a hold wins over a breath (14 Oct)" \
-        [ "$out" = 'Top. {{{beat}}} One. {{{beat}}} Two. {{{hold}}} Next. {{{beat}}} done.' ]
+        [ "$out" = 'Top. {{{beat}}} One. {{{beat}}} Two. {{{hold}}} Next. done.' ]
     out="$(printf 'One.\x07 Two.\n' | _st --print --stdin)"
     _ok "...a \\x07 in the clipboard makes no beat (control)" [ "$out" = 'One. Two.' ]
     out="$(printf 'One.\x01 Two.\n' | _st --print --stdin)"
@@ -3521,7 +3522,7 @@ lead_in=0
     out="$(printf '**Saved.** done \xc2\xb7 low risk.\n' | _st --print --stdin)"
     _ok "a middle dot between words becomes a full stop (v12)" [ "$out" = 'Saved. {{{beat}}} done. low risk.' ]
     out="$(printf 'Intro.\n\xe2\x9d\xaf **Pause words.** \xe2\x9c\x93 done \xc2\xb7 \xe2\x9d\x95 low risk.\n' | _st --print --stdin)"
-    _ok "...and bold stars round a span ending in . go (v12)" [ "$out" = 'Intro. {{{breath}}} Pause words. {{{beat}}} done. low risk.' ]
+    _ok "...and bold stars round a span ending in . go (v12)" [ "$out" = 'Intro. {{{breath}}} Pause words. done. low risk.' ]
     out="$(printf '**What it means for you:** each.\n' | _st --print --stdin)"
     _ok "a bold label of any length gets a beat after it (14 Oct, Q4)" [ "$out" = '**What it means for you:** {{{beat}}} each.' ]
     out="$(printf 'Text with **bold:** inside.\n**Heading only.**\nNext.\n' | _st --print --stdin)"
