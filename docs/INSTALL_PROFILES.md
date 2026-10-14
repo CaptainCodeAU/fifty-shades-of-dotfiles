@@ -43,7 +43,8 @@ nothing was skipped, which is a positive answer, not an absent file). Then:
   - A tool only the skipped part installs is shown once as `left out on purpose`,
     never as `Tool missing` with an admin command: with `system-packages`, `rg`,
     `nvim`, `tree`, `fastfetch`, `ffmpeg`, `aria2c`; with `docker`, `docker` and
-    `lazydocker` (and the banner's `Docker Engine: Not Installed` line goes). The
+    `lazydocker` (and the onboarding's `! Docker` row and the banner's
+    `Docker Engine: Not Installed` line go). The
     essential and UX tools (`jq`, `trash-put` and the rest) are still reported:
     the dotfiles need them, or root provides them, so their absence is a fault.
   - A box whose git uses the token broker for `https://github.com`
@@ -52,6 +53,10 @@ nothing was skipped, which is a positive answer, not an absent file). Then:
     broker is told it has no HTTPS helper, also without key advice.
   - With `DOTFILES_PLAIN_CLAUDE` set, the `GH API` line is left out: no
     `__claude_launch` exists there to fill its cache.
+  - The Quick Reference offers a tool hint only where its command works on the box
+    (`__quickref_tool_hints`): `lzd` needs `lazydocker`, `docker_help` and `tdev`
+    need their functions loaded, and `yt` needs `ffmpeg`. This one reads the box,
+    not the state files.
   - A box stowed before this change has no `skips` file: `docker`, `ssh` and
     `claude` are still read from `stow-skip`, but the apt tools are reported
     missing until one `./install.sh --stow-only` (it re-applies the stored profile)

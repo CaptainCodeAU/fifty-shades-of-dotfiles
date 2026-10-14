@@ -51,7 +51,7 @@ if [[ -n "$fn_src" ]]; then ok "__welcome_pnpm_path_check is defined"
 else bad "__welcome_pnpm_path_check is defined" "not found in $WELCOME"
      echo; echo "  $PASS passed, $FAIL failed"; exit 1; fi
 full_src=$(sed -n '/^__show_welcome_full() {/,/^}/p' "$WELCOME")
-if code_of "$full_src" | grep -qE '^[[:space:]]+__welcome_pnpm_path_check$'; then
+if code_of "$full_src" | grep -cE '^[[:space:]]+__welcome_pnpm_path_check$' >/dev/null; then
     ok "called from __show_welcome_full"
 else bad "called from __show_welcome_full" "defined but never invoked from the banner"; fi
 
@@ -103,7 +103,7 @@ else bad "default pnpm bin is derived from PNPM_HOME" "rc=$RC out='$OUT'"; fi
 ng_src=$(sed -n '/^__welcome_npm_guard_check() {/,/^}/p' "$WELCOME")
 if [[ -n "$ng_src" ]]; then ok "__welcome_npm_guard_check is defined"; eval "$ng_src"
 else bad "__welcome_npm_guard_check is defined" "not found in $WELCOME"; fi
-if code_of "$full_src" | grep -qE '^[[:space:]]+__welcome_npm_guard_check$'; then ok "npm guard check is called from __show_welcome_full"
+if code_of "$full_src" | grep -cE '^[[:space:]]+__welcome_npm_guard_check$' >/dev/null; then ok "npm guard check is called from __show_welcome_full"
 else bad "npm guard check is called from __show_welcome_full" "defined but never invoked"; fi
 if [[ -n "$ng_src" ]]; then
     NGT=$(mktemp -d "${TMPDIR:-/tmp}/zsh-welcome-ng.XXXXXX") || { bad "npm guard fixture" "mktemp failed -- INVALID"; NGT=""; }
@@ -141,9 +141,9 @@ done
 gl_src=$(sed -n '/^__welcome_github_line() {/,/^}/p' "$WELCOME")
 if [[ -n "$gl_src" ]]; then eval "$gl_src"; ok "__welcome_github_line is defined"
 else bad "__welcome_github_line is defined" "not found in $WELCOME"; fi
-if code_of "$full_src" | grep -qE '^[[:space:]]+__welcome_github_line$'; then ok "GitHub line is called from __show_welcome_full"
+if code_of "$full_src" | grep -cE '^[[:space:]]+__welcome_github_line$' >/dev/null; then ok "GitHub line is called from __show_welcome_full"
 else bad "GitHub line is called from __show_welcome_full" "defined but never invoked"; fi
-if code_of "$full_src" | grep -q 'DOTFILES_PLAIN_CLAUDE'; then ok "GH API line is skipped on a plain-Claude box"
+if code_of "$full_src" | grep -c 'DOTFILES_PLAIN_CLAUDE' >/dev/null; then ok "GH API line is skipped on a plain-Claude box"
 else bad "GH API line is skipped on a plain-Claude box" "no DOTFILES_PLAIN_CLAUDE test in __show_welcome_full"; fi
 
 FX=$(mktemp -d "${TMPDIR:-/tmp}/zsh-welcome-skip.XXXXXX") || { bad "skip fixture" "mktemp failed -- INVALID"; FX=""; }
@@ -203,6 +203,25 @@ if [[ -n "$FX" ]]; then
     OUT2=$( (XDG_STATE_HOME="$FX/none"; PATH="$FX/bin"; rehash; __show_docker_guidance) 2>&1)
     if [[ -z "$OUT" && "$OUT2" == *"Tool missing: 'docker'"* ]]; then ok "docker guidance: silent on codebox, shown with no state"
     else bad "docker guidance: silent on codebox, shown with no state" "codebox='$OUT' none='$OUT2'"; fi
+    ro_src=$(sed -n '/^run_onboarding() {/,/^}/p' "$ONB")
+    if code_of "$ro_src" | grep -cE '^[[:space:]]+elif ! __tool_left_out docker; then$' >/dev/null; then ok "onboarding's Docker row is skipped when Docker is left out"
+    else bad "onboarding's Docker row is skipped when Docker is left out" "no __tool_left_out docker guard in run_onboarding"; fi
+
+    qh_src=$(sed -n '/^__quickref_tool_hints() {/,/^}/p' "$WELCOME")
+    if [[ -n "$qh_src" ]]; then eval "$qh_src"; ok "__quickref_tool_hints is defined"
+    else bad "__quickref_tool_hints is defined" "not found in $WELCOME"; fi
+    for f in __show_quickref_full __show_quickref_minimal; do
+        if code_of "$(sed -n "/^$f() {/,/^}/p" "$WELCOME")" | grep -c '__quickref_tool_hints' >/dev/null; then ok "$f uses the hint list"
+        else bad "$f uses the hint list" "still prints a fixed list"; fi
+    done
+    OUT=$( (PATH="$FX/bin"; rehash; unfunction docker_help tdev 2>/dev/null; yt() { :; }; __quickref_tool_hints) 2>&1)
+    if [[ "$OUT" == "Git/Docker: lg" ]]; then ok "codebox-like box: only the lazygit hint (no lzd, docker, tmux, yt)"
+    else bad "codebox-like box: only the lazygit hint" "out='$OUT'"; fi
+    for t in lazydocker ffmpeg; do printf '#!/bin/sh\n' >| "$FX/bin/$t"; chmod +x "$FX/bin/$t"; done
+    OUT=$( (PATH="$FX/bin"; rehash; docker_help() { :; }; tdev() { :; }; yt() { :; }; __quickref_tool_hints) 2>&1)
+    if [[ "$OUT" == *"lg, lzd"* && "$OUT" == *docker_help* && "$OUT" == *tdev* && "$OUT" == *"yt --help"* ]]; then
+        ok "control: every tool present, every hint shown"
+    else bad "control: every tool present, every hint shown" "out='$OUT'"; fi
 fi
 
 echo; echo "  $PASS passed, $FAIL failed"

@@ -1106,7 +1106,7 @@ run_onboarding() {
         else
             printf "  ${warn}!${done} %-18s %s\n" "Docker" "Not Running"
         fi
-    else
+    elif ! __tool_left_out docker; then
         printf "  ${warn}!${done} %-18s\n" "Docker"
         __show_docker_guidance
     fi

@@ -800,14 +800,28 @@ __show_welcome_minimal() {
 # ------------------------------------------------------------------------------
 # Quick Reference — Full
 # ------------------------------------------------------------------------------
+# The tool hints, one per entry, each only where its command works on this box: a
+# box that left out Docker, tmux or the media tools (codebox) is not offered them
+# (W-20261015-A07). Joined with " | " by the two callers.
+__quickref_tool_hints() {
+    local -a git=() hints=()
+    (( $+commands[lazygit] )) && git+=(lg)
+    (( $+commands[lazydocker] )) && git+=(lzd)
+    (( ${#git} )) && hints+=("Git/Docker: ${(j:, :)git}")
+    (( $+functions[docker_help] )) && hints+=("Docker: docker_help")
+    (( $+functions[tdev] )) && hints+=("Tmux: tdev, gs, gstatus")
+    (( $+functions[yt] && $+commands[ffmpeg] )) && hints+=("Media: yt --help")
+    print -rl -- "${hints[@]}"
+}
+
 __show_quickref_full() {
+    local -a hints=( ${(f)"$(__quickref_tool_hints)"} )
     echo
     echo "${info}🚀  Quick Reference:${done}"
     echo "    Python:  python_new_project, python_setup, python_delete"
     echo "    uv CLI:  uv_tool_install_current_project, uv_tool_check_current_project"
     echo "    Node:    node_new_project, node_setup, node_clean"
-    echo "    Git/Docker: lg, lzd | Docker: docker_help | Tmux: tdev, gs, gstatus"
-    echo "    Media:   yt --help"
+    (( ${#hints} )) && echo "    ${(pj: | :)hints}"
     echo "    Security: vuln-scan (cve detail) | briefing: ~/.local/state/dotfiles/vuln-briefing.md"
 }
 
@@ -815,9 +829,10 @@ __show_quickref_full() {
 # Quick Reference — Minimal (Compact 2 Lines)
 # ------------------------------------------------------------------------------
 __show_quickref_minimal() {
+    local -a hints=( ${(f)"$(__quickref_tool_hints)"} )
     echo
-    echo "${info}💡 Python: python_new_project | Node: node_new_project | Docker: docker_help${done}"
-    echo "   Tmux: tdev, gs | Git/Docker: lg, lzd | Media: yt --help"
+    echo "${info}💡 Python: python_new_project | Node: node_new_project${done}"
+    (( ${#hints} )) && echo "   ${(pj: | :)hints}"
 }
 
 # ------------------------------------------------------------------------------
