@@ -720,8 +720,14 @@ is the cause behind piece 2, still open on 16 Oct.
 
 **The fix for a Mac reboot (Gavin, Q29: 1):** a key used for nothing else,
 `~/.ssh/codebox-speak-relay` (ed25519, no passphrase, so no agent needed).
-speak-relay offers it first when the file exists. On codebox it is pinned in
-`authorized_keys` with `restrict` and a forced command that only runs the
-queue's `tail`, so the key can do nothing else there. Until codebox has that
-line, the usual key still logs in through the agent (checked with a one-off
-launchd job: rc 0 with the agent; the new key alone rc 255, as expected).
+When the file exists, speak-relay uses it alone (`IdentitiesOnly`,
+`IdentityAgent=none`), so the running link already behaves as it will after a
+reboot. On codebox it is pinned in `authorized_keys` with `restrict` and a
+forced command that only runs the queue's `tail` (added by NP-2 on Gavin's
+NP-2 Q6, about 3:58 AM; kept in future goldens by Network_Plan c242b45).
+
+Proved from a one-off launchd job with no ssh agent: the key logs in and the
+tail runs (still running at 6 s); `id` through it printed 0 bytes; a reverse
+forward with it was refused; a queue write sent through it never ran. Then
+the LaunchAgent, on the key alone, ran a `--stop` queued on codebox at 4:00 AM.
+Without the file, the entry's usual key is used through the agent.
