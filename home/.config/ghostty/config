@@ -94,6 +94,13 @@ tab-inherit-working-directory = false
 # every window.
 macos-option-as-alt = true
 
+# cmd+left / cmd+right switch Ghostty tabs, as they do in iTerm2. Ghostty's
+# defaults send ctrl+A / ctrl+E (start and end of line) instead; a cat -v on
+# 16 Oct showed ^A for cmd+left, and the Ghostty tabs never switched.
+# Ghostty's own cmd+shift+[ / ] and ctrl+tab still switch tabs too.
+keybind = super+arrow_left=previous_tab
+keybind = super+arrow_right=next_tab
+
 # --- Clipboard and selection -------------------------------------------------
 # A plain drag inside herdr is herdr's (or Claude Code's) own selection, and
 # they copy it themselves through OSC 52, so programs must be allowed to write
@@ -104,6 +111,10 @@ macos-option-as-alt = true
 clipboard-write = allow
 clipboard-read = ask
 copy-on-select = clipboard
+
+# Opening a file, folder or web address: cmd+shift+click, not iTerm2's
+# cmd+click. Inside herdr, shift gets the click past herdr's mouse capture;
+# then Ghostty underlines and opens it (Gavin, 16 Oct: "just like iTerm").
 
 # --- Shell integration -------------------------------------------------------
 # ssh-env: an ssh from a plain Ghostty shell sends TERM=xterm-256color, since
