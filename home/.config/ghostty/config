@@ -47,9 +47,9 @@ background-opacity = 0.95
 background-blur = true
 
 # --- Window ------------------------------------------------------------------
-# iTerm2: 290 columns by 88 rows.
-window-width = 290
-window-height = 88
+# 360 columns by 112 rows (Gavin, 15 Oct; iTerm2's profile is 290 by 88).
+window-width = 360
+window-height = 112
 
 # iTerm2: every new window and tab starts in ~/CODE/CaptainCodeAU ("Custom
 # Directory: Yes"), not in the folder of the tab it came from.
