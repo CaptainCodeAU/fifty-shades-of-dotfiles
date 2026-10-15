@@ -394,9 +394,14 @@ report_upgrades() {   # $1 = the verb, "needs upgrade" or "would upgrade"
 # here read it: retiring or renaming a guard in this repo would leave every engage
 # session denying every call that guard covers (HOOK MISSING), with this tool
 # reporting all clear (red team, measured). So: every __HOME__/.claude/hooks/<name>
-# engage names must be a file this repo ships and has not retired. Said positively
-# on every run; the check fails on a miss. CLAUDE_ENGAGE_MANIFEST overrides the path.
+# engage names must be a file this repo ships. Said positively on every run; the
+# check fails on a miss. CLAUDE_ENGAGE_MANIFEST overrides the path.
+# A hook RETIRED here whose file is still shipped is a note, not a failure (Gavin,
+# dotfiles-main-2 Q2: 1, 2026-10-16): retiring only drops this repo's registration,
+# and engage may keep its own (the census reminder, kept for engage on 7 Oct). The
+# file is what engage needs; deleting it is what still fails the check.
 ENGAGE_MISSING=()
+ENGAGE_RETIRED=()
 engage_crosscheck() {
     local em="${CLAUDE_ENGAGE_MANIFEST:-$HOME/CODE/CaptainCodeAU/engage/templates/settings/hooks.json}"
     local repo_root repo_hooks name live lt n=0 ours=0 elsewhere=0
@@ -417,16 +422,22 @@ engage_crosscheck() {
             continue
         fi
         ours=$((ours+1))
-        if [[ ! -f "$repo_hooks/$name" ]] || jq -e --arg s "$name" '[.retired[]? | select(.script == $s)] | length > 0' "$MANIFEST" >/dev/null 2>&1; then
+        if [[ ! -f "$repo_hooks/$name" ]]; then
             ENGAGE_MISSING+=("$name")
+        elif jq -e --arg s "$name" '[.retired[]? | select(.script == $s)] | length > 0' "$MANIFEST" >/dev/null 2>&1; then
+            ENGAGE_RETIRED+=("$name")
         fi
     done < <(jq -r '.hooks[]? | .script_path // empty | select(startswith("__HOME__/.claude/hooks/")) | sub("^__HOME__/.claude/hooks/"; "")' "$em" | sort -u)
     if (( ${#ENGAGE_MISSING[@]} == 0 )); then
         printf '  %s+%s engage cross-check: all %d of this repo'"'"'s hook file(s) engage names are shipped here (%d more come from other repos)\n' "$G" "$N" "$ours" "$elsewhere"
     else
-        printf '  %s!%s engage cross-check: engage still names %d hook file(s) this repo does not ship or has retired:\n' "$R" "$N" "${#ENGAGE_MISSING[@]}"
+        printf '  %s!%s engage cross-check: engage still names %d hook file(s) this repo does not ship:\n' "$R" "$N" "${#ENGAGE_MISSING[@]}"
         for name in "${ENGAGE_MISSING[@]}"; do printf '      %s%s%s\n' "$C" "$name" "$N"; done
         printf '      %sOnce deployed, every engage session denies every call those guard (HOOK MISSING). Remove the row from %s first.%s\n' "$D" "$em" "$N"
+    fi
+    if (( ${#ENGAGE_RETIRED[@]} > 0 )); then
+        printf '  %s.%s engage cross-check: %d hook file(s) engage names are retired here but still shipped, so engage keeps them; deleting one would fail this check:\n' "$D" "$N" "${#ENGAGE_RETIRED[@]}"
+        for name in "${ENGAGE_RETIRED[@]}"; do printf '      %s%s%s\n' "$C" "$name" "$N"; done
     fi
 }
 engage_crosscheck

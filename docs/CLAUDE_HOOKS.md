@@ -179,9 +179,12 @@ HOOK MISSING; record: drawer `WORK/outage-2026-10-05/`), four changes, in dotfil
   exactly as Bash input (5 guards x 2 tools, measured).
 - **engage cross-check.** engage registers six of these guard files from its own
   manifest (`engage/templates/settings/hooks.json`). `claude-hooks-sync --check`
-  now fails, naming the file, when engage names a guard this repo no longer ships
-  or has retired. Otherwise retiring or renaming a guard here would deny every
-  engage session. Hooks owned by another repo are counted, not flagged.
+  now fails, naming the file, when engage names a guard this repo no longer ships.
+  Otherwise deleting or renaming a guard here would deny every engage session.
+  Hooks owned by another repo are counted, not flagged. A hook retired here whose
+  file is still shipped is a note, not a failure (Gavin, 2026-10-16): retiring drops
+  only this repo's registration, and engage may keep its own, as it does the census
+  reminder (Gavin, 7 Oct). Deleting that file is what fails the check.
 
 The engage renderer writes the same guard shape byte for byte. Its R28 test holds
 that, and `engage-settings-check` accepts both openings. **Change the shape in both

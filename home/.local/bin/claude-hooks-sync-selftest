@@ -1093,6 +1093,22 @@ if [[ -f "${REAL_MANIFEST:-}" ]]; then
     out=$(xrun "$xw/eng-gone.json"); rc=$?
     if (( rc == 1 )) && [[ "$out" == *"! engage cross-check: engage still names 1 hook file"* && "$out" == *"enforce-gone-xyz.sh"* ]]; then ok "engage cross-check: a guard engage names that this repo dropped fails --check, by name"
     else bad "engage cross-check: dropped guard" "rc=$rc $(printf '%s' "$out" | grep -iA2 'engage cross')"; fi
+    # Retired HERE but still shipped (Q2: 1, 2026-10-16): engage may keep a hook this repo
+    # stopped registering (the census reminder, Gavin 7 Oct), and the file is still there,
+    # so nothing is denied. A note by name, never a failure; the control is eng-ok's rc.
+    xret=""
+    while IFS= read -r s; do
+        [[ -f "$(cd "$(dirname "$REAL_MANIFEST")/../.." && pwd)/home/.claude/hooks/$s" ]] && { xret="$s"; break; }
+    done < <(jq -r '.retired[]?.script // empty' "$REAL_MANIFEST" | sort -u)
+    if [[ -n "$xret" ]]; then
+        printf '{"hooks":[%s,%s]}\n' "$(xrow validate-bash.sh)" "$(xrow "$xret")" > "$xw/eng-retired.json"
+        xrun "$xw/eng-ok.json" >/dev/null; rc_ok=$?
+        out=$(xrun "$xw/eng-retired.json"); rc=$?
+        if (( rc == rc_ok )) && [[ "$out" == *"+ engage cross-check: all 2 of this repo"* && "$out" == *"retired here but still shipped"*"$xret"* && "$out" != *"! engage cross-check"* ]]; then ok "engage cross-check: a hook retired here but still shipped ($xret) is a note, not a failure (rc $rc = control rc $rc_ok)"
+        else bad "engage cross-check: retired but shipped" "rc=$rc control=$rc_ok $(printf '%s' "$out" | grep -iA3 'engage cross')"; fi
+    else
+        ok "engage cross-check: retired-but-shipped arm skipped -- no retired hook is still shipped (said, not silent)"
+    fi
     out=$(xrun "$xw/none.json")
     if [[ "$out" == *"engage cross-check: no engage manifest"*"(skipped)"* ]]; then ok "engage cross-check: no engage manifest says skipped, never a silent pass"
     else bad "engage cross-check: no manifest" "$(printf '%s' "$out" | grep -i 'engage cross')"; fi
