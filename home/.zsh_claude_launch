@@ -184,9 +184,12 @@ __cl_ssh_agent() {
 # your interactive shell). The count guard matters: `export` with no names PRINTS every exported
 # variable, so an empty list must never reach it. `builtin` so an alias or function named
 # export cannot silently drop the settings.
-# The subshell (not `env`) keeps shell functions callable: a caller may hand over a function
-# (in an interactive shell, `claude` is the claude() pane guard from .zshrc), and `env` cannot
-# run a function.
+# The subshell (not `env`) keeps this file's own functions callable. A function from the
+# CALLER's shell (such as the interactive claude() pane guard from .zshrc) is callable only
+# when there is no key file: with one, L5 runs this runner inside a fresh `zsh -f` under
+# ssh-agent (a43b851), where only functions defined in this file exist. engage, the one
+# caller, is a script, so its `claude` is always the binary (checked 16 Oct 2026 by
+# dotfiles-main-2: no caller passes a function).
 # GH_TOKEN REMOVED 2026-09-18 from the launch chain. It used to be injected as
 # GH_TOKEN="$gh_token" beside the settings below. Why it went: every session started with a
 # GitHub key in its environment, where any command could read it and any transcript could
