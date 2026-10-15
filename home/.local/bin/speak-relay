@@ -1,0 +1,195 @@
+#!/usr/bin/perl
+# ============================================================================
+#  speak-relay -- let a remote box press the Mac's speak keys
+# ============================================================================
+# Gavin, dotfiles-main Q22 (v2): 1, port 8888, 2026-10-16.
+#
+# Why: a herdr key runs its command on the herdr SERVER. In a `herdr --remote`
+# tab the server is codebox (Linux), so the speak keys ran speak-clipboard
+# there: no Mac voice, nobody listening. Now speak-clipboard on a non-Mac box
+# sends the key's words here instead, and this Mac speaks its own clipboard,
+# which holds the copy (Q21: Claude in a herdr pane copies through the
+# terminal, so a remote drag lands on this Mac's clipboard).
+#
+# How the words get here: the Mac's ssh config entry for codebox carries
+#     RemoteForward 8888 127.0.0.1:8888
+# so while herdr's ssh link is up, port 8888 on codebox is this port.
+#
+# What it accepts: one line, exactly one of the nine speak-key commands in
+# home/.config/herdr/config.toml. It answers "ok" and runs
+#     speak-clipboard <those words>
+# in the background, or answers "refused" and runs nothing. No shell is
+# involved; text is never accepted, only these fixed words.
+# It listens on 127.0.0.1 only, never on the network.
+#
+#   speak-relay              run the server (launchd runs it, see --install)
+#   speak-relay --install    write the LaunchAgent and start it
+#   speak-relay --uninstall  stop it and trash the LaunchAgent
+#   speak-relay --status     is it loaded, is the port answering
+#
+# Log: ~/.local/state/herdr/speak-relay.log, one line per request.
+# ============================================================================
+use strict;
+use warnings;
+use IO::Socket::INET;
+use POSIX ();
+
+my $home  = $ENV{HOME} or die "speak-relay: HOME is not set\n";
+my $port  = $ENV{SPEAK_RELAY_PORT} || 8888;
+my $speak = $ENV{SPEAK_RELAY_SPEAK} || "$home/.local/bin/speak-clipboard";
+my $log   = $ENV{SPEAK_RELAY_LOG} || "$home/.local/state/herdr/speak-relay.log";
+my $label = 'com.captaincodeau.speak-relay';
+my $plist = "$home/Library/LaunchAgents/$label.plist";
+
+# The nine speak-key commands, word for word as config.toml runs them.
+my %allowed = map { $_ => 1 } (
+    '--toggle', '--skip', '--stop',
+    '--set rate -20', '--set rate +20',
+    '--set volume -10', '--set volume +10',
+    '--notify --settings', '--reset all',
+);
+
+sub stamp { POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime) }
+
+sub log_line {
+    my ($msg) = @_;
+    if (open my $fh, '>>', $log) { print $fh stamp(), " $msg\n"; close $fh }
+}
+
+# A refused line is logged as printable text only, at most 60 characters.
+sub shown {
+    my ($s) = @_;
+    $s =~ s/[^\x20-\x7e]/?/g;
+    $s = substr($s, 0, 60) . '...' if length $s > 60;
+    return "'$s'";
+}
+
+sub uid { return $< }
+
+sub install {
+    my $self = $0 =~ m{^/} ? $0 : "$home/.local/bin/speak-relay";
+    my $path = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$home/.local/bin";
+    my $err  = "$home/.local/state/herdr/speak-relay.err";
+    system('mkdir', '-p', "$home/Library/LaunchAgents", "$home/.local/state/herdr");
+    open my $fh, '>', $plist or die "speak-relay: cannot write $plist: $!\n";
+    print $fh <<"PLIST";
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>$label</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/perl</string>
+        <string>$self</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>$path</string>
+        <key>LANG</key><string>en_AU.UTF-8</string>
+    </dict>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><true/>
+    <key>ThrottleInterval</key><integer>10</integer>
+    <key>StandardErrorPath</key><string>$err</string>
+</dict>
+</plist>
+PLIST
+    close $fh;
+    system("launchctl bootout gui/" . uid() . "/$label >/dev/null 2>&1");
+    if (system('launchctl', 'bootstrap', 'gui/' . uid(), $plist) != 0) {
+        die "speak-relay: launchctl bootstrap failed; run it by hand to see why:\n"
+          . "  launchctl bootstrap gui/" . uid() . " $plist\n";
+    }
+    print "speak-relay: installed and started ($plist), port $port\n";
+    exit 0;
+}
+
+sub uninstall {
+    system("launchctl bootout gui/" . uid() . "/$label >/dev/null 2>&1");
+    if (-e $plist) {
+        # The Trash shim by its full path: a bare 'rm' on a PATH without
+        # ~/.local/bin would be the permanent deleter.
+        my $trash_rm = "$home/.local/bin/rm";
+        -x $trash_rm or die "speak-relay: $trash_rm (the Trash shim) is missing; trash $plist in Finder\n";
+        system($trash_rm, $plist) == 0 or die "speak-relay: could not trash $plist\n";
+    }
+    print -e $plist ? "speak-relay: $plist is STILL there\n" : "speak-relay: stopped, LaunchAgent trashed\n";
+    exit(-e $plist ? 1 : 0);
+}
+
+sub status {
+    my $loaded = system("launchctl print gui/" . uid() . "/$label >/dev/null 2>&1") == 0;
+    my $sock = IO::Socket::INET->new(PeerAddr => '127.0.0.1', PeerPort => $port, Proto => 'tcp', Timeout => 2);
+    print 'launchd: ', ($loaded ? "loaded ($label)" : 'NOT loaded'), "\n";
+    print "port $port: ", ($sock ? 'answering' : 'NOT answering'), "\n";
+    close $sock if $sock;
+    exit(($loaded && $sock) ? 0 : 1);
+}
+
+if (@ARGV) {
+    my $a = shift @ARGV;
+    install()   if $a eq '--install';
+    uninstall() if $a eq '--uninstall';
+    status()    if $a eq '--status';
+    if ($a eq '--help' || $a eq '-h') {
+        open my $me, '<', $0 or die; while (<$me>) { next if $. == 1; last if /^use strict/; print if s/^# ?// }
+        exit 0;
+    }
+    die "speak-relay: unknown option '$a' (try --help)\n";
+}
+
+my $srv = IO::Socket::INET->new(
+    LocalAddr => '127.0.0.1', LocalPort => $port, Proto => 'tcp',
+    Listen => 5, ReuseAddr => 1,
+) or die "speak-relay: cannot listen on 127.0.0.1:$port: $!\n";
+log_line("start pid=$$ port=$port");
+
+while (1) {
+    my $c = $srv->accept or next;
+    $c->autoflush(1);
+    my $line = '';
+    eval {
+        local $SIG{ALRM} = sub { die "timeout\n" };
+        alarm 3;
+        my $got = <$c>;
+        alarm 0;
+        $line = defined $got ? $got : '';
+    };
+    alarm 0;
+    $line =~ s/\r?\n\z//;
+
+    unless ($allowed{$line}) {
+        print $c "refused\n";
+        close $c;
+        # An empty line is `speak-relay --status` (or any port probe) connecting.
+        log_line($line eq '' ? 'probe (nothing sent)' : 'refused ' . shown($line));
+        next;
+    }
+
+    # Double fork: the speaker is not this server's child, so nothing piles
+    # up and speak-clipboard keeps normal signal handling for its own children.
+    my $pid = fork;
+    if (!defined $pid) {
+        print $c "fork failed\n";
+        close $c;
+        log_line("failed '$line' (fork: $!)");
+        next;
+    }
+    if ($pid == 0) {
+        close $srv;
+        close $c;
+        POSIX::setsid();
+        my $grand = fork;
+        POSIX::_exit(0) if !defined $grand || $grand;
+        open STDIN,  '<', '/dev/null';
+        open STDOUT, '>', '/dev/null';
+        open STDERR, '>', '/dev/null';
+        { no warnings 'exec'; exec { $speak } $speak, split(/ /, $line); }
+        POSIX::_exit(127);
+    }
+    waitpid($pid, 0);
+    print $c "ok\n";
+    close $c;
+    log_line("ran '$line'");
+}

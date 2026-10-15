@@ -623,3 +623,42 @@ and the restart kills its own ffplay before starting another.
 
 Tests: 270 in all. Each fix was taken out of a copy in turn, and each copy
 fails its own new checks.
+
+## Speaking from a remote herdr tab (Gavin, 16 Oct, Q22 (v2): 1, port 8888)
+
+A herdr key runs its command on the herdr server. In a `herdr --remote` tab the
+server is codebox (Linux), so the speak keys ran speak-clipboard there, with no
+Mac voice and nobody listening. herdr's own code shows this
+(`src/app/custom_commands.rs`: every key command kind is started by the server),
+and a remote press left nothing in the Mac's speak log while local presses did.
+
+Now, on a box that is not a Mac, the nine speak-key commands are relayed:
+
+- speak-clipboard sends the key's words, such as `--toggle` or
+  `--set rate +20`, to 127.0.0.1 port 8888 and exits. Anything else runs on
+  the box as before. Each relay adds a `mode=relay` line to the box's log.
+- `ssh` carries that port to the Mac: the Mac's ssh config entry for codebox
+  holds `RemoteForward 8888 127.0.0.1:8888`, so the port exists only while
+  `herdr --remote` is attached.
+- `speak-relay` on the Mac (`home/.local/bin/speak-relay`, a LaunchAgent,
+  `com.captaincodeau.speak-relay`) listens on 127.0.0.1:8888 only. It accepts
+  exactly the nine commands in `home/.config/herdr/config.toml`, word for word,
+  runs `speak-clipboard` with them, and refuses anything else. No text is
+  accepted and no shell is used. Log: `~/.local/state/herdr/speak-relay.log`.
+- The Mac speaks its own clipboard. That holds the remote copy because of
+  Q21: Claude in a herdr pane on codebox copies through the terminal
+  (`docs/CLAUDE_LAUNCH_ENV.md`).
+
+The box is told apart by bash's `OSTYPE`, not `uname`: the selftest runs with
+a PATH of stand-ins only, and a missing `uname` made the Mac look remote
+(23 of 279 checks failed until it changed).
+
+Tested on the Mac with a stand-in speaker on port 18888: all nine commands
+relayed and ran; `--help` was not relayed; with no server the press exits 1
+and says why; on a Mac a key command is not relayed (a Linux press in the
+same run was); a line with extra words was refused and ran nothing. The
+selftest passes 279 of 279. Live: the LaunchAgent answers on 8888 and ran
+`--notify --settings`.
+
+`speak-relay --status` shows whether it is loaded and answering;
+`--install` and `--uninstall` start it or stop it and trash the LaunchAgent.
