@@ -806,6 +806,14 @@ pnpm() {
 # `herdr server`, a launch or attach (no command, `--session` included) and
 # `herdr session attach`. API commands, --help and --version pass. Tested by
 # makeitso's tests/launch-test.zsh check 13, which reads this function.
+#
+# `herdr --remote` takes its keys from the far box's config, not this one
+# (Gavin, dotfiles-main, 2026-10-16). With the default (local), the speak keys
+# did nothing in a remote tab; `--remote-keybindings server` made them work at
+# once (Gavin's test, codebox, 3:44 AM). Both ends stow the same config.toml,
+# so nothing is lost; a far box must pull the dotfiles to get a new key.
+# Why: docs/HERDR.md, "Two machines: the keymap drifts too".
+export HERDR_REMOTE_KEYBINDINGS=server
 herdr() {
     local _unit="$HOME/.config/systemd/user/herdr.service"
     local _plist="$HOME/Library/LaunchAgents/homebrew.mxcl.herdr.plist"

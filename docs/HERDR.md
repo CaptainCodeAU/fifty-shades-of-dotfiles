@@ -705,6 +705,13 @@ Confirmed 2026-08-01 the hard way: `previous_agent` / `next_agent` were added
 here, validated, and reloaded, and did nothing on the laptop until the attach was
 re-made with `--remote-keybindings server`.
 
+Hit again 2026-10-16: the speak keys (`[[keys.command]]`) did nothing in a
+`herdr --remote codebox.lan` tab until the attach was re-made with
+`--remote-keybindings server`; then the first press spoke (Gavin's test). Since
+then `home/.zshrc` exports `HERDR_REMOTE_KEYBINDINGS=server` on every machine,
+so every remote attach uses the far box's keys without the flag. A far box must
+pull the dotfiles to get a newly added key.
+
 ### Linux / WSL: the systemd user service
 
 Added 2026-09-06. The Linux counterpart of what `brew services start herdr` was on
