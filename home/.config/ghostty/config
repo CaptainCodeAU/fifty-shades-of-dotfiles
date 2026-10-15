@@ -1,0 +1,84 @@
+# =============================================================================
+#  Ghostty settings (fifty-shades-of-dotfiles: home/.config/ghostty/config,
+#  stowed to ~/.config/ghostty/config)
+# =============================================================================
+# Added 2026-10-15 (Gavin, dotfiles-main Q13: 1): Ghostty runs BESIDE iTerm2,
+# which stays as the fallback. Every value below is copied from the iTerm2
+# default profile "Default (old) red" as read from its live settings that day,
+# so herdr looks and behaves the same in either terminal.
+#
+# `ghostty +validate-config` checks this file; `ghostty +show-config --default
+# --docs` lists every setting with its documentation. Ghostty reloads this file
+# with cmd+shift+, (no restart needed for most settings).
+
+# --- Font --------------------------------------------------------------------
+# iTerm2: MesloLGS NF 12 (the Powerlevel10k font), with FiraCode Nerd Font
+# Mono 12 for non-ASCII. Ghostty tries each font-family in order for a glyph
+# the one before lacks, which is what iTerm2's non-ASCII font did.
+font-family = MesloLGS NF
+font-family = FiraCode Nerd Font Mono
+font-size = 12
+
+# --- Colours (iTerm2 "Default (old) red") ------------------------------------
+background = #150d0d
+foreground = #bbbbbb
+cursor-color = #bbbbbb
+selection-background = #b5d5ff
+selection-foreground = #000000
+palette = 0=#000000
+palette = 1=#bb0000
+palette = 2=#00bb00
+palette = 3=#bbbb00
+palette = 4=#0240d2
+palette = 5=#bb00bb
+palette = 6=#00bbbb
+palette = 7=#bbbbbb
+palette = 8=#555555
+palette = 9=#ff5555
+palette = 10=#55ff55
+palette = 11=#ffff55
+palette = 12=#5555ff
+palette = 13=#ff55ff
+palette = 14=#55ffff
+palette = 15=#ffffff
+
+# iTerm2: transparency 0.05 with blur.
+background-opacity = 0.95
+background-blur = true
+
+# --- Window ------------------------------------------------------------------
+# iTerm2: 290 columns by 88 rows.
+window-width = 290
+window-height = 88
+
+# --- Keyboard ----------------------------------------------------------------
+# Option acts as Alt, on both sides. In iTerm2 only some profiles did this, and
+# where Option typed a character instead, herdr's ctrl+alt keys never arrived
+# (home/.config/herdr/config.toml, "FUNCTION KEYS"). One setting here covers
+# every window.
+macos-option-as-alt = true
+
+# --- Clipboard and selection -------------------------------------------------
+# A plain drag inside herdr is herdr's (or Claude Code's) own selection, and
+# they copy it themselves through OSC 52, so programs must be allowed to write
+# the clipboard (iTerm2: "Applications in terminal may access clipboard").
+# Reading it stays "ask". A drag Ghostty itself owns (hold shift to get past
+# herdr's mouse capture, as option-drag did in iTerm2) copies to the clipboard,
+# as iTerm2's "Copy to pasteboard on selection" did.
+clipboard-write = allow
+clipboard-read = ask
+copy-on-select = clipboard
+
+# --- Shell integration -------------------------------------------------------
+# ssh-env: an ssh from a plain Ghostty shell sends TERM=xterm-256color, since
+# the other machines lack Ghostty's own xterm-ghostty description.
+# ssh-terminfo (which installs that description on the far machine) is left
+# off: it writes to machines this file does not own.
+shell-integration-features = ssh-env
+
+# --- Updates -----------------------------------------------------------------
+# No update checks from inside the app, the same rule as herdr's phone-home
+# guards. Updates come through Homebrew: the cask is marked auto_updates, so
+# a plain `brew upgrade` skips it; `brew upgrade --cask --greedy ghostty`
+# takes it.
+auto-update = off
