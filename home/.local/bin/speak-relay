@@ -2,44 +2,51 @@
 # ============================================================================
 #  speak-relay -- let a remote box press the Mac's speak keys
 # ============================================================================
-# Gavin, dotfiles-main Q22 (v2): 1, port 8888, 2026-10-16.
+# Gavin, dotfiles-main Q22 (v2): 1, 2026-10-16; reworked the same night to the
+# Mac-collects design (dotfiles-main Q26 / NP-2 Q4: 3).
 #
 # Why: a herdr key runs its command on the herdr SERVER. In a `herdr --remote`
 # tab the server is codebox (Linux), so the speak keys ran speak-clipboard
 # there: no Mac voice, nobody listening. Now speak-clipboard on a non-Mac box
-# sends the key's words here instead, and this Mac speaks its own clipboard,
-# which holds the copy (Q21: Claude in a herdr pane copies through the
-# terminal, so a remote drag lands on this Mac's clipboard).
+# writes the key's words to a queue file there, and this Mac fetches them and
+# speaks its own clipboard, which holds the copy (Q21: Claude in a herdr pane
+# copies through the terminal, so a remote drag lands on this Mac's clipboard).
 #
-# How the words get here: the Mac's ssh config entry for codebox carries
-#     RemoteForward 8888 127.0.0.1:8888
-# so while herdr's ssh link is up, port 8888 on codebox is this port.
+# How the words get here: this Mac logs in to each box with plain ssh and
+# runs `tail -F` on the queue file. The box never opens anything back to the
+# Mac: codebox's lockdown allows no reverse forward (Network_Plan CB D-008),
+# and Gavin kept it (NP-2 Q4: 3). The first try, a port forward back to the
+# Mac on 8888, was refused by codebox's sshd and is gone.
 #
-# What it accepts: one line, exactly one of the nine speak-key commands in
-# home/.config/herdr/config.toml. It answers "ok" and runs
-#     speak-clipboard <those words>
-# in the background, or answers "refused" and runs nothing. No shell is
-# involved; text is never accepted, only these fixed words.
-# It listens on 127.0.0.1 only, never on the network.
+# What it accepts: a queue line "<epoch seconds> <words>", where the words are
+# exactly one of the nine speak-key commands in home/.config/herdr/config.toml
+# and the line is at most 15 s old (a stalled link must not replay a burst).
+# It runs `speak-clipboard <those words>` in the background, with no shell.
+# Anything else is logged as refused and runs nothing.
 #
-#   speak-relay              run the server (launchd runs it, see --install)
+#   speak-relay              run the fetcher (launchd runs it, see --install)
 #   speak-relay --install    write the LaunchAgent and start it
 #   speak-relay --uninstall  stop it and trash the LaunchAgent
-#   speak-relay --status     is it loaded, is the port answering
+#   speak-relay --status     is it loaded, and is each box connected
 #
-# Log: ~/.local/state/herdr/speak-relay.log, one line per request.
+# Boxes: SPEAK_RELAY_HOSTS (space-separated ssh names), default codebox.lan.
+# Log: ~/.local/state/herdr/speak-relay.log, one line per event.
 # ============================================================================
 use strict;
 use warnings;
-use IO::Socket::INET;
 use POSIX ();
 
-my $home  = $ENV{HOME} or die "speak-relay: HOME is not set\n";
-my $port  = $ENV{SPEAK_RELAY_PORT} || 8888;
-my $speak = $ENV{SPEAK_RELAY_SPEAK} || "$home/.local/bin/speak-clipboard";
-my $log   = $ENV{SPEAK_RELAY_LOG} || "$home/.local/state/herdr/speak-relay.log";
-my $label = 'com.captaincodeau.speak-relay';
-my $plist = "$home/Library/LaunchAgents/$label.plist";
+my $home   = $ENV{HOME} or die "speak-relay: HOME is not set\n";
+my $speak  = $ENV{SPEAK_RELAY_SPEAK} || "$home/.local/bin/speak-clipboard";
+my $state  = $ENV{SPEAK_RELAY_STATE} || "$home/.local/state/herdr";
+my $log    = "$state/speak-relay.log";
+my @hosts  = split ' ', ($ENV{SPEAK_RELAY_HOSTS} || 'codebox.lan');
+my $maxage = 15;
+my $label  = 'com.captaincodeau.speak-relay';
+my $plist  = "$home/Library/LaunchAgents/$label.plist";
+
+# The queue file on the box. speak-clipboard's relay block writes the same path.
+my $queue  = '~/.local/state/herdr/speak-relay.queue';
 
 # The nine speak-key commands, word for word as config.toml runs them.
 my %allowed = map { $_ => 1 } (
@@ -64,13 +71,93 @@ sub shown {
     return "'$s'";
 }
 
-sub uid { return $< }
+# The command that streams one box's queue. SPEAK_RELAY_FETCH replaces it in
+# a test ("%h" becomes the host name); it is run with sh -c.
+sub fetch_argv {
+    my ($host) = @_;
+    if (my $t = $ENV{SPEAK_RELAY_FETCH}) {
+        (my $cmd = $t) =~ s/%h/$host/g;
+        return ('/bin/sh', '-c', $cmd);
+    }
+    return ('ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+            '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2',
+            # No forwards on this login, whatever the config entry asks for.
+            '-o', 'ClearAllForwardings=yes',
+            $host,
+            "mkdir -p ~/.local/state/herdr && touch $queue && exec tail -n0 -F $queue");
+}
+
+sub speak_now {
+    my ($words) = @_;
+    my $pid = fork;
+    return "fork: $!" unless defined $pid;
+    if ($pid == 0) {
+        POSIX::setsid();
+        my $grand = fork;
+        POSIX::_exit(0) if !defined $grand || $grand;
+        open STDIN,  '<', '/dev/null';
+        open STDOUT, '>', '/dev/null';
+        open STDERR, '>', '/dev/null';
+        { no warnings 'exec'; exec { $speak } $speak, split(/ /, $words); }
+        POSIX::_exit(127);
+    }
+    waitpid($pid, 0);
+    return '';
+}
+
+# One line from a box's queue: run it, or say why not.
+sub handle {
+    my ($host, $line) = @_;
+    $line =~ s/\r?\n\z//;
+    my ($when, $words) = $line =~ /^(\d{9,11}) (.+)$/ ? ($1, $2) : (undef, undef);
+    if (!defined $words || !$allowed{$words}) {
+        log_line("$host refused " . shown($line));
+        return;
+    }
+    my $age = time - $when;
+    if ($age > $maxage || $age < -$maxage) {
+        log_line("$host stale '$words' (${age}s old)");
+        return;
+    }
+    my $err = speak_now($words);
+    log_line($err ? "$host failed '$words' ($err)" : "$host ran '$words'");
+}
+
+# Keep one fetch running per box; a dropped link is retried, slower each time
+# up to a minute, and at once again after it has stayed up a while.
+my $fetch_pid = 0;
+
+sub watch_host {
+    my ($host) = @_;
+    my $wait = 5;
+    # A stop ends this box's ssh login too, not just the watcher.
+    $SIG{TERM} = sub { kill 'TERM', $fetch_pid if $fetch_pid; POSIX::_exit(0) };
+    while (1) {
+        my $started = time;
+        my $pid = open(my $in, '-|');
+        if (!defined $pid) { log_line("$host cannot fork: $!"); sleep 30; next }
+        $fetch_pid = $pid if $pid;
+        if ($pid == 0) {
+            open STDERR, '>>', "$state/speak-relay.err";
+            my @argv = fetch_argv($host);
+            { no warnings 'exec'; exec { $argv[0] } @argv; }
+            POSIX::_exit(127);
+        }
+        log_line("$host connecting (pid $pid)");
+        while (my $line = <$in>) { handle($host, $line) }
+        close $in;
+        my $rc = $? >> 8;
+        $wait = 5 if time - $started > 120;
+        log_line("$host link ended (exit $rc); retrying in ${wait}s");
+        sleep $wait;
+        $wait = $wait * 2 > 60 ? 60 : $wait * 2;
+    }
+}
 
 sub install {
     my $self = $0 =~ m{^/} ? $0 : "$home/.local/bin/speak-relay";
     my $path = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$home/.local/bin";
-    my $err  = "$home/.local/state/herdr/speak-relay.err";
-    system('mkdir', '-p', "$home/Library/LaunchAgents", "$home/.local/state/herdr");
+    system('mkdir', '-p', "$home/Library/LaunchAgents", $state);
     open my $fh, '>', $plist or die "speak-relay: cannot write $plist: $!\n";
     print $fh <<"PLIST";
 <?xml version="1.0" encoding="UTF-8"?>
@@ -91,22 +178,22 @@ sub install {
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><true/>
     <key>ThrottleInterval</key><integer>10</integer>
-    <key>StandardErrorPath</key><string>$err</string>
+    <key>StandardErrorPath</key><string>$state/speak-relay.err</string>
 </dict>
 </plist>
 PLIST
     close $fh;
-    system("launchctl bootout gui/" . uid() . "/$label >/dev/null 2>&1");
-    if (system('launchctl', 'bootstrap', 'gui/' . uid(), $plist) != 0) {
+    system("launchctl bootout gui/$</$label >/dev/null 2>&1");
+    if (system('launchctl', 'bootstrap', "gui/$<", $plist) != 0) {
         die "speak-relay: launchctl bootstrap failed; run it by hand to see why:\n"
-          . "  launchctl bootstrap gui/" . uid() . " $plist\n";
+          . "  launchctl bootstrap gui/$< $plist\n";
     }
-    print "speak-relay: installed and started ($plist), port $port\n";
+    print "speak-relay: installed and started ($plist), boxes: @hosts\n";
     exit 0;
 }
 
 sub uninstall {
-    system("launchctl bootout gui/" . uid() . "/$label >/dev/null 2>&1");
+    system("launchctl bootout gui/$</$label >/dev/null 2>&1");
     if (-e $plist) {
         # The Trash shim by its full path: a bare 'rm' on a PATH without
         # ~/.local/bin would be the permanent deleter.
@@ -119,12 +206,17 @@ sub uninstall {
 }
 
 sub status {
-    my $loaded = system("launchctl print gui/" . uid() . "/$label >/dev/null 2>&1") == 0;
-    my $sock = IO::Socket::INET->new(PeerAddr => '127.0.0.1', PeerPort => $port, Proto => 'tcp', Timeout => 2);
+    my $loaded = system("launchctl print gui/$</$label >/dev/null 2>&1") == 0;
     print 'launchd: ', ($loaded ? "loaded ($label)" : 'NOT loaded'), "\n";
-    print "port $port: ", ($sock ? 'answering' : 'NOT answering'), "\n";
-    close $sock if $sock;
-    exit(($loaded && $sock) ? 0 : 1);
+    my %last;
+    if (open my $fh, '<', $log) {
+        while (<$fh>) { $last{$1} = $_ if /^\S+ (\S+) (?:connecting|link ended)/ }
+    }
+    for my $h (@hosts) {
+        my $l = $last{$h} // "no record yet\n";
+        print "$h: last event: $l";
+    }
+    exit($loaded ? 0 : 1);
 }
 
 if (@ARGV) {
@@ -139,57 +231,18 @@ if (@ARGV) {
     die "speak-relay: unknown option '$a' (try --help)\n";
 }
 
-my $srv = IO::Socket::INET->new(
-    LocalAddr => '127.0.0.1', LocalPort => $port, Proto => 'tcp',
-    Listen => 5, ReuseAddr => 1,
-) or die "speak-relay: cannot listen on 127.0.0.1:$port: $!\n";
-log_line("start pid=$$ port=$port");
-
-while (1) {
-    my $c = $srv->accept or next;
-    $c->autoflush(1);
-    my $line = '';
-    eval {
-        local $SIG{ALRM} = sub { die "timeout\n" };
-        alarm 3;
-        my $got = <$c>;
-        alarm 0;
-        $line = defined $got ? $got : '';
-    };
-    alarm 0;
-    $line =~ s/\r?\n\z//;
-
-    unless ($allowed{$line}) {
-        print $c "refused\n";
-        close $c;
-        # An empty line is `speak-relay --status` (or any port probe) connecting.
-        log_line($line eq '' ? 'probe (nothing sent)' : 'refused ' . shown($line));
-        next;
-    }
-
-    # Double fork: the speaker is not this server's child, so nothing piles
-    # up and speak-clipboard keeps normal signal handling for its own children.
+system('mkdir', '-p', $state);
+log_line("start pid=$$ boxes=@hosts");
+my %kids;
+$SIG{TERM} = sub { kill 'TERM', keys %kids; exit 0 };
+for my $h (@hosts) {
     my $pid = fork;
-    if (!defined $pid) {
-        print $c "fork failed\n";
-        close $c;
-        log_line("failed '$line' (fork: $!)");
-        next;
-    }
-    if ($pid == 0) {
-        close $srv;
-        close $c;
-        POSIX::setsid();
-        my $grand = fork;
-        POSIX::_exit(0) if !defined $grand || $grand;
-        open STDIN,  '<', '/dev/null';
-        open STDOUT, '>', '/dev/null';
-        open STDERR, '>', '/dev/null';
-        { no warnings 'exec'; exec { $speak } $speak, split(/ /, $line); }
-        POSIX::_exit(127);
-    }
-    waitpid($pid, 0);
-    print $c "ok\n";
-    close $c;
-    log_line("ran '$line'");
+    die "speak-relay: cannot fork for $h: $!\n" unless defined $pid;
+    if ($pid == 0) { watch_host($h); POSIX::_exit(0) }
+    $kids{$pid} = $h;
 }
+# If a watcher dies, launchd restarts the whole job.
+my $gone = wait;
+log_line("watcher for " . ($kids{$gone} // '?') . " stopped; exiting for launchd to restart");
+kill 'TERM', keys %kids;
+exit 1;

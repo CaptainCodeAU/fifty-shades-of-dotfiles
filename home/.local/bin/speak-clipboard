@@ -448,14 +448,15 @@
 # ============================================================================
 set -uo pipefail
 
-# Relay to the Mac (Gavin, dotfiles-main Q22 (v2): 1, port 8888, 2026-10-16).
-# herdr runs a key's command on its server, so in a `herdr --remote` tab the
-# speak keys run here on the remote box (codebox, Linux): no Mac voice, nobody
-# listening. On a box that is not a Mac, the nine speak-key commands (exactly
-# as home/.config/herdr/config.toml sends them) are passed, as words only, to
-# speak-relay on the Mac through port 8888; herdr's ssh link carries the port
-# there (RemoteForward in the Mac's ssh config for codebox). The Mac speaks its
-# own clipboard. Anything else runs here as before. Log: one mode=relay line.
+# Relay to the Mac (Gavin, dotfiles-main Q22 (v2): 1, 2026-10-16; the
+# Mac-collects design from Q26 / NP-2 Q4: 3). herdr runs a key's command on its
+# server, so in a `herdr --remote` tab the speak keys run here on the remote
+# box (codebox, Linux): no Mac voice, nobody listening. On a box that is not a
+# Mac, the nine speak-key commands (exactly as home/.config/herdr/config.toml
+# sends them) are written, as words only, to a queue file here. speak-relay on
+# the Mac reads that file over its own ssh login and speaks the Mac's
+# clipboard; this box opens nothing to the Mac (codebox's lockdown, CB D-008).
+# Anything else runs here as before. Log: one mode=relay line.
 # bash's own OSTYPE, not `uname`: the selftest runs with a PATH of stand-ins
 # only, where a missing uname made every Mac look remote (23 checks failed).
 # _SPEAK_CLIPBOARD_OS stands in for OSTYPE in a test.
@@ -463,20 +464,20 @@ case "${_SPEAK_CLIPBOARD_OS:-$OSTYPE}" in darwin*) _relay_mac=1 ;; *) _relay_mac
 if [ "$_relay_mac" = 0 ]; then
     case "$*" in
         --toggle|--skip|--stop|"--set rate -20"|"--set rate +20"|"--set volume -10"|"--set volume +10"|"--notify --settings"|"--reset all")
-            _relay_port="${SPEAK_RELAY_PORT:-8888}"
-            _relay_reply=""
-            if exec 3<>"/dev/tcp/127.0.0.1/$_relay_port"; then
-                printf '%s\n' "$*" >&3
-                IFS= read -r -t 5 _relay_reply <&3 || _relay_reply="no answer within 5 s"
-                exec 3>&-
-            else
-                _relay_reply="nothing on port $_relay_port: the Mac's relay is reached only while herdr --remote is attached with the RemoteForward"
-            fi 2>/dev/null
+            # One line per press: "<epoch seconds> <words>". The Mac drops a
+            # line older than 15 s, so a stalled link never replays a burst.
+            # The file grows by about 25 bytes a press; a refresh of the box
+            # from its golden copy starts it again.
             mkdir -p "$HOME/.local/state/herdr" 2>/dev/null
-            printf '%s mode=relay args="%s" reply="%s"\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" "$_relay_reply" \
+            if printf '%s %s\n' "$(date +%s)" "$*" >>"$HOME/.local/state/herdr/speak-relay.queue" 2>/dev/null; then
+                _relay_result="queued"
+            else
+                _relay_result="could not write $HOME/.local/state/herdr/speak-relay.queue"
+            fi
+            printf '%s mode=relay args="%s" result="%s"\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" "$_relay_result" \
                 >>"$HOME/.local/state/herdr/speak-clipboard.log" 2>/dev/null
-            [ "$_relay_reply" = ok ] && exit 0
-            echo "speak-clipboard: relay to the Mac failed: $_relay_reply" >&2
+            [ "$_relay_result" = queued ] && exit 0
+            echo "speak-clipboard: relay to the Mac failed: $_relay_result" >&2
             exit 1 ;;
     esac
 fi

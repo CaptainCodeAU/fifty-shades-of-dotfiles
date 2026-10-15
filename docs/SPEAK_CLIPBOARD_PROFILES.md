@@ -624,7 +624,7 @@ and the restart kills its own ffplay before starting another.
 Tests: 270 in all. Each fix was taken out of a copy in turn, and each copy
 fails its own new checks.
 
-## Speaking from a remote herdr tab (Gavin, 16 Oct, Q22 (v2): 1, port 8888)
+## Speaking from a remote herdr tab (Gavin, 16 Oct: Q22 (v2): 1, then Q26 / NP-2 Q4: 3)
 
 A herdr key runs its command on the herdr server. In a `herdr --remote` tab the
 server is codebox (Linux), so the speak keys ran speak-clipboard there, with no
@@ -632,33 +632,49 @@ Mac voice and nobody listening. herdr's own code shows this
 (`src/app/custom_commands.rs`: every key command kind is started by the server),
 and a remote press left nothing in the Mac's speak log while local presses did.
 
-Now, on a box that is not a Mac, the nine speak-key commands are relayed:
+Now, on a box that is not a Mac, the nine speak-key commands are relayed, and
+the Mac collects them:
 
-- speak-clipboard sends the key's words, such as `--toggle` or
-  `--set rate +20`, to 127.0.0.1 port 8888 and exits. Anything else runs on
-  the box as before. Each relay adds a `mode=relay` line to the box's log.
-- `ssh` carries that port to the Mac: the Mac's ssh config entry for codebox
-  holds `RemoteForward 8888 127.0.0.1:8888`, so the port exists only while
-  `herdr --remote` is attached.
+- speak-clipboard writes one line, `<epoch seconds> <words>` (such as
+  `--toggle` or `--set rate +20`), to `~/.local/state/herdr/speak-relay.queue`
+  on the box and exits 0. Anything else runs on the box as before. Each press
+  adds a `mode=relay result="queued"` line to the box's speak log.
 - `speak-relay` on the Mac (`home/.local/bin/speak-relay`, a LaunchAgent,
-  `com.captaincodeau.speak-relay`) listens on 127.0.0.1:8888 only. It accepts
-  exactly the nine commands in `home/.config/herdr/config.toml`, word for word,
-  runs `speak-clipboard` with them, and refuses anything else. No text is
-  accepted and no shell is used. Log: `~/.local/state/herdr/speak-relay.log`.
+  `com.captaincodeau.speak-relay`) keeps one plain ssh login to each box
+  (`SPEAK_RELAY_HOSTS`, default `codebox.lan`) running `tail -F` on that file,
+  with every port forward switched off for that login. A dropped link is
+  retried, every 5 s at first and at most every minute.
+- It runs `speak-clipboard` with a line's words only when they are exactly one
+  of the nine commands in `home/.config/herdr/config.toml` and the line is at
+  most 15 s old, so a stalled link never replays a burst. No shell is used.
+  Everything else is logged as refused or stale. Log:
+  `~/.local/state/herdr/speak-relay.log`.
 - The Mac speaks its own clipboard. That holds the remote copy because of
   Q21: Claude in a herdr pane on codebox copies through the terminal
   (`docs/CLAUDE_LAUNCH_ENV.md`).
+
+Why the Mac collects: the first build sent each press to port 8888 on the Mac
+through a reverse ssh forward. codebox's lockdown refuses that by design
+(`AllowTcpForwarding local`, Network_Plan CB D-008: codebox reaches nothing on
+the LAN, the Mac included), and Gavin kept the lockdown (NP-2 Q4: 3). With the
+Mac collecting, codebox opens nothing to the Mac, and the Mac listens on no
+port.
 
 The box is told apart by bash's `OSTYPE`, not `uname`: the selftest runs with
 a PATH of stand-ins only, and a missing `uname` made the Mac look remote
 (23 of 279 checks failed until it changed).
 
-Tested on the Mac with a stand-in speaker on port 18888: all nine commands
-relayed and ran; `--help` was not relayed; with no server the press exits 1
-and says why; on a Mac a key command is not relayed (a Linux press in the
-same run was); a line with extra words was refused and ran nothing. The
-selftest passes 279 of 279. Live: the LaunchAgent answers on 8888 and ran
-`--notify --settings`.
+Tested on the Mac with a local stand-in for the ssh login and for the speaker:
+all nine commands queued and ran; `--help` and a Mac press were not queued;
+a line with extra words, a line 100 s old and a line of junk were refused or
+dropped; after the link was cut it reconnected in 5 s and the next press ran;
+a stop left no `tail` behind. The selftest passes 279 of 279. Live: the
+LaunchAgent logged in to codebox, and a line queued there by hand at 3:37 AM
+ran on the Mac.
 
-`speak-relay --status` shows whether it is loaded and answering;
-`--install` and `--uninstall` start it or stop it and trash the LaunchAgent.
+The queue file grows by about 25 bytes a press; a refresh of codebox from its
+golden copy starts it again.
+
+`speak-relay --status` shows whether it is loaded and each box's last link
+event; `--install` and `--uninstall` start it or stop it and trash the
+LaunchAgent.
