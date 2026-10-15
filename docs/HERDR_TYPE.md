@@ -123,7 +123,9 @@ Errors: `{"error":{"code","message"}}`.
 
 ### 3.2 Claude Code transcript (state and verification)
 
-Path: `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<cwd slug>/<session id>.jsonl`; the
+Path: `<home>/projects/<cwd slug>/<session id>.jsonl`, where `<home>` is searched in order:
+the caller's `CLAUDE_CONFIG_DIR`, `~/.claude`, then every other `~/.claude*` folder (a target
+started by `makeitso` writes under `~/.claude_v2`, #1480, 15 Oct 2026); the
 session id is `pane.get` → `agent_session.value`. Records used (LIVE):
 
 | Record                                                                              | Meaning                                                                                         |

@@ -211,7 +211,10 @@ def transcript_path(pane):
     sess = (pane.get("agent_session") or {}).get("value")
     if not sess or (pane.get("agent_session") or {}).get("kind") != "id":
         return None
+    # The target may live in another Claude home than the caller (makeitso's ~/.claude_v2, #1480),
+    # so every ~/.claude* home is searched after these two; a session id names one session only.
     roots = [os.environ.get("CLAUDE_CONFIG_DIR") or "", os.path.expanduser("~/.claude")]
+    roots += sorted(d for d in glob.glob(os.path.expanduser("~/.claude?*")) if os.path.isdir(d) and d not in roots)
     for root in filter(None, roots):
         hits = glob.glob(os.path.join(root, "projects", "*", f"{sess}.jsonl"))
         if hits:
@@ -1091,6 +1094,31 @@ def selftest():
         check("Q9-g wrong place is not a pass (plan text on the answer route)", find_landing(recs, T0, "use goodbye", "answer")[0], 6)
         check("Q9-g a channel turn is not a typed prompt", find_landing(recs, T0, "channel words", "prompt")[0], 6)
         check("Q9-g nothing new", find_landing(recs, "2099-01-01T00:00:00", "my prompt", "prompt")[0], 5)
+
+        # ---- #1480: a session in another Claude home (makeitso's ~/.claude_v2) has its record found.
+        # A temp HOME holds one record per home; CLAUDE_CONFIG_DIR is unset, as in an engage session.
+        import tempfile
+        saved = {k: os.environ.get(k) for k in ("HOME", "CLAUDE_CONFIG_DIR")}
+        with tempfile.TemporaryDirectory() as h:
+            os.environ["HOME"] = h
+            os.environ.pop("CLAUDE_CONFIG_DIR", None)
+            def rec(home, sid):
+                d = os.path.join(h, home, "projects", "-Users-x-proj")
+                os.makedirs(d, exist_ok=True)
+                open(os.path.join(d, f"{sid}.jsonl"), "w").close()
+                return os.path.join(d, f"{sid}.jsonl")
+            v2 = rec(".claude_v2", "aaaaaaaa-0000-4000-8000-000000000001")
+            old = rec(".claude", "bbbbbbbb-0000-4000-8000-000000000002")
+            pane = lambda sid: {"agent_session": {"kind": "id", "value": sid}}
+            check("#1480 a makeitso session's record, in ~/.claude_v2, is found",
+                  transcript_path(pane("aaaaaaaa-0000-4000-8000-000000000001")), v2)
+            check("#1480 a record in ~/.claude is still found", transcript_path(pane("bbbbbbbb-0000-4000-8000-000000000002")), old)
+            check("#1480 a session with no record anywhere: none", transcript_path(pane("cccccccc-0000-4000-8000-000000000003")), None)
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
         # ---- Q9-d: the live test starts, checks and closes its own session
         if os.path.exists(LIVETEST):
