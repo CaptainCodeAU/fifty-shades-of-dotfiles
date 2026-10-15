@@ -140,32 +140,40 @@ __cl_checkin_reminder() {
 
 # L5, private SSH agent: a WRAPPER, so it goes last and takes the command to run.
 # Isolated ephemeral SSH agent per Claude Code session.
-# Spins up a dedicated ssh-agent in a subshell so the GitHub key is never
-# loaded into macOS's system-wide launchd agent. The agent (and key) die
-# when Claude Code exits; a 12h timeout is a safety net for SIGKILL.
-# No key file: the command runs with no agent.
+# A dedicated ssh-agent, so the GitHub key is never loaded into macOS's system-wide launchd
+# agent. The agent runs the session as its OWN CHILD (`ssh-agent ... zsh -fc ...`) and exits
+# when that child exits, however it ends: /exit, a crash, a closed pane, SIGKILL. The old form
+# (`eval "$(ssh-agent -s)"` in a subshell, stopped from an exit trap) left the agent running
+# whenever the session was killed: 202 orphans up to 16 days old on 16 Oct 2026 (#1438, #1534,
+# engage-maker Q19: 1; the same way makeitso's L5 does it). The child is a fresh zsh, so it
+# reloads this file for its functions, and the launch settings (__cl_env) cross as arguments
+# before a lone "--". -t 43200 still drops the key after 12 hours. No key file, or no
+# ssh-agent: the command runs with no agent. Test: ~/CODE/CaptainCodeAU/engage/tests/launch-agent.test.zsh
 # Its one local is named __cl_key, not key: a local is still in scope while claude runs, and
 # it would hide an inherited exported variable of the same name from claude.
+# ssh-add, in the child:
+# --apple-use-keychain reads the passphrase from the login keychain instead of
+# prompting. It is REQUIRED here and the ssh_config UseKeychain setting does NOT
+# cover it: `UseKeychain yes` lives in a `Host git-cc` block, and `ssh-add` on a
+# FILE PATH has no host context, so no Host block ever applies to it. Measured
+# 2026-09-18 in a live pane: plain `ssh-add` prompted for the passphrase even
+# with the keychain populated and the config in place, while the flagged form
+# returned rc=0 silently and loaded the key. Two earlier "verifications" missed
+# this because they tested `ssh -G git-cc` (connections, not ssh-add) and
+# `--apple-load-keychain` (a different command).
+# The fallback keeps this portable: the flag is macOS-only, so a non-macOS box
+# fails the first form and runs the original.
+typeset -g __cl_launch_file=${${(%):-%x}:A}
 __cl_ssh_agent() {
   local __cl_key="$HOME/.ssh/captaincodeau"
-  if [[ -f "$__cl_key" ]]; then
-    (
-      eval "$(ssh-agent -s -t 43200)" >/dev/null
-      trap 'ssh-agent -k >/dev/null 2>&1' EXIT INT TERM HUP
-      # --apple-use-keychain reads the passphrase from the login keychain instead of
-      # prompting. It is REQUIRED here and the ssh_config UseKeychain setting does NOT
-      # cover it: `UseKeychain yes` lives in a `Host git-cc` block, and `ssh-add` on a
-      # FILE PATH has no host context, so no Host block ever applies to it. Measured
-      # 2026-09-18 in a live pane: plain `ssh-add` prompted for the passphrase even
-      # with the keychain populated and the config in place, while the flagged form
-      # returned rc=0 silently and loaded the key. Two earlier "verifications" missed
-      # this because they tested `ssh -G git-cc` (connections, not ssh-add) and
-      # `--apple-load-keychain` (a different command).
-      # The fallback keeps this portable: the flag is macOS-only, so a non-macOS box
-      # fails the first form and runs the original.
-      ssh-add --apple-use-keychain "$__cl_key" 2>/dev/null || ssh-add "$__cl_key"
-      "$@"
-    )
+  if [[ -f "$__cl_key" ]] && command -v ssh-agent >/dev/null 2>&1; then
+    ssh-agent -t 43200 zsh -fc '
+      __cl_k=$1 __cl_f=$2; shift 2
+      source "$__cl_f"
+      typeset -a __cl_env=(); while (( $# )) && [[ $1 != -- ]]; do __cl_env+=("$1"); shift; done; shift
+      ssh-add --apple-use-keychain "$__cl_k" 2>/dev/null || ssh-add "$__cl_k"
+      unset __cl_k __cl_f
+      "$@"' __cl_ssh_agent "$__cl_key" "$__cl_launch_file" "${__cl_env[@]}" -- "$@"
   else
     "$@"
   fi
