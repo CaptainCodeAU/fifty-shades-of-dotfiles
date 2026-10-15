@@ -59,7 +59,7 @@ setopt RM_STAR_WAIT         # 10-second wait before confirming wildcard deletion
 # --- Python ---
 export PIP_REQUIRE_VIRTUALENV=true
 export PIP_DISABLE_PIP_VERSION_CHECK=1
-export PROMPT_EOL_MARK="" # Disable Powerlevel10k instant prompt
+export PROMPT_EOL_MARK="" # No % mark after output that does not end in a newline
 : ${PYTHON_MIN_VERSION:="3.8"}
 : ${PYTHON_MAX_VERSION:="3.14"}
 : ${PYTHON_DEFAULT_VERSION:="3.13"} # Using major.minor for consistency
@@ -138,8 +138,10 @@ esac
 # --- GitHub API token (read-only) ---
 # Stored in macOS Keychain as "github-api-readonly" (fine-grained, read-only:
 # issues / PRs / actions / checks / commit-statuses; NO source/contents). It is
-# NOT exported globally - it is read on demand and exposed as $GH_TOKEN only
-# inside __claude_launch() (Claude sessions), so it never sits in every shell.
+# never exported, here or to a Claude session: the launch file
+# (~/.zsh_claude_launch, L2) reads it only to fill a GitHub status cache. It was
+# exported to Claude sessions as $GH_TOKEN until 2026-09-18; the reason it was
+# removed is written beside __cl_run_with_env in that file.
 # To (re)store the token without leaking it to shell history:
 #   read -rs GH_PAT && security add-generic-password -U -a "$USER" -s github-api-readonly -w "$GH_PAT" && unset GH_PAT
 
@@ -240,7 +242,7 @@ fi
 if [[ "$IS_MAC" == "true" ]]; then
 	export PNPM_HOME="$HOME/Library/pnpm"
     path+=(
-		"$PNPM_HOME/bin" # pnpm 11 global bin
+		"$PNPM_HOME/bin" # pnpm global bin
 		"$HOME/.lmstudio/bin" # LM Studio CLI (lms)
     )
 fi
@@ -249,7 +251,7 @@ fi
 if [[ "$IS_LINUX" == "true" || "$IS_WSL" == "true" ]]; then
 	export PNPM_HOME="$HOME/.local/share/pnpm"
     path+=(
-		"$PNPM_HOME/bin" # pnpm 11 global bin
+		"$PNPM_HOME/bin" # pnpm global bin
     )
 fi
 
@@ -493,8 +495,8 @@ export NVM_DIR="$([ -z "${XDG_CONFIG_HOME-}" ] && printf %s "${HOME}/.nvm" || pr
 # (GHSA-3c52-35h2-gfmm, fixed in nvm 0.40.5). Pin the official HTTPS mirrors so a
 # stray or planted NVM_NODEJS_ORG_MIRROR can't redirect downloads. To use a custom
 # mirror (e.g. a corporate proxy), set NVM_ALLOW_CUSTOM_MIRROR=1 in
-# ~/.zshrc.private.EARLY (section 3) -- NOT ~/.zshrc.private, which is sourced ~900 lines
-# below this `if` and so could never have switched it off. That instruction stood here
+# ~/.zshrc.private.EARLY (section 3) -- NOT ~/.zshrc.private, which is sourced near the
+# end of this file, long after this `if`, and so could never have switched it off. That instruction stood here
 # wrong for months: a documented escape hatch on a SECURITY control that silently did
 # nothing, which is worse than having no escape hatch at all.
 if [[ -z "$NVM_ALLOW_CUSTOM_MIRROR" ]]; then
@@ -572,7 +574,9 @@ function y() {
     if cwd="$(command cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
         builtin cd -- "$cwd"
     fi
-    rm -f -- "$tmp"
+    # The temp file is left where mktemp put it, under $TMPDIR, which the OS empties.
+    # `rm` here is the Trash wrapper, so removing it put one file in the Trash per use
+    # (Gavin, dotfiles-main-2 Q4: 1, 2026-10-16; safe-rm's header says the same).
 }
 
 # --- Performance Profiling ---
@@ -1086,7 +1090,7 @@ sudo() {
 		pnpm "${@:2}"
 	else
 		# --- sudo rm / sudo rmdir: route to YOUR Trash, not root's ---------------
-		# `sudo rm -rf x` is the one deletion the rm() wrapper above can never see:
+		# `sudo rm -rf x` is the one deletion the rm() wrapper below can never see:
 		# sudo execs the real /bin/rm, so the shell function is not in the picture.
 		#
 		# WHY WE RE-RUN IT AS THE INVOKING USER rather than `sudo safe-rm`:
@@ -1099,7 +1103,8 @@ sudo() {
 		#
 		# THE COMMAND IS FOUND BY SCANNING PAST SUDO'S OWN OPTIONS, not by reading
 		# "$1". A naive `[[ "$1" == rm ]]` is defeated by `sudo -u root rm -rf x`
-		# -- the same bug class the `pnpm link --global` guard above had to fix.
+		# -- the same bug class the old `pnpm link --global` guard had to fix (that
+		# guard was removed 2026-10-06: pnpm 12 refuses the flag itself).
 		#
 		# DELIBERATELY NOT CAUGHT (these are the "I really mean it" doors):
 		#   sudo /bin/rm ...        absolute path, documented escape hatch
@@ -2359,7 +2364,7 @@ py310() {
 
 # --- Toolchain-takeover consent opt-out -------------------------------------
 # install.sh's takeover gate (_gate_toolchain_takeover) writes these into
-# ~/.zshrc.private.early (machine-local, untracked, sourced above at line 166
+# ~/.zshrc.private.early (machine-local, untracked, sourced in section 3 above
 # -- BEFORE every hijack this unsets is even defined) when the operator
 # DECLINES one of the two big changes. Read here, never set here. See
 # docs/TOOLCHAIN_TAKEOVER_CONSENT.md. pnpm() (the sandbox store-lock fix,
