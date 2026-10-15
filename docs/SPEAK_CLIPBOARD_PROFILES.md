@@ -717,3 +717,11 @@ is the cause behind piece 2, still open on 16 Oct.
   one-off launchd job: with that agent rc 0; with no agent rc 255
   ("Permission denied (publickey)"). After a reboot that agent starts empty,
   so the relay keeps retrying, once a minute, until the key is loaded again.
+
+**The fix for a Mac reboot (Gavin, Q29: 1):** a key used for nothing else,
+`~/.ssh/codebox-speak-relay` (ed25519, no passphrase, so no agent needed).
+speak-relay offers it first when the file exists. On codebox it is pinned in
+`authorized_keys` with `restrict` and a forced command that only runs the
+queue's `tail`, so the key can do nothing else there. Until codebox has that
+line, the usual key still logs in through the agent (checked with a one-off
+launchd job: rc 0 with the agent; the new key alone rc 255, as expected).

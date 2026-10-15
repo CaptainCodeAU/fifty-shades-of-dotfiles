@@ -79,11 +79,19 @@ sub fetch_argv {
         (my $cmd = $t) =~ s/%h/$host/g;
         return ('/bin/sh', '-c', $cmd);
     }
+    # The queue-only key (Q29: 1), offered first when it exists. It has no
+    # passphrase, so it works after a Mac reboot with an empty ssh agent; the
+    # box's authorized_keys pins it to the same tail command as below, with
+    # `restrict`, so it can do nothing else. Until the box knows it, the
+    # entry's usual key (through the agent) still logs in.
+    my ($short) = $host =~ /^([^.]+)/;
+    my $key = $ENV{SPEAK_RELAY_KEY} || "$home/.ssh/$short-speak-relay";
+    my @key = -r $key ? ('-i', $key) : ();
     return ('ssh', '-T', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
             '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=2',
             # No forwards on this login, whatever the config entry asks for.
             '-o', 'ClearAllForwardings=yes',
-            $host,
+            @key, $host,
             "mkdir -p ~/.local/state/herdr && touch $queue && exec tail -n0 -F $queue");
 }
 
