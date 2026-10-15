@@ -51,6 +51,12 @@ background-blur = true
 window-width = 290
 window-height = 88
 
+# iTerm2: every new window and tab starts in ~/CODE/CaptainCodeAU ("Custom
+# Directory: Yes"), not in the folder of the tab it came from.
+working-directory = ~/CODE/CaptainCodeAU
+window-inherit-working-directory = false
+tab-inherit-working-directory = false
+
 # --- Keyboard ----------------------------------------------------------------
 # Option acts as Alt, on both sides. In iTerm2 only some profiles did this, and
 # where Option typed a character instead, herdr's ctrl+alt keys never arrived
