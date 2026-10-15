@@ -468,14 +468,14 @@ make the same way.
 (Gavin, Q7: 2, "I'm not going to remember it and I don't want cognitive
 load"). It belongs to speak-clipboard work, not to the reply style.
 
-| Word           | How long        | Made from                         | Where the speak key uses it now                                                             |
-| -------------- | --------------- | --------------------------------- | ------------------------------------------------------------------------------------------- |
-| `{{{tick}}}`   | About 0.1 s.    | A comma.                          | Wherever the text has one.                                                                  |
-| `{{{stop}}}`   | About 0.25 s.   | A full stop or a middle dot.      | Wherever the text has one.                                                                  |
-| `{{{breath}}}` | About 0.35 s.   | A full stop plus a short silence. | Before and after code blocks, and before section lines. |
-| `{{{beat}}}`   | About 0.5 s (not measured). | A full stop plus a longer silence. | Before each list item, and after a bold label.                                                                                |
-| `{{{rest}}}`   | About 0.75 s (not measured). | A full stop plus a long silence. | After a list of two or more items. |
-| `{{{hold}}}`   | About 1 second. | Not made yet. | Nowhere yet.                                                                                |
+| Word           | How long                     | Made from                          | Where the speak key uses it now                         |
+| -------------- | ---------------------------- | ---------------------------------- | ------------------------------------------------------- |
+| `{{{tick}}}`   | About 0.1 s.                 | A comma.                           | Wherever the text has one.                              |
+| `{{{stop}}}`   | About 0.25 s.                | A full stop or a middle dot.       | Wherever the text has one.                              |
+| `{{{breath}}}` | About 0.35 s.                | A full stop plus a short silence.  | Before and after code blocks, and before section lines. |
+| `{{{beat}}}`   | About 0.5 s (not measured).  | A full stop plus a longer silence. | Before each list item, and after a bold label.          |
+| `{{{rest}}}`   | About 0.75 s (not measured). | A full stop plus a long silence.   | After a list of two or more items.                      |
+| `{{{hold}}}`   | About 1 second.              | Not made yet.                      | Nowhere yet.                                            |
 
 Measured ranges: tick 0.03-0.09 s, stop 0.22-0.36 s, breath 0.28-0.42 s.
 
@@ -678,3 +678,42 @@ golden copy starts it again.
 `speak-relay --status` shows whether it is loaded and each box's last link
 event; `--install` and `--uninstall` start it or stop it and trash the
 LaunchAgent.
+
+### What else a remote tab needs (16 Oct)
+
+Three pieces have to line up, and each failed alone that night:
+
+1. **The key must reach the far box.** `herdr --remote` uses the Mac's own
+   keys by default, and the speak keys then did nothing at all: no line in
+   codebox's speak log. `--remote-keybindings server` fixed it at once (Gavin's
+   test, 3:44 AM: the Mac's relay log shows `codebox.lan ran '--toggle'`).
+   `home/.zshrc` now exports `HERDR_REMOTE_KEYBINDINGS=server`, so no flag is
+   needed. Background: `docs/HERDR.md`, "Two machines: the keymap drifts too".
+2. **The copy must land on the Mac.** Claude on codebox copies through the
+   terminal only when it believes it is over SSH; codebox's `claude()` sets
+   `SSH_TTY` inside a herdr pane (Q21, `docs/CLAUDE_LAUNCH_ENV.md`). A Claude
+   started before that change still copies to codebox until restarted.
+3. **The press must reach the Mac.** The queue file and `speak-relay`, above.
+
+Upstream: herdr issue #4833 (a remote copy lands on the far box's clipboard)
+is the cause behind piece 2, still open on 16 Oct.
+
+### After a restart (checked 16 Oct, 3:48 AM)
+
+- **codebox reboots:** nothing on codebox has to be running for the relay;
+  the queue file stays. The Mac's ssh login drops and is retried every 5 s,
+  then at most every minute, so it comes back by itself. Proven by a real
+  reboot (`qm reboot 205`, about 3:50 AM): the link ended at 3:49, three
+  retries were refused while codebox started, and it reconnected at 3:50
+  and stayed up.
+- **codebox is refreshed from its golden copy** (Network_Plan
+  `codebox-refresh.sh`): a plain refresh rolls back to the golden's dotfiles,
+  which predate the relay and the Q21 `SSH_TTY` change. Only `update` /
+  `regolden-current` pulls the dotfiles. Until a new golden is taken, pull
+  `~/fifty-shades-of-dotfiles` on codebox after each refresh.
+- **The Mac reboots:** the LaunchAgent starts at login, but its ssh login to
+  codebox works only while the codebox key (`~/.ssh/codebox-admin`, which has
+  a passphrase) is in the ssh agent launchd hands to jobs. Measured with a
+  one-off launchd job: with that agent rc 0; with no agent rc 255
+  ("Permission denied (publickey)"). After a reboot that agent starts empty,
+  so the relay keeps retrying, once a minute, until the key is loaded again.
