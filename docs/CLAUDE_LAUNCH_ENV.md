@@ -43,6 +43,17 @@ renderer (`1`; no `PJ_RENDERER` there), auto-background and the 600 s check-in. 
 hooks, pj or engage. Tested with a stand-in `claude` that prints its environment: all six
 arrive and `NVD_API_KEY` stays unset; the control (no `DOTFILES_PLAIN_CLAUDE`) gets none.
 
+Since 2026-10-16 (dotfiles-main Q21), a `claude` started inside a herdr pane on such a box
+also gets `SSH_TTY` (the pane's tty), unless one is already set. Claude Code copies with
+the box's own clipboard tool unless it believes it is over SSH (`SSH_CONNECTION`,
+`SSH_CLIENT` or `SSH_TTY`), and a herdr pane carries none of them, so a drag-copy made
+through `herdr --remote` landed on codebox's clipboard instead of the Mac's (herdr issue
+# 4833). With `SSH_TTY` set it copies through the terminal (OSC 52), which herdr passes to
+the attached client. Gavin tested it by hand: paste on the Mac showed Claude's words.
+Outside a herdr pane nothing is added, because Claude counts even an empty `SSH_TTY` as
+set. Stand-in test, four arms: herdr pane with a tty gets it; no herdr pane, none; an
+existing `SSH_TTY` is kept; no tty, none.
+
 Blind spot: only a `claude` typed in zsh reaches the function. A launch that skips the shell
 starts bare. Claude's own settings file (`env`) would cover every start path, but whether it
 can empty `DISABLE_TELEMETRY` early enough for feature flags is not measured.

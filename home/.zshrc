@@ -1044,12 +1044,26 @@ fi
 # non-blocking stdout guard for a stalled `herdr --remote` link; the classic renderer;
 # auto-background and its 10-minute check-in. Why each: docs/CLAUDE_LAUNCH_ENV.md.
 # Only a `claude` typed in zsh reaches it; a launch that skips the shell starts bare.
+#
+# Inside a herdr pane it also gets SSH_TTY (Gavin, dotfiles-main Q21, 2026-10-16). Claude
+# Code copies a selection with the box's own clipboard tool unless it thinks it is over
+# SSH, and a herdr pane has no SSH signs, so a copy made from `herdr --remote` landed on
+# codebox, not on the Mac in front of Gavin (herdr issue #4833). With SSH_TTY set it sends
+# the copy through the terminal (OSC 52), which herdr passes to the attached client.
+# Tested by hand that night: `SSH_TTY=$(tty) claude` in a remote pane, drag, paste on the
+# Mac showed Claude's words. An SSH_TTY already set (a real ssh login) is kept.
 if [[ -n ${DOTFILES_PLAIN_CLAUDE-} ]]; then
     claude() {
+        # Outside a herdr pane nothing is added: Claude counts even an empty SSH_TTY as set.
+        local -a over_ssh=()
+        local pane_tty
+        if [[ -n ${HERDR_PANE_ID-} && -z ${SSH_TTY-} ]] && pane_tty=$(tty 2>/dev/null); then
+            over_ssh=(SSH_TTY=$pane_tty)
+        fi
         DISABLE_TELEMETRY= DO_NOT_TRACK= CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 \
         CLAUDE_CODE_NONBLOCKING_STDOUT=1 CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
         CLAUDE_AUTO_BACKGROUND_TASKS=1 CLAUDE_CODE_WORKER_CHECKIN_SCHEDULE=600 \
-            command claude "$@"
+            command env "${over_ssh[@]}" claude "$@"
     }
 fi
 
