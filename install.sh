@@ -1844,6 +1844,26 @@ _check_rm_reach() {
     return 0
 }
 
+# uv can be installed and still unable to run: inside the Claude Bash sandbox its cache
+# under ~/.cache/uv is denied, and every uv command exits 2 before doing anything. The
+# check used to read that as "Python 3.13 not installed" and fail deploy parity with no
+# reason given (Gavin, dotfiles-main-2 Q3: 1, 2026-10-16). Asks uv once per run, never in
+# a subshell, so the answer is kept: returns 0 when uv runs, else 1 with uv's own first
+# error lines in _UV_PROBLEM. Callers check that uv is installed first.
+_UV_PROBLEM_ASKED=false
+_UV_PROBLEM=""
+_uv_check_runs() {
+    if [[ "$_UV_PROBLEM_ASKED" != true ]]; then
+        _UV_PROBLEM_ASKED=true
+        local err
+        if ! err=$(uv python list --only-installed 2>&1 >/dev/null); then
+            _UV_PROBLEM=$(printf '%s\n' "$err" | sed -n '1,2s/^[[:space:]]*//p' | paste -sd ' ' -)
+            [[ -n "$_UV_PROBLEM" ]] || _UV_PROBLEM="uv exited non-zero and printed nothing"
+        fi
+    fi
+    [[ -z "$_UV_PROBLEM" ]]
+}
+
 _check_deploy_parity() {
     local checker="$REPO_DIR/home/.local/bin/deploy-parity-check"
     if [[ ! -x "$checker" ]]; then
@@ -1853,6 +1873,12 @@ _check_deploy_parity() {
     if ! command -v uv &>/dev/null; then
         echo -e "  ${YELLOW}~${RESET} deploy parity — uv not installed yet, skipped"
         return 0
+    fi
+    # The checker runs under uv: when uv cannot run, say that, rather than fail on uv's
+    # error with no word about parity.
+    if ! _uv_check_runs; then
+        echo -e "  ${RED}✗${RESET} deploy parity — not checked: uv could not run (${_UV_PROBLEM})"
+        return 1
     fi
     # The checker is told the same skips stow was told (DOTFILES_STOW_SKIP, one
     # basename per entry, colon-separated), so a skipped tree is not a parity gap.
@@ -2164,6 +2190,10 @@ check_prerequisites() {
         echo -e "  ${DIM}-${RESET} Python 3.13 via uv — skipped (--skip-uv)"
     elif ! command -v uv &>/dev/null; then
         echo -e "  ${YELLOW}~${RESET} Python 3.13 via uv — uv is not installed yet (installed right after uv, in the same run)"
+    elif ! _uv_check_runs; then
+        # Not known is not OK, so it still counts; but it is never called "not installed".
+        echo -e "  ${RED}✗${RESET} Python 3.13 — not checked: uv could not run (${_UV_PROBLEM})"
+        missing=$((missing+1))
     elif command -v uv &>/dev/null; then
         local uv_python
         uv_python=$(uv python list 2>/dev/null | grep "cpython-3.13" | grep -v "download available" | awk '{print $1}' | head -1 || true)
@@ -2261,7 +2291,11 @@ check_prerequisites() {
     local stock="$REPO_DIR/home/.local/bin/toolchain-stocktake"
     if [[ -x "$stock" ]] && command -v uv &>/dev/null; then
         echo -e "${BOLD}Toolchain (existing setup, informational):${RESET}"
-        "$stock" --verdict any --quiet || true
+        if _uv_check_runs; then
+            "$stock" --verdict any --quiet || true
+        else
+            echo -e "  ${YELLOW}~${RESET} toolchain-stocktake — not run: uv could not run (${_UV_PROBLEM})"
+        fi
         echo
     fi
 
