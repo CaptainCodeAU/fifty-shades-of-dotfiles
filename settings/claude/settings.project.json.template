@@ -218,9 +218,7 @@
       "Edit(~/.claude/projects/*/memory/*)"
     ]
   },
-  "allowedHttpHookUrls": [
-    "http://localhost:31337/hooks/*"
-  ],
+  "allowedHttpHookUrls": [],
   "httpHookAllowedEnvVars": [],
 
   "_f5b_a11y_and_input_why": [
