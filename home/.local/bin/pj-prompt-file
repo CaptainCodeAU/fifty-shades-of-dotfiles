@@ -4,7 +4,7 @@
 # Claude Code accepts a single --append-system-prompt-file: given twice, only the LAST file
 # lands, and mixing it with --append-system-prompt is refused outright (both measured
 # 2026-09-21 with canary files, Claude Code 2.1.278). pj needs two files in the system
-# prompt: LifeOS's OPERATIONAL_RULES.md and the pj-owned ~/.claude/pj-global/RULES.md
+# prompt: ~/.claude/pj-global/OPERATIONAL_RULES.md (ex-LifeOS) and ~/.claude/pj-global/RULES.md
 # (D-20260920-07). So the alias runs this at every launch:
 #
 #     --append-system-prompt-file "$(pj-prompt-file)"
@@ -177,8 +177,19 @@ selftest() {
 	got="$(PJ_PROMPT_SOURCES="$a:$b" "$sut" --missing 2>"$root/err7b")"; rc=$?
 	if [ "$rc" -eq 0 ] && [ -z "$got" ]; then ok "7 control: --missing with every source present prints nothing, rc 0"; else bad "7 --missing none" "rc=$rc got=$got"; fi
 
+	# 8. the shipped defaults are the two pj-global files (LifeOS retired, Q62: 1): a HOME
+	#    holding only those two has nothing missing, with PJ_PROMPT_SOURCES unset
+	local h8="$root/home8"
+	mkdir -p "$h8/.claude/pj-global"
+	printf 'rules\n' >"$h8/.claude/pj-global/RULES.md"
+	got="$(env -u PJ_PROMPT_SOURCES HOME="$h8" "$sut" --missing 2>"$root/err8")"; rc=$?
+	if [ "$rc" -eq 1 ] && [ "$got" = "$h8/.claude/pj-global/OPERATIONAL_RULES.md" ]; then ok "8 control: defaults, OPERATIONAL_RULES.md absent -> --missing names it, rc 1"; else bad "8 defaults control" "rc=$rc got=$got"; fi
+	printf 'operational rules\n' >"$h8/.claude/pj-global/OPERATIONAL_RULES.md"
+	got="$(env -u PJ_PROMPT_SOURCES HOME="$h8" "$sut" --missing 2>"$root/err8")"; rc=$?
+	if [ "$rc" -eq 0 ] && [ -z "$got" ]; then ok "8 defaults: a HOME with only the two pj-global files -> --missing prints nothing, rc 0"; else bad "8 defaults" "rc=$rc got=$got"; fi
+
 	# 5. real defaults: the two shipped paths exist here (informational, not a failure elsewhere)
-	if [ -r "$HOME/.claude/pj-global/RULES.md" ] && [ -r "$HOME/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md" ]; then
+	if [ -r "$HOME/.claude/pj-global/RULES.md" ] && [ -r "$HOME/.claude/pj-global/OPERATIONAL_RULES.md" ]; then
 		ok "5 both default sources are readable on this machine"
 	else
 		printf '  info 5 default sources not both present here (fine on a consumer box)\n'
@@ -188,7 +199,7 @@ selftest() {
 	[ "$fail" -eq 0 ]
 }
 
-SOURCES="${PJ_PROMPT_SOURCES:-$HOME/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md:$HOME/.claude/pj-global/RULES.md}"
+SOURCES="${PJ_PROMPT_SOURCES:-$HOME/.claude/pj-global/OPERATIONAL_RULES.md:$HOME/.claude/pj-global/RULES.md}"
 OUT="${PJ_PROMPT_OUT:-${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/pj-system-prompt.md}"
 RULES_COPY="${PJ_RULES_COPY:-$HOME/repos/pj-rules}"
 
