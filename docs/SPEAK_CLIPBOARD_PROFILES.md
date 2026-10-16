@@ -731,3 +731,57 @@ tail runs (still running at 6 s); `id` through it printed 0 bytes; a reverse
 forward with it was refused; a queue write sent through it never ran. Then
 the LaunchAgent, on the key alone, ran a `--stop` queued on codebox at 4:00 AM.
 Without the file, the entry's usual key is used through the agent.
+
+## One speak key in every app: `cmd+option+backtick` (Gavin, 16 Oct: Q12 (v2): 2)
+
+The herdr keys (`ctrl+alt+backtick`, `prefix+backtick`) only work inside herdr.
+On 2 Oct Gavin asked for `cmd+option+backtick` at the macOS level, "the
+convenience of using the same keyboard shortcut", with one firm rule: "I
+didn't want the previous clipboard contents to be lost or overwritten", with
+"the least downtime". Why the 2 Oct attempt was not kept: it was a herdr-only
+build, undone on 3 Oct with no reason given; the every-app key itself was
+never built (open item W-20261003-A06, parked).
+
+**What it is:** `Speak Anywhere.app` in `~/Applications`, a small Swift
+helper started at login by the LaunchAgent `com.captaincodeau.speak-anywhere`.
+Source: `home/.local/share/speak-anywhere/SpeakAnywhere.swift` (what one
+press does is written at its top). Build, install, status and self-test:
+`speak-anywhere --install | --uninstall | --status | --selftest`.
+
+**One press:**
+- Speech playing: stop. Checked first, the same test as `speaker_alive`, so a
+  stop never waits on a copy.
+- iTerm2, Ghostty or Terminal in front: speak the clipboard, as the herdr key
+  does (herdr owns the highlight there, and a drag has already copied).
+- Any other app: the app's selected text through the accessibility API (the
+  clipboard is never touched); if the app does not answer, snapshot every
+  clipboard item and type, send `Cmd+C` once Command and Option are let go,
+  wait up to 500 ms, read the text, put the snapshot back. Nothing
+  highlighted: speak the clipboard.
+- The text goes to `speak-clipboard --toggle --stdin`, so voice, speed,
+  pauses and the cleaner are the same as every other key.
+
+**Needs Accessibility** (System Settings > Privacy & Security >
+Accessibility > Speak Anywhere) to read a highlight and send `Cmd+C`.
+Catching the key needs none. Without it every press speaks the clipboard and
+the log says `no-permission`. The app is signed ad hoc and macOS ties the
+grant to that exact build, so `--install` rebuilds only when the source's
+SHA-256 changes, and a rebuild needs the grant again.
+
+**Asking whether it is trusted from a terminal measures the terminal.** The
+first `--status` ran the check from this session's shell and said "trusted"
+while the helper itself had logged "NO": a child process inherits the
+responsible app's permission. The status now reads the helper's own log
+lines (`start ok ... accessibility=`, then `accessibility granted`).
+
+**Self-test (16 Oct, 12:42 PM, outside the sandbox, which cannot reach the
+clipboard):** three arms. The live clipboard (1 item, 1 type) survives a
+marker write and a restore. Two items with plain, rich and web text and a PNG
+(10 types once macOS adds its own UTF-16 text) survive byte for byte. A copy
+with one byte changed is told apart (the control). The first rich arm failed
+because it compared against the list it wrote, not the clipboard's own
+snapshot: macOS adds `public.utf16-external-plain-text` by itself.
+
+**Log:** `~/.local/state/herdr/speak-anywhere.log`, one line per press: the
+app in front, the path (`stop`, `terminal-clipboard`, `ax`, `copy`,
+`clipboard`, `no-permission`), characters and milliseconds. Never the text.

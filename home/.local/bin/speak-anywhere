@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  speak-anywhere -- build, install and check the every-app speak key
+# ============================================================================
+# Gavin, dotfiles-main Q12 (v2): 2, 2026-10-16. cmd+option+backtick speaks in
+# every app: the clipboard in a terminal, the highlight anywhere else, with the
+# clipboard put back. The helper itself is a small Swift program; what one
+# press does, and why, is written at the top of its source:
+#   ~/.local/share/speak-anywhere/SpeakAnywhere.swift
+#
+#   speak-anywhere --install    build "Speak Anywhere.app" in ~/Applications
+#                               (only when the source changed), write the
+#                               LaunchAgent and start it
+#   speak-anywhere --uninstall  stop it; trash the LaunchAgent and the app
+#   speak-anywhere --status     loaded? Accessibility granted? last presses
+#   speak-anywhere --selftest   build to a temp folder, then check that a
+#                               clipboard snapshot is put back byte for byte
+#                               (borrows the live clipboard for milliseconds)
+#
+# Why an app bundle and not a bare binary: macOS lists and grants
+# Accessibility per app, by name, so it shows as "Speak Anywhere" in System
+# Settings. Why a rebuild only on a source change: the app is signed ad hoc,
+# and macOS ties the Accessibility grant to that exact build, so every rebuild
+# needs the permission granted again.
+#
+# Mac only. Log: ~/.local/state/herdr/speak-anywhere.log (never the text).
+# ============================================================================
+set -uo pipefail
+
+label="com.captaincodeau.speak-anywhere"
+app="$HOME/Applications/Speak Anywhere.app"
+exe="$app/Contents/MacOS/speak-anywhere"
+plist="$HOME/Library/LaunchAgents/$label.plist"
+state="${XDG_STATE_HOME:-$HOME/.local/state}/herdr"
+logf="$state/speak-anywhere.log"
+self="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+src="$(dirname "$self")/../share/speak-anywhere/SpeakAnywhere.swift"
+[ -f "$src" ] || src="$HOME/.local/share/speak-anywhere/SpeakAnywhere.swift"
+# The Trash shim by its full path: a bare rm on a PATH without ~/.local/bin
+# would be the permanent deleter.
+trash_rm="$HOME/.local/bin/rm"
+
+die() { echo "speak-anywhere: $*" >&2; exit 1; }
+
+[ "$(uname -s)" = "Darwin" ] || die "Mac only (this is $(uname -s))"
+
+src_sum() { shasum -a 256 "$src" | cut -d' ' -f1; }
+
+# build DIR: compiles the source into DIR/speak-anywhere.
+build() {
+    command -v swiftc >/dev/null || die "swiftc is missing; install the Xcode command line tools: xcode-select --install"
+    [ -f "$src" ] || die "source not found: $src"
+    mkdir -p "$1/mc" || die "cannot make $1"
+    swiftc -O -module-cache-path "$1/mc" -o "$1/speak-anywhere" "$src" || die "build failed"
+}
+
+trash() {
+    [ -e "$1" ] || return 0
+    [ -x "$trash_rm" ] || die "$trash_rm (the Trash shim) is missing; trash $1 in Finder"
+    "$trash_rm" -r "$1" >/dev/null || true
+    [ ! -e "$1" ] || die "could not trash $1; it is still there"
+}
+
+install() {
+    local sum tmp
+    sum="$(src_sum)"
+    if [ -x "$exe" ] && [ "$(cat "$app/Contents/Resources/source.sha256" 2>/dev/null)" = "$sum" ]; then
+        echo "speak-anywhere: the app is current; not rebuilt, so Accessibility stays granted"
+    else
+        tmp="$(mktemp -d "${TMPDIR:-/tmp}/speak-anywhere.XXXXXX")" || die "cannot make a temp folder"
+        build "$tmp"
+        local new="$tmp/Speak Anywhere.app"
+        mkdir -p "$new/Contents/MacOS" "$new/Contents/Resources"
+        command mv -f "$tmp/speak-anywhere" "$new/Contents/MacOS/speak-anywhere"
+        printf '%s\n' "$sum" >"$new/Contents/Resources/source.sha256"
+        cat >"$new/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>$label</string>
+    <key>CFBundleName</key><string>Speak Anywhere</string>
+    <key>CFBundleExecutable</key><string>speak-anywhere</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>1.0</string>
+    <key>LSUIElement</key><true/>
+</dict>
+</plist>
+PLIST
+        codesign --force --sign - --identifier "$label" "$new" >/dev/null 2>&1 || die "codesign failed"
+        launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+        mkdir -p "$HOME/Applications"
+        trash "$app"
+        command mv "$new" "$app" || die "could not move the app into ~/Applications"
+        trash "$tmp"
+        echo "speak-anywhere: built $app"
+        echo "speak-anywhere: a new build needs Accessibility granted again (System Settings > Privacy & Security > Accessibility)"
+    fi
+    mkdir -p "$HOME/Library/LaunchAgents" "$state"
+    cat >"$plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>$label</string>
+    <key>ProgramArguments</key>
+    <array><string>$exe</string></array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin</string>
+        <key>LANG</key><string>en_AU.UTF-8</string>
+    </dict>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+    <key>ThrottleInterval</key><integer>10</integer>
+    <key>ProcessType</key><string>Interactive</string>
+    <key>StandardErrorPath</key><string>$state/speak-anywhere.err</string>
+</dict>
+</plist>
+PLIST
+    launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+    launchctl bootstrap "gui/$(id -u)" "$plist" ||
+        die "launchctl bootstrap failed; run it by hand to see why: launchctl bootstrap gui/$(id -u) $plist"
+    echo "speak-anywhere: installed and started ($plist)"
+}
+
+uninstall() {
+    launchctl bootout "gui/$(id -u)/$label" >/dev/null 2>&1 || true
+    trash "$plist"
+    trash "$app"
+    echo "speak-anywhere: stopped; LaunchAgent and app trashed (remove its Accessibility entry in System Settings by hand)"
+}
+
+status() {
+    local rc=0
+    if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+        echo "launchd: loaded ($label)"
+    else
+        echo "launchd: NOT loaded"; rc=1
+    fi
+    [ -x "$exe" ] || { echo "app: NOT installed ($app)"; rc=1; }
+    # Accessibility as the helper itself saw it: asked from here, the answer
+    # would be this terminal's permission, not the app's.
+    if [ -f "$logf" ]; then
+        echo "last start: $(command grep -E ' start |accessibility granted' "$logf" | tail -n 1)"
+        echo "last presses (newest last):"
+        command grep -v -E ' start |accessibility granted' "$logf" | tail -n 5 | sed 's/^/  /'
+    else
+        echo "log: none yet ($logf)"
+    fi
+    return "$rc"
+}
+
+selftest() {
+    local tmp out rc
+    tmp="$(mktemp -d "${TMPDIR:-/tmp}/speak-anywhere-test.XXXXXX")" || die "cannot make a temp folder"
+    build "$tmp"
+    out="$("$tmp/speak-anywhere" --selftest-restore)"; rc=$?
+    echo "restore check: $out"
+    trash "$tmp"
+    [ "$rc" -eq 0 ] && echo "speak-anywhere: selftest passed" || echo "speak-anywhere: selftest FAILED"
+    return "$rc"
+}
+
+case "${1:-}" in
+    --install)   install ;;
+    --uninstall) uninstall ;;
+    --status)    status ;;
+    --selftest)  selftest ;;
+    *) sed -n '2,26p' "$self" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac
