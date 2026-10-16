@@ -663,7 +663,7 @@ ${V:-word} returns the VALUE when V is set -- it is an expansion, not a redactio
 Transcripts under ~/.claude/projects are append-only and gitignored, so git-leak-scan
 cannot see them: a secret printed here is a secret with no way back.
 Full rule, by where this session loads its rules from:
-    pj: ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md, section "Security" (the ${V:-x} line)
+    pj: ~/.claude/pj-global/OPERATIONAL_RULES.md, section "Security" (the ${V:-x} line)
     engage: ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/rules/always.md ("Test a secret only as")'
 
 # ---------------------------------------------------------------- selftest
@@ -902,7 +902,7 @@ if [ "${1:-}" = "--selftest" ]; then
       unreadable) [[ $got == "deny enforce-secret-probe: cannot read the tool payload"* ]] && ok=1 ;;
       shout)      [[ $got == "null null 🔴 THE SECRET-PROBE GUARD IS BROKEN"* ]] && ok=1 ;;
       halfbroken) [[ $got == "null null 🔴 THE SECRET-PROBE GUARD IS HALF BROKEN"* ]] && ok=1 ;;
-      rulefiles)  [[ $got == "deny 🔴 BLOCKED"*"pj: ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md"*"engage: ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/rules/always.md"* ]] && ok=1 ;;
+      rulefiles)  [[ $got == "deny 🔴 BLOCKED"*"pj: ~/.claude/pj-global/OPERATIONAL_RULES.md"*"engage: ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/rules/always.md"* ]] && ok=1 ;;
       unreadable_lexer) [[ $got == "deny 🔴 BLOCKED"*"the shell lexer could not be used"* ]] && ok=1 ;;
       quiet)      [ -z "$out" ] && ok=1 ;;
     esac
