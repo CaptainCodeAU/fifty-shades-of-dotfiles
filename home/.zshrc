@@ -2447,6 +2447,22 @@ fi
 # ==============================================================================
 # 10. Welcome / Onboarding Scripts
 # ==============================================================================
+# A background tint for shells on codebox (Gavin, 16 Oct, dotfiles-main Q44: 2), so a remote
+# pane never looks like a local one. OSC 11 sets the terminal's default background; herdr keeps
+# it per pane and Ghostty per window (docs/HERDR_SIDEBAR.md, seen working 16 Oct). OSC 111 puts
+# yours back when the shell exits, so a plain `ssh codebox.lan` window is not left tinted.
+# DOTFILES_PANE_TINT overrides the colour on any box; empty there means no tint.
+if [[ -o interactive && -t 1 ]]; then
+    if [[ -z ${DOTFILES_PANE_TINT+x} && ${HOST%%.*} == codebox ]]; then
+        DOTFILES_PANE_TINT='#0f1a24'
+    fi
+    if [[ -n ${DOTFILES_PANE_TINT-} ]]; then
+        printf '\e]11;%s\a' "$DOTFILES_PANE_TINT"
+        _dotfiles_pane_tint_reset() { [[ -t 1 ]] && printf '\e]111\a'; }
+        add-zsh-hook zshexit _dotfiles_pane_tint_reset
+    fi
+fi
+
 # Only run in interactive shells on first load.
 # Verbosity controlled by ZSH_WELCOME and ZSH_WELCOME_QUICKREF (see Section 2).
 # Auto-detects SSH/tmux sessions and adjusts verbosity accordingly.
