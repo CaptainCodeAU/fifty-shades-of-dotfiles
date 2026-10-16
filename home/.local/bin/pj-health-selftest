@@ -47,7 +47,7 @@ REAL_PROMPT="$(readlink -f "$REAL_PROMPT" 2>/dev/null || printf '%s' "$REAL_PROM
 DF="$T/dotfiles"; H="$T/home-claude"; BIN="$T/bin"; STATE="$T/state"; PROJ="$T/proj"
 mkdir -p "$DF/home/.local/bin" "$DF/home/.claude/hooks" "$DF/home/.claude/pj/.claude-plugin" "$DF/home/.claude/pj/skills/wrap-up" "$DF/settings/claude" \
          "$H/skills/herdr" "$H/skills/AgentRelay" "$H/skills/ISA" "$H/pj/.claude-plugin" "$H/pj/skills/wrap-up" "$H/hooks" \
-         "$H/pj-global/decisions" "$H/pj-global/notes" "$H/LIFEOS/USER/CONFIG" "$H/projects" "$BIN" "$STATE/no-wrap-up" "$PROJ/.claude" "$T/cache" "$T/drawer/items"
+         "$H/pj-global/decisions" "$H/pj-global/notes" "$H/projects" "$BIN" "$STATE/no-wrap-up" "$PROJ/.claude" "$T/cache" "$T/drawer/items"
 
 fake(){   # fake <path> <body>   an executable that runs <body> with "$@"
   printf '#!/usr/bin/env bash\n%s\n' "$2" >"$1"; chmod +x "$1"
@@ -86,7 +86,7 @@ for h in enforce-secret-probe.sh enforce-census.sh enforce-herdr-skill.sh mark-h
 ln -s "$DF/home/.claude/pj/.claude-plugin/plugin.json" "$H/pj/.claude-plugin/plugin.json"
 ln -s "$DF/home/.claude/pj/skills/wrap-up/SKILL.md" "$H/pj/skills/wrap-up/SKILL.md"
 for s in herdr AgentRelay ISA; do echo "# $s" >"$H/skills/$s/SKILL.md"; done
-OR="$H/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md"; RULES="$H/pj-global/RULES.md"
+OR="$H/pj-global/OPERATIONAL_RULES.md"; RULES="$H/pj-global/RULES.md"
 printf '# OPERATIONAL_RULES.md fixture\n- rule one\n' >"$OR"
 { echo "# pj-global RULES.md: fixture header line"; for i in $(seq 1 20); do echo "- pinned $i"; done; } >"$RULES"
 echo "- [x](y): z" >"$H/pj-global/notes/INDEX.md"; echo "## D-20260101-01 -- x" >"$H/pj-global/decisions/D-20260101-01-x.md"
@@ -347,7 +347,7 @@ run(){   # run [dir] [args...]  -> OUT holds the JSON; RC the exit code
   # hook-fail-open reads its own settings list; "-" leaves the seam EMPTY so the row discovers
   local HFO_SEAM="${PJ_HEALTH_HOOK_SETTINGS_FX:-$HFO/clean.json}"; [ "$HFO_SEAM" = "-" ] && HFO_SEAM=""
   OUT="$( (builtin cd "$dir" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" DRYRUN_RC="$T/dryrun-rc" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" \
-      PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" \
+      PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="${PJ_PROMPT_SOURCES_FX-$OR:$RULES}" PJ_PROMPT_OUT="$T/cache/prompt.md" \
       OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" \
       RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" \
       PJ_TRAILER_REPOS="$TR_SEAM" PJ_RULES_COPY="${PJ_RULES_COPY_FX:-$T/no-rules-copy}" \
@@ -489,6 +489,13 @@ PJ_RULES_COPY_FX="$T/rc-dir" run; arm "prompt-file back to PASS on a relay-fed m
 fake "$DF/home/.local/bin/pj-prompt-file" 'printf "%s" "${PJ_PROMPT_SOURCES%%:*}"'; run; arm "prompt-file NOT MEASURED on the fallback-to-source path" is prompt-file "$NM"
 fake "$DF/home/.local/bin/pj-prompt-file" 'echo wrong >"$PJ_PROMPT_OUT"; echo "$PJ_PROMPT_OUT"'; run; arm "prompt-file FAIL when the cache differs" is prompt-file FAIL
 cp "$REAL_PROMPT" "$DF/home/.local/bin/pj-prompt-file"; chmod +x "$DF/home/.local/bin/pj-prompt-file"
+# the shipped defaults (LifeOS retired, Q62: 1): PJ_PROMPT_SOURCES empty, so pj-health and the
+# real pj-prompt-file both use their own lists. HOME is a fixture whose .claude is $H, so
+# pj-prompt-file's $HOME/.claude defaults land on the same two pj-global fixture files.
+mkdir -p "$T/fxhome"; ln -s "$H" "$T/fxhome/.claude"
+HOME="$T/fxhome" PJ_PROMPT_SOURCES_FX="" run
+arm "prompt-file PASS on the default sources, both in pj-global (got $(st prompt-file): $(dt prompt-file | cut -c1-80))" is prompt-file PASS
+arm "prompt-file default is OPERATIONAL_RULES.md+RULES.md" has prompt-file "OPERATIONAL_RULES.md+RULES.md"
 
 # 5. rules budget (P9 2026-09-22: was a 60-LINE cap, which never bound -- the thing
 #    that cut six approved lines at P5.4 was a token reading the line count could not

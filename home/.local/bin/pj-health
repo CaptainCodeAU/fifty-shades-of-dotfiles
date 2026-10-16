@@ -226,7 +226,7 @@ if [ -z "$bad" ]; then row PASS plugin-dirs "$ok of $ok hold a plugin manifest, 
 else row FAIL plugin-dirs "$bad; fix: restore the folder in dot-claude or the dotfiles stow"; fi
 
 # M4 prompt file
-SOURCES="${PJ_PROMPT_SOURCES:-$PJ_HOME/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md:$PJ_HOME/pj-global/RULES.md}"
+SOURCES="${PJ_PROMPT_SOURCES:-$PJ_HOME/pj-global/OPERATIONAL_RULES.md:$PJ_HOME/pj-global/RULES.md}"
 miss=""; IFS=':' read -r -a srcs <<<"$SOURCES"
 for s in "${srcs[@]}"; do [ -r "$s" ] || miss="$miss $(tilde "$s")"; done
 # The relay's rules copy: its existence makes this a relay-fed machine (pj-prompt-file's strict
