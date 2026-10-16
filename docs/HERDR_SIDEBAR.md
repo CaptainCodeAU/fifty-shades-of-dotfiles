@@ -92,7 +92,8 @@ facts behind the choices and the options not taken.
 - **A pane's own background:** a program in the pane can set its default background
   with OSC 11 (`printf '\e]11;#1a2a1a\a'`, reset `printf '\e]111\a'`). herdr keeps it
   per pane and paints it when it differs from the host's (`pane/terminal.rs:3518-3533`).
-  Read in the code, not yet seen on screen (16 Oct).
+  Seen working 16 Oct: Gavin's plain shell pane in Ghostty turned dark green, the
+  other panes kept the normal background.
 - **A changed key command needs `herdr server reload-config`**; `prefix+r` reloads
   only the client.
 
