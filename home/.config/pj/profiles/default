@@ -73,7 +73,7 @@ setting_sources: project,local
 settings:        ~/.claude/settings.project.json
 prompt:          pj-prompt-file
 prompt_sources:  ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/engine-room/prompt/engage-system-prompt.md
-plugins:         skills/herdr skills/ISA pj
+plugins:         skills/herdr pj
 required:        --dangerously-skip-permissions --effort high
 mode:            normal
 card:            on
