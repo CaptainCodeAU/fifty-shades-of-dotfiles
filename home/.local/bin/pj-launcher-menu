@@ -21,8 +21,8 @@
 # Non-zero says plainly that nothing was started.
 #
 # THE OLD BEHAVIOUR IS GONE. `c-legacy` carried the original alias from 2026-09-22 until
-# P10 the same day, when Gavin removed it: nothing had needed it. `lifeos` is the LifeOS
-# launch. The other c-family aliases (cb, cr, ct, cpr, cd_, cskip) were retired on
+# P10 the same day, when Gavin removed it: nothing had needed it. `lifeos`, the LifeOS
+# launch, was retired on 2026-10-16 (LifeOS unwired, every file kept). The other c-family aliases (cb, cr, ct, cpr, cd_, cskip) were retired on
 # 2026-10-06, and `ci`, the last one (piped `claude -p`), on 2026-10-14.
 #
 # WHY A SCRIPT AND NOT JUST A LONGER ALIAS. So it can be tested. An alias is unreachable
@@ -37,8 +37,6 @@ MENU_TEXT() {
 
     engage                THIS PROJECT, with the framework on: start card, open items,
                           rulings, /pj:wrap-up. This is the one you want almost always.
-
-    lifeos                GLOBAL work, with the LifeOS constitution loaded.
 
 EOF
 }
@@ -59,9 +57,13 @@ selftest() {
   # 2. every route Gavin named is present, each asserted by name rather than by counting
   #    lines -- a line count would pass on a menu that named the wrong things.
   local want
-  for want in 'engage' 'lifeos'; do
+  for want in 'engage'; do
     case "$out" in *"$want"*) ok "2 names $want";; *) bad "2 missing $want" "$out";; esac
   done
+  # 2d. lifeos is retired (Gavin, engage-main Q60: 1, 16 Oct 2026): LifeOS is unwired and
+  #     its alias removed, every LifeOS file kept for his own review. The menu must not
+  #     send anyone to a command that no longer exists.
+  case "$out" in *'lifeos'*) bad "2d still names the retired lifeos" "$out";; *) ok "2d does not name the retired lifeos";; esac
   # 2c. c2 is retired (option 1 step 11, 4 Oct 2026): the menu must not send anyone to it.
   case "$out" in *'c2 '*) bad "2c still names the retired c2" "$out";; *) ok "2c does not name the retired c2";; esac
   # 2a. pj is no longer offered as a route (option 1, 4 Oct 2026): engage is the launcher.
