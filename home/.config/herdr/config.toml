@@ -331,6 +331,15 @@ tab_bar_right_separator = " ┃ "
 row_gap = 0
 rows = [["state_icon", { token = "terminal_title_stripped", fg = "#ffffff" }], ["machine", { token = "workspace", fg = "#c0ac90", bold = false }, { token = "tab", fg = "#c0ac90" }]]
 
+# Spaces section, coloured like the agents section (Gavin, 16 Oct): the space
+# name in white on line 1, the branch on line 2 in light sand #b0a084
+# (variation 3's line 2, Q42: 1; its slate bar was not taken, because
+# active_row_bg and selection_bg are one setting each, shared with the agents
+# section). git_status keeps its own green (ahead) and red (behind).
+[ui.sidebar.spaces]
+row_gap = 0
+rows = [["state_icon", { token = "workspace", fg = "#ffffff", bold = false }], [{ token = "branch", fg = "#b0a084" }, "git_status"]]
+
 [server]
 headless_cols = 120
 headless_rows = 40
