@@ -128,7 +128,8 @@
 #   ci-watch --help
 #
 # Env (mostly for testing):
-#   CI_WATCH_LIST, CI_WATCH_STATE, CI_WATCH_NOTIFY_URL, CI_WATCH_VOICE_ID
+#   CI_WATCH_LIST, CI_WATCH_STATE
+#   CI_WATCH_SPEAK_ALERT=<path>      the speak-alert to use (default: beside this script)
 #   CI_WATCH_FORCE=green|red|unknown   bypass the live query (self-test only)
 #   CI_WATCH_NOW=<epoch>               override "now" (self-test only)
 #   CI_WATCH_GH=<path>                 the gh binary to use. The selftest points
@@ -141,14 +142,13 @@ set -uo pipefail
 
 WATCHLIST="${CI_WATCH_LIST:-$HOME/.config/ci-watch/watchlist}"
 STATE_DIR="${CI_WATCH_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/ci-watch}"
-# Port 8888 has been dead for some time; the notification daemon serves /notify on
-# 31337 (verified 2026-09-15: 8888 -> no listener, 31337 -> HTTP 200, with a
-# control port confirming the probe itself worked). Every voice alert this tool
-# has raised therefore failed its POST and fell through to the local fallback
-# below, unserialised and unlogged. Kept as an override so a LAN voice server can
-# be dropped in later without editing code.
-NOTIFY_URL="${CI_WATCH_NOTIFY_URL:-http://localhost:31337/notify}"
-VOICE_ID="${CI_WATCH_VOICE_ID:-}"
+# Spoken alerts go through speak-alert (Gavin, dotfiles-main Q43 (v2): 1, 16 Oct;
+# engage #2092 item 2). They used to be POSTed to localhost:31337, LifeOS's notify
+# service, retired 16 Oct: nothing listened, curl's failure was thrown away, so
+# every alert was silently lost, and anything that later listened on the port
+# would have received them. speak-alert speaks on the Mac (queued behind any
+# speech) and, on another box, hands a fixed alert to the Mac through speak-relay.
+SPEAK_ALERT="${CI_WATCH_SPEAK_ALERT:-$(dirname "$0")/speak-alert}"
 
 # Age bands. HARD_TTL is where a cached value stops being shown AT ALL and only
 # the reason remains -- Prometheus's "return nothing rather than something old".
@@ -675,25 +675,25 @@ lock_release(){
 }
 
 # ---- spoken alert (best-effort; never fails) -------------------------------
+# voice_alert <alert> [fields]: one of speak-alert's fixed alerts (ci-red <label>,
+# ci-reminder <days> <label>). CI_WATCH_DEBUG prints the words to stderr instead.
 voice_alert(){
-  local msg="${1//\"/}" body
-  [ -n "${CI_WATCH_DEBUG:-}" ] && { printf '[voice] %s\n' "$msg" >&2; return 0; }
-  if [ -n "$VOICE_ID" ]; then
-    body="$(printf '{"message": "%s", "voice_id": "%s", "voice_enabled": true}' "$msg" "$VOICE_ID")"
-  else
-    body="$(printf '{"message": "%s", "voice_enabled": true}' "$msg")"
-  fi
-  if have curl && curl -fsS --max-time 4 -X POST "$NOTIFY_URL" \
-       -H 'Content-Type: application/json' -d "$body" >/dev/null 2>&1; then
+  local words
+  if [ -n "${CI_WATCH_DEBUG:-}" ]; then
+    words="$("$SPEAK_ALERT" --print "$@" 2>/dev/null)" || words="(not a valid alert) $*"
+    printf '[voice] %s\n' "$words" >&2
     return 0
   fi
-  # NO LOCAL FALLBACK, deliberately. This used to background `/usr/bin/say`, which
-  # was wrong three ways: it bypassed the daemon's single-playback queue so alerts
-  # spoke ON TOP of each other; nothing logged it, so a voice event left no trace
-  # anywhere; and it used `say` when this machine renders everything through
-  # `say2`. A silent miss beats an unlogged, unserialised shout in the wrong voice
-  # -- the banner is on screen either way, and the banner is the primary signal.
+  [ -x "$SPEAK_ALERT" ] && SPEAK_SOURCE=ci-watch "$SPEAK_ALERT" "$@" >/dev/null 2>&1
   return 0
+}
+# alert_label <text>: only what speak-alert accepts in a label (A-Za-z0-9 . _ / @ -
+# and space), at most 60, no leading space or -; empty becomes "a watched repo".
+alert_label(){
+  local l
+  l="$(printf '%s' "$1" | LC_ALL=C tr -c 'A-Za-z0-9._/@ -' ' ' | sed -e 's/^[ -]*//' -e 's/ *$//')"
+  l="${l:0:60}"; l="${l% }"
+  printf '%s' "${l:-a watched repo}"
 }
 
 # ---- banners ---------------------------------------------------------------
@@ -878,9 +878,9 @@ process_target(){ # repo branch label
           tier_for_days "$days"; tier="$TIER"
           red_banner "$tier" "$days" "$label" "$concl" "$sha" "${repo}@${branch}" ""
           if [ "${TRANSITION:-0}" -eq 1 ]; then
-            voice_alert "Heads up. ${label} C I just went red."
+            voice_alert ci-red "$(alert_label "$label")"
           elif [ "$tier" -ge 2 ]; then
-            voice_alert "Reminder. ${label} C I has been red for ${days} days."
+            voice_alert ci-reminder "$days" "$(alert_label "$label")"
           fi
         fi ;;
       running)

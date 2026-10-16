@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# speak-alert-selftest -- prove speak-alert, speak-relay's alert shapes, and the two
+# watchers' use of them (Gavin, dotfiles-main Q43 (v2): 1, 16 Oct 2026).
+#
+#   speak-alert-selftest
+#
+# Sealed: a temp HOME with a stand-in speak-clipboard that writes down what it got;
+# nothing is spoken, nothing reaches a real queue or the network. Prints one line per
+# check and a total; exit 0 only when every check passes.
+set -uo pipefail
+HERE="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")" && pwd)"
+SA="$HERE/speak-alert" RELAY="$HERE/speak-relay"
+T="$(mktemp -d "${TMPDIR:-/tmp}/speak-alert-test.XXXXXX")" || exit 2
+pass=0 fail=0
+ok()  { echo "  ok   $1"; pass=$((pass + 1)); }
+bad() { echo "  FAIL $1${2:+ -- $2}"; fail=$((fail + 1)); }
+check() { if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "got [$2] want [$3]"; fi; }
+
+echo "speak-alert selftest: $SA"
+
+# 1. The four alerts, word for word.
+check "1a ci-red" "$("$SA" --print ci-red 'docbrain master')" "Heads up. docbrain master C I just went red."
+check "1b ci-reminder" "$("$SA" --print ci-reminder 4 'win_go_app_test record/programme')" "Reminder. win_go_app_test record/programme C I has been red for 4 days."
+check "1c ccw-unconfirmed" "$("$SA" --print ccw-unconfirmed)" "Heads up. Capture cannot be confirmed."
+check "1d ccw-reminder" "$("$SA" --print ccw-reminder 12)" "Reminder. Capture has been unconfirmed for 12 days."
+
+# 2. Anything else is refused, exit 2, and prints nothing on stdout.
+refused=() let=()
+while IFS= read -r args; do
+  out="$(eval "\"\$SA\" --print $args" 2>/dev/null)"; rc=$?
+  if [ "$rc" = 2 ] && [ -z "$out" ]; then refused+=("$args"); else let+=("$args"); fi
+done <<'EOF'
+say hello
+ci-red
+ci-red 'a; rm -rf x'
+ci-red '$(id)'
+ci-red '-flag'
+ci-red ' leading space'
+ci-red 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+ci-red one two
+ci-reminder x label
+ci-reminder 12345 label
+ccw-unconfirmed extra
+ccw-reminder
+ccw-reminder 1.5
+EOF
+[ ${#let[@]} -eq 0 ] && ok "2a 13 bad alerts refused (unknown, missing, shell text, leading - or space, 61 chars, extra words, bad days)" || bad "2a" "let through: ${let[*]}"
+"$SA" --check ci-red 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' && ok "2b a 60-character label is accepted (the control for the 61 above)" || bad "2b"
+
+# 3. On the Mac: speak-clipboard --queue --stdin gets the words, with the caller's source.
+H="$T/home"; mkdir -p "$H/.local/bin"
+cat > "$H/.local/bin/speak-clipboard" <<EOF
+#!/bin/sh
+{ echo "args=\$*"; echo "source=\${SPEAK_SOURCE-}"; echo "text=\$(cat)"; } > "\${SA_TEST_OUT:-$T/got}"
+EOF
+chmod +x "$H/.local/bin/speak-clipboard"
+HOME="$H" SPEAK_ALERT_OS=darwin23 SPEAK_SOURCE=ci-watch "$SA" ci-red 'docbrain master'; rc=$?
+check "3a Mac: exit 0" "$rc" "0"
+check "3b Mac: speak-clipboard --queue --stdin" "$(sed -n 's/^args=//p' "$T/got")" "--queue --stdin"
+check "3c Mac: the caller's source reaches the speak log" "$(sed -n 's/^source=//p' "$T/got")" "ci-watch"
+check "3d Mac: the words on stdin" "$(sed -n 's/^text=//p' "$T/got")" "Heads up. docbrain master C I just went red."
+HOME="$H" SA_TEST_OUT="$T/got-3e" SPEAK_ALERT_OS=darwin23 "$SA" ccw-unconfirmed
+check "3e Mac: no source given becomes speak-alert" "$(sed -n 's/^source=//p' "$T/got-3e")" "speak-alert"
+HOME="$H" SA_TEST_OUT="$T/got-3f" SPEAK_ALERT_OS=darwin23 "$SA" say hi 2>/dev/null; rc=$?
+[ "$rc" = 2 ] && [ ! -e "$T/got-3f" ] && ok "3f Mac: a refused alert runs nothing" || bad "3f" "rc=$rc"
+
+# 4. Not a Mac: one line in speak-relay's queue, the alert's own words.
+Q="$T/queue"
+SPEAK_ALERT_OS=linux-gnu SPEAK_ALERT_QUEUE="$Q" "$SA" ci-reminder 4 'docbrain master'; rc=$?
+line="$(cat "$Q" 2>/dev/null)"
+check "4a not a Mac: exit 0" "$rc" "0"
+case "$line" in
+  [0-9]*" --alert ci-reminder 4 docbrain master") ok "4b not a Mac: the queue line is '<epoch> --alert ci-reminder 4 docbrain master'" ;;
+  *) bad "4b" "$line" ;;
+esac
+SPEAK_ALERT_OS=linux-gnu SPEAK_ALERT_QUEUE="$Q" "$SA" say hi 2>/dev/null
+check "4c not a Mac: a refused alert writes nothing" "$(wc -l < "$Q" | tr -d ' ')" "1"
+
+# 5. speak-relay on the Mac: exactly the four shapes, plus the nine speak commands.
+plan() { perl "$RELAY" --check-line "$@" | tr '\n' ' ' | sed 's/ $//'; }
+check "5a relay: ci-red" "$(plan --alert ci-red docbrain master)" "speak-alert [ci-red] [docbrain master]"
+check "5b relay: ci-reminder" "$(plan --alert ci-reminder 4 win_go_app_test record/programme)" "speak-alert [ci-reminder] [4] [win_go_app_test record/programme]"
+check "5c relay: ccw-unconfirmed" "$(plan --alert ccw-unconfirmed)" "speak-alert [ccw-unconfirmed]"
+check "5d relay: ccw-reminder" "$(plan --alert ccw-reminder 12)" "speak-alert [ccw-reminder] [12]"
+check "5e relay: a speak key still runs speak-clipboard (control)" "$(plan --toggle)" "speak-clipboard [--toggle]"
+let=()
+while IFS= read -r w; do [ "$(plan $w)" = refused ] || let+=("$w"); done <<'EOF'
+--alert say hello
+--alert ci-red ; rm -rf x
+--alert ci-red
+--alert ci-reminder x docbrain
+--alert ccw-reminder 12 extra
+--alert ccw-unconfirmed now
+--toggle --stop
+hello
+EOF
+[ ${#let[@]} -eq 0 ] && ok "5f relay: 8 other lines refused" || bad "5f" "accepted: ${let[*]}"
+# The relay's matcher and speak-alert agree on every valid alert from section 1.
+"$SA" --check ci-reminder 4 'win_go_app_test record/programme' && ok "5g speak-alert accepts what the relay passes on" || bad "5g"
+
+# 6. The watchers: their test mode prints the alert's words, built by speak-alert.
+for tool in ci-watch ccw-watch; do
+  grep -q 'SPEAK_ALERT=' "$HERE/$tool" && ! grep -q -E '^[^#]*(NOTIFY_URL|curl .*notify|/usr/bin/say)' "$HERE/$tool" \
+    && ok "6 $tool uses speak-alert, and no longer posts to a web address or calls say" || bad "6 $tool"
+done
+
+echo "speak-alert selftest: $pass passed, $fail failed"
+echo "  (temp folder $T)"
+[ "$fail" -eq 0 ]

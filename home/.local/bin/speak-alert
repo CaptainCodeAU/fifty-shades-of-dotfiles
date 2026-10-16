@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  speak-alert -- say one of a fixed set of alerts, on the Mac, in Gavin's voice
+# ============================================================================
+# Gavin, dotfiles-main Q43 (v2): 1, 2026-10-16 (engage #2092 item 2).
+#
+# Why: ci-watch and ccw-watch posted their spoken alerts to localhost web
+# addresses (31337, LifeOS's notify service, retired 16 Oct; 8888, dead for
+# weeks). Nothing listened, both treated the failure as success, and every
+# alert was silently lost; anything that later listened on those ports would
+# have received them. Now:
+#   - on the Mac, the alert is spoken by speak-clipboard, queued behind any
+#     speech already playing (--queue), so it never cuts off a reply;
+#   - on any other box (codebox), it is written to speak-relay's queue file as a
+#     fixed shape; speak-relay on the Mac reads it, checks the shape exactly, and
+#     runs this script there. The Mac builds the words, so a box can only pick an
+#     alert and fill its limited fields, never make the Mac say any text.
+#
+# THE ALERTS (the only ones; anything else is refused, exit 2):
+#   speak-alert ci-red <label>               "Heads up. <label> C I just went red."
+#   speak-alert ci-reminder <days> <label>   "Reminder. <label> C I has been red for <days> days."
+#   speak-alert ccw-unconfirmed              "Heads up. Capture cannot be confirmed."
+#   speak-alert ccw-reminder <days>          "Reminder. Capture has been unconfirmed for <days> days."
+# <label> is 1-60 of A-Z a-z 0-9 . _ / @ - and space, not starting with a space
+# or -. <days> is 1-4 digits.
+#
+#   speak-alert --print <alert...>   print the words, speak nothing (tests)
+#   speak-alert --check <alert...>   exit 0 if the alert is valid, 2 if not
+#
+# Best-effort: a valid alert always exits 0, spoken or not. The speak log
+# (~/.local/state/herdr/speak-clipboard.log) records it with source= from
+# SPEAK_SOURCE (default speak-alert). SPEAK_ALERT_OS stands in for OSTYPE in a
+# test; SPEAK_ALERT_QUEUE for the queue path.
+# ============================================================================
+set -uo pipefail
+
+LABEL_RE='^[A-Za-z0-9._/@][A-Za-z0-9._/@ -]{0,59}$'
+DAYS_RE='^[0-9]{1,4}$'
+
+mode=speak
+case "${1-}" in
+    --print) mode=print; shift ;;
+    --check) mode=check; shift ;;
+esac
+
+refuse() { echo "speak-alert: refused: $*" >&2; exit 2; }
+
+words=""
+case "${1-}" in
+    ci-red)
+        [ $# -eq 2 ] || refuse "ci-red takes one label"
+        [[ $2 =~ $LABEL_RE ]] || refuse "bad label"
+        words="Heads up. $2 C I just went red." ;;
+    ci-reminder)
+        [ $# -eq 3 ] || refuse "ci-reminder takes days and a label"
+        [[ $2 =~ $DAYS_RE ]] || refuse "bad days"
+        [[ $3 =~ $LABEL_RE ]] || refuse "bad label"
+        words="Reminder. $3 C I has been red for $2 days." ;;
+    ccw-unconfirmed)
+        [ $# -eq 1 ] || refuse "ccw-unconfirmed takes nothing"
+        words="Heads up. Capture cannot be confirmed." ;;
+    ccw-reminder)
+        [ $# -eq 2 ] || refuse "ccw-reminder takes days"
+        [[ $2 =~ $DAYS_RE ]] || refuse "bad days"
+        words="Reminder. Capture has been unconfirmed for $2 days." ;;
+    *)
+        refuse "unknown alert '${1-}'" ;;
+esac
+
+case "$mode" in
+    check) exit 0 ;;
+    print) printf '%s\n' "$words"; exit 0 ;;
+esac
+
+case "${SPEAK_ALERT_OS:-$OSTYPE}" in
+    darwin*)
+        printf '%s\n' "$words" |
+            SPEAK_SOURCE="${SPEAK_SOURCE:-speak-alert}" "$HOME/.local/bin/speak-clipboard" --queue --stdin \
+            >/dev/null 2>&1 || true ;;
+    *)
+        # Not a Mac: hand it to the Mac through speak-relay's queue, as the alert's
+        # own words (its name and fields), one line, "<epoch seconds> --alert ...".
+        q="${SPEAK_ALERT_QUEUE:-$HOME/.local/state/herdr/speak-relay.queue}"
+        mkdir -p "$(dirname "$q")" 2>/dev/null
+        printf '%s --alert %s\n' "$(date +%s)" "$*" >>"$q" 2>/dev/null || true ;;
+esac
+exit 0

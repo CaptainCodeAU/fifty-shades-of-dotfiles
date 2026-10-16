@@ -865,3 +865,41 @@ be heard; the same text is 3.77 s at 441. Other text may hit the same fault
 at another speed, rarely; nothing here detects it. If it recurs, the next
 step is a guard in the player that re-renders a part whose audio is far
 longer than its text needs (Q36 option 2).
+
+## Spoken alerts: `speak-alert` (Gavin, 16 Oct: Q43 (v2): 1; engage #2092 item 2)
+
+`ci-watch` ("dotfiles C I just went red", and a reminder after 3 days red) and
+`ccw-watch` ("Capture cannot be confirmed") used to POST their alerts to
+`localhost:31337/notify` (LifeOS's Pulse, retired 16 Oct) and `localhost:8888/notify`
+(dead for weeks). Nothing listened, both threw the failure away, so every alert was
+silently lost, and anything that later listened on those ports would have received
+them. Found by engage-main; verified: nothing listened on either port.
+
+Now both call `speak-alert`, which knows four alerts and nothing else:
+
+| Alert | Words |
+| --- | --- |
+| `ci-red <label>` | Heads up. `<label>` C I just went red. |
+| `ci-reminder <days> <label>` | Reminder. `<label>` C I has been red for `<days>` days. |
+| `ccw-unconfirmed` | Heads up. Capture cannot be confirmed. |
+| `ccw-reminder <days>` | Reminder. Capture has been unconfirmed for `<days>` days. |
+
+`<label>` is 1-60 of `A-Za-z0-9 . _ / @ -` and space, not starting with a space or
+`-`; `<days>` is 1-4 digits (`ci-watch`'s `alert_label` trims a label to fit).
+
+- **On the Mac:** `speak-clipboard --queue --stdin`, so an alert waits behind a reply
+  being read instead of cutting it off. The speak log names it `source=ci-watch` or
+  `source=ccw-watch`.
+- **On another box (codebox):** one line `<epoch> --alert <alert> <fields>` in the
+  speak-relay queue. `speak-relay` on the Mac matches it against the four shapes
+  EXACTLY (`alert_args`), runs `speak-alert` with the fields and no shell, and
+  `speak-alert` checks them again and builds the words. A box can pick an alert and
+  fill its fields; it can never choose the words. Same queue file, same forced-command
+  key, no new path from the box to the Mac (NP-2 agreed, 16 Oct).
+- `speak-relay --check-line WORDS` shows what a queue line would run, without running it.
+
+Tests: `speak-alert-selftest`, 24 checks (the four alerts word for word, 13 bad alerts
+refused with a 60-character control, the Mac path through a stand-in speaker, the
+queue line off the Mac, the relay's shapes and 8 refusals, both watchers off the old
+addresses). Against a `speak-alert` that refuses nothing, 3 checks fail. The watchers'
+own suites still pass: `ccw-watch-selftest` 45, `ci-watch-selftest` 168.

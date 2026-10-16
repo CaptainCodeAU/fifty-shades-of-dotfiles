@@ -22,12 +22,20 @@
 # exactly one of the nine speak-key commands in home/.config/herdr/config.toml
 # and the line is at most 15 s old (a stalled link must not replay a burst).
 # It runs `speak-clipboard <those words>` in the background, with no shell.
+# Also accepted (Gavin, dotfiles-main Q43 (v2): 1, 16 Oct): the four fixed alert
+# shapes of speak-alert, matched EXACTLY by alert_args below:
+#   --alert ci-red <label>             --alert ci-reminder <days> <label>
+#   --alert ccw-unconfirmed            --alert ccw-reminder <days>
+# (<label> 1-60 of A-Za-z0-9 . _ / @ - and space, not starting with space or -;
+# <days> 1-4 digits). It runs `speak-alert <kind> <fields>` with no shell, and
+# speak-alert builds the words on the Mac, so a box can never choose the text.
 # Anything else is logged as refused and runs nothing.
 #
 #   speak-relay              run the fetcher (launchd runs it, see --install)
 #   speak-relay --install    write the LaunchAgent and start it
 #   speak-relay --uninstall  stop it and trash the LaunchAgent
 #   speak-relay --status     is it loaded, and is each box connected
+#   speak-relay --check-line WORDS   what a queue line would run; runs nothing
 #
 # Boxes: SPEAK_RELAY_HOSTS (space-separated ssh names), default codebox.lan.
 # Log: ~/.local/state/herdr/speak-relay.log, one line per event.
@@ -38,6 +46,7 @@ use POSIX ();
 
 my $home   = $ENV{HOME} or die "speak-relay: HOME is not set\n";
 my $speak  = $ENV{SPEAK_RELAY_SPEAK} || "$home/.local/bin/speak-clipboard";
+my $alert  = $ENV{SPEAK_RELAY_ALERT} || "$home/.local/bin/speak-alert";
 my $state  = $ENV{SPEAK_RELAY_STATE} || "$home/.local/state/herdr";
 my $log    = "$state/speak-relay.log";
 my @hosts  = split ' ', ($ENV{SPEAK_RELAY_HOSTS} || 'codebox.lan');
@@ -55,6 +64,17 @@ my %allowed = map { $_ => 1 } (
     '--set volume -10', '--set volume +10',
     '--notify --settings', '--reset all',
 );
+
+# speak-alert's four shapes, whole line, nothing more (speak-alert checks again).
+my $LABEL = qr{[A-Za-z0-9._/\@][A-Za-z0-9._/\@ -]{0,59}};
+sub alert_args {
+    my ($w) = @_;
+    return ('ci-red', $1)             if $w =~ /\A--alert ci-red ($LABEL)\z/;
+    return ('ci-reminder', $1, $2)    if $w =~ /\A--alert ci-reminder ([0-9]{1,4}) ($LABEL)\z/;
+    return ('ccw-unconfirmed')        if $w eq '--alert ccw-unconfirmed';
+    return ('ccw-reminder', $1)       if $w =~ /\A--alert ccw-reminder ([0-9]{1,4})\z/;
+    return ();
+}
 
 sub stamp { POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime) }
 
@@ -99,7 +119,7 @@ sub fetch_argv {
 }
 
 sub speak_now {
-    my ($words, $host) = @_;
+    my ($argv, $host) = @_;
     my $pid = fork;
     return "fork: $!" unless defined $pid;
     if ($pid == 0) {
@@ -111,11 +131,19 @@ sub speak_now {
         open STDERR, '>', '/dev/null';
         # Who pressed, for speak-clipboard's log (Q35: 1).
         $ENV{SPEAK_SOURCE} = "speak-relay:$host";
-        { no warnings 'exec'; exec { $speak } $speak, split(/ /, $words); }
+        { no warnings 'exec'; exec { $argv->[0] } @$argv; }
         POSIX::_exit(127);
     }
     waitpid($pid, 0);
     return '';
+}
+
+# The program and arguments a queue line's words would run, or () to refuse.
+sub plan_for {
+    my ($words) = @_;
+    return ($speak, split(/ /, $words)) if $allowed{$words};
+    my @a = alert_args($words);
+    return @a ? ($alert, @a) : ();
 }
 
 # One line from a box's queue: run it, or say why not.
@@ -123,7 +151,8 @@ sub handle {
     my ($host, $line) = @_;
     $line =~ s/\r?\n\z//;
     my ($when, $words) = $line =~ /^(\d{9,11}) (.+)$/ ? ($1, $2) : (undef, undef);
-    if (!defined $words || !$allowed{$words}) {
+    my @argv = defined $words ? plan_for($words) : ();
+    if (!@argv) {
         log_line("$host refused " . shown($line));
         return;
     }
@@ -132,7 +161,7 @@ sub handle {
         log_line("$host stale '$words' (${age}s old)");
         return;
     }
-    my $err = speak_now($words, $host);
+    my $err = speak_now(\@argv, $host);
     log_line($err ? "$host failed '$words' ($err)" : "$host ran '$words'");
 }
 
@@ -237,6 +266,13 @@ if (@ARGV) {
     install()   if $a eq '--install';
     uninstall() if $a eq '--uninstall';
     status()    if $a eq '--status';
+    # --check-line WORDS: what a queue line's words would run, one argument per
+    # line, or "refused". Runs nothing (speak-alert-selftest uses it).
+    if ($a eq '--check-line') {
+        my @p = plan_for(join(' ', @ARGV));
+        print @p ? join("\n", map { $_ eq $speak ? 'speak-clipboard' : $_ eq $alert ? 'speak-alert' : "[$_]" } @p) . "\n" : "refused\n";
+        exit 0;
+    }
     if ($a eq '--help' || $a eq '-h') {
         open my $me, '<', $0 or die; while (<$me>) { next if $. == 1; last if /^use strict/; print if s/^# ?// }
         exit 0;

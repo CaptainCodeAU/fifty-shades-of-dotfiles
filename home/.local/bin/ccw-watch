@@ -63,7 +63,8 @@
 #   ccw-watch --help
 #
 # Env (mostly for testing):
-#   CCW_WATCH_STATE, CCW_WATCH_NOTIFY_URL, CCW_WATCH_VOICE_ID
+#   CCW_WATCH_STATE
+#   CCW_WATCH_SPEAK_ALERT=<path>   the speak-alert to use (default: beside this script)
 #   CCW_WATCH_SETTINGS, CCW_WATCH_REGISTRY, CCW_WATCH_FLOOR
 #   CCW_WATCH_VERSION_TIMEOUT=<s>   default 10
 #   CCW_WATCH_NOW=<epoch>           override "now" (self-test only)
@@ -93,8 +94,10 @@ VERSION_TIMEOUT="${CCW_WATCH_VERSION_TIMEOUT:-10}"
 STATE_DIR="${CCW_WATCH_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/ccw-watch}"
 STATE_FILE="$STATE_DIR/capture.state"
 STATE_SCHEMA=2
-NOTIFY_URL="${CCW_WATCH_NOTIFY_URL:-http://localhost:8888/notify}"
-VOICE_ID="${CCW_WATCH_VOICE_ID:-}"
+# Spoken alerts go through speak-alert (Gavin, dotfiles-main Q43 (v2): 1, 16 Oct):
+# the old POST to localhost:8888 had no listener for weeks, so every alert fell
+# through to a bare /usr/bin/say, unqueued and unlogged.
+SPEAK_ALERT="${CCW_WATCH_SPEAK_ALERT:-$(dirname "$0")/speak-alert}"
 
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 
@@ -147,19 +150,16 @@ save_state(){ # save_state <last> <red_since> <snooze>
 }
 
 # ---- spoken alert (best-effort; never fails) --------------------------------
+# voice_alert <alert> [fields]: one of speak-alert's fixed alerts (ccw-unconfirmed,
+# ccw-reminder <days>). CCW_WATCH_DEBUG prints the words to stderr instead.
 voice_alert(){
-    local msg="${1//\"/}" body
-    [ -n "${CCW_WATCH_DEBUG:-}" ] && { printf '[voice] %s\n' "$msg" >&2; return 0; }
-    if [ -n "$VOICE_ID" ]; then
-        body="$(printf '{"message": "%s", "voice_id": "%s", "voice_enabled": true}' "$msg" "$VOICE_ID")"
-    else
-        body="$(printf '{"message": "%s", "voice_enabled": true}' "$msg")"
-    fi
-    if have curl && timeout 4 curl -fsS -X POST "$NOTIFY_URL" \
-         -H 'Content-Type: application/json' -d "$body" >/dev/null 2>&1; then
+    local words
+    if [ -n "${CCW_WATCH_DEBUG:-}" ]; then
+        words="$("$SPEAK_ALERT" --print "$@" 2>/dev/null)" || words="(not a valid alert) $*"
+        printf '[voice] %s\n' "$words" >&2
         return 0
     fi
-    [ -x /usr/bin/say ] && { /usr/bin/say "$msg" >/dev/null 2>&1 & }
+    [ -x "$SPEAK_ALERT" ] && SPEAK_SOURCE=ccw-watch "$SPEAK_ALERT" "$@" >/dev/null 2>&1
     return 0
 }
 
@@ -342,9 +342,9 @@ handle_bad(){ # handle_bad <kind> <detail-lines>
     tier_for_days "$days"
     bad_banner "$TIER" "$days" "$head" "$detail"
     if [ "$transition" -eq 1 ]; then
-        voice_alert "Heads up. Capture cannot be confirmed."
+        voice_alert ccw-unconfirmed
     elif [ "$TIER" -ge 2 ]; then
-        voice_alert "Reminder. Capture has been unconfirmed for ${days} days."
+        voice_alert ccw-reminder "$days"
     fi
 }
 
