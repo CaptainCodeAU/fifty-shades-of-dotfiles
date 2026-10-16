@@ -1116,6 +1116,8 @@ behaviour is the same here. After the update `herdr integration status` reads
 - [`docs/TOOLCHAIN_CVE_CHECK.md`](TOOLCHAIN_CVE_CHECK.md) — the sibling floor watcher
 - [`docs/CI_WATCH.md`](CI_WATCH.md) — the alert-design rules this hook follows
 - [`docs/reference/tmux_cheatsheet.md`](reference/tmux_cheatsheet.md) — the incumbent
+- [`docs/HERDR_SIDEBAR.md`](HERDR_SIDEBAR.md) — the left sidebar, colours, naming, and
+  what an outside program can change (events, metadata, plugins, a pane's background)
 
 ### Capability references (written for an AI agent, not a human)
 
