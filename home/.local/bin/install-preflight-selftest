@@ -361,12 +361,12 @@ else bad "  and names the required repo path" "$(grep -i dangl -A3 <<<"$out_dead
 # POSITIVE CONTROL. Without this, every arm above passes just as well when the function
 # is broken and reports everything as missing.
 mkdir -p "$pj_scratch/ok/.claude/pj-global/notes" "$pj_scratch/ok/.claude/pj-voice" \
-         "$pj_scratch/ok/.claude/LIFEOS/USER/CONFIG" "$pj_scratch/ok/.claude/pj/.claude-plugin" \
+         "$pj_scratch/ok/.claude/pj/.claude-plugin" \
          "$pj_scratch/ok/.claude/pj/skills/wrap-up" "$pj_scratch/ok/.claude/pj/skills/health"
 : > "$pj_scratch/ok/.claude/pj-global/RULES.md"
 : > "$pj_scratch/ok/.claude/pj-global/notes/INDEX.md"
 mkdir -p "$pj_scratch/ok/.claude/pj-global/decisions"
-: > "$pj_scratch/ok/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md"
+: > "$pj_scratch/ok/.claude/pj-global/OPERATIONAL_RULES.md"
 : > "$pj_scratch/ok/.claude/pj/.claude-plugin/plugin.json"
 : > "$pj_scratch/ok/.claude/pj/skills/wrap-up/SKILL.md"
 : > "$pj_scratch/ok/.claude/pj/skills/health/SKILL.md"

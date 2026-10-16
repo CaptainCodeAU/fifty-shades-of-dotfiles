@@ -5196,7 +5196,7 @@ _write_pj_machine_file() {
 # REPORT ONLY. It clones nothing, writes nothing and never fails the install.
 #
 # WHY IT EXISTS. Code and wiring live in this repo; the personal content pj needs does not
-# (D-20260920-09). `pj-prompt-file` concatenates ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md
+# (D-20260920-09). `pj-prompt-file` concatenates ~/.claude/pj-global/OPERATIONAL_RULES.md
 # and ~/.claude/pj-global/RULES.md, and `pj` REFUSES to launch when it gets neither. So on a
 # fresh machine this installer can finish perfectly and `pj` still will not start -- measured
 # by reading pj:46-49 and pj-prompt-file:118, not guessed. Before P8a nothing said so.
@@ -5216,7 +5216,7 @@ PJ_PREREQS_OK=1
 _check_pj_prereqs() {
     local dotclaude="$HOME/.claude" ok=1 required="$HOME/CODE/Scaffoldings/fifty-shades-of-dotfiles"
     local rules="$dotclaude/pj-global/RULES.md"
-    local oprules="$dotclaude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md"
+    local oprules="$dotclaude/pj-global/OPERATIONAL_RULES.md"
     local p dead=""
 
     step "pj framework prerequisites (report only)"
@@ -5227,7 +5227,7 @@ _check_pj_prereqs() {
         if [[ -e "$dotclaude/pj-global/$p" ]]; then echo -e "  ${GREEN}✓${RESET} pj-global/$p"
         else echo -e "  ${YELLOW}~${RESET} $dotclaude/pj-global/$p missing"; fi
     done
-    if [[ -r "$oprules" ]]; then echo -e "  ${GREEN}✓${RESET} LIFEOS OPERATIONAL_RULES.md"
+    if [[ -r "$oprules" ]]; then echo -e "  ${GREEN}✓${RESET} pj-global/OPERATIONAL_RULES.md"
     else echo -e "  ${RED}✗${RESET} $oprules missing -- pj launches without Gavin's operating rules"; ok=0; fi
     if [[ -d "$dotclaude/pj-voice" ]]; then echo -e "  ${GREEN}✓${RESET} pj-voice plugin dir"
     else echo -e "  ${RED}✗${RESET} $dotclaude/pj-voice missing -- the pj output style will not load"; ok=0; fi
