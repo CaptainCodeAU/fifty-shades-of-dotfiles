@@ -46,7 +46,7 @@ REAL_PROMPT="$(readlink -f "$REAL_PROMPT" 2>/dev/null || printf '%s' "$REAL_PROM
 # ----------------------------------------------------------------- fixture ----
 DF="$T/dotfiles"; H="$T/home-claude"; BIN="$T/bin"; STATE="$T/state"; PROJ="$T/proj"
 mkdir -p "$DF/home/.local/bin" "$DF/home/.claude/hooks" "$DF/home/.claude/pj/.claude-plugin" "$DF/home/.claude/pj/skills/wrap-up" "$DF/settings/claude" \
-         "$H/skills/herdr" "$H/skills/AgentRelay" "$H/skills/ISA" "$H/pj/.claude-plugin" "$H/pj/skills/wrap-up" "$H/hooks" \
+         "$H/skills/herdr" "$H/skills/AgentRelay" "$H/pj/.claude-plugin" "$H/pj/skills/wrap-up" "$H/hooks" \
          "$H/pj-global/decisions" "$H/pj-global/notes" "$H/projects" "$BIN" "$STATE/no-wrap-up" "$PROJ/.claude" "$T/cache" "$T/drawer/items"
 
 fake(){   # fake <path> <body>   an executable that runs <body> with "$@"
@@ -85,7 +85,7 @@ done
 for h in enforce-secret-probe.sh enforce-census.sh enforce-herdr-skill.sh mark-herdr-skill-read.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh pj-voice-contract.sh enforce-pj-workers.sh; do ln -s "$DF/home/.claude/hooks/$h" "$H/hooks/$h"; done
 ln -s "$DF/home/.claude/pj/.claude-plugin/plugin.json" "$H/pj/.claude-plugin/plugin.json"
 ln -s "$DF/home/.claude/pj/skills/wrap-up/SKILL.md" "$H/pj/skills/wrap-up/SKILL.md"
-for s in herdr AgentRelay ISA; do echo "# $s" >"$H/skills/$s/SKILL.md"; done
+for s in herdr AgentRelay; do echo "# $s" >"$H/skills/$s/SKILL.md"; done
 OR="$H/pj-global/OPERATIONAL_RULES.md"; RULES="$H/pj-global/RULES.md"
 printf '# OPERATIONAL_RULES.md fixture\n- rule one\n' >"$OR"
 { echo "# pj-global RULES.md: fixture header line"; for i in $(seq 1 20); do echo "- pinned $i"; done; } >"$RULES"
@@ -94,7 +94,7 @@ printf 'name: fixture\nletter: A\n' >"$T/machine"
 printf 'project: p\nrepo: r\nended: t\nsession: s1\ntranscript: x\n\nproject: p\nrepo: r\nended: t\nsession: s2\ntranscript: y\n' >"$STATE/no-wrap-up/-tmp-proj"
 # the launcher fixtures (F3): a dry-run argv, what `whence -w pj; alias pj` prints, a ps listing, a .zshrc mtime
 printf '%s\n' claude --setting-sources project,local --settings "$HOME/.claude/settings.project.json" --append-system-prompt-file "$T/cache/prompt.md" \
-  --plugin-dir "$HOME/.claude/skills/herdr" --plugin-dir "$HOME/.claude/skills/ISA" --plugin-dir "$HOME/.claude/pj" \
+  --plugin-dir "$HOME/.claude/skills/herdr" --plugin-dir "$HOME/.claude/pj" \
   --dangerously-skip-permissions --effort high >"$T/dryrun"; cp "$T/dryrun" "$T/dryrun.ok"
 printf 'pj: command\n' >"$T/type-out"; cp "$T/type-out" "$T/type-out.ok"
 ZMT="$(date -j -f '%Y-%m-%d %H:%M:%S' '2026-09-21 01:00:00' +%s 2>/dev/null || date -d '2026-09-21 01:00:00' +%s)"
@@ -155,7 +155,7 @@ mk_transcript(){   # mk_transcript <file> <first_turn_tokens> [card_n] [ci_n] [r
   local marker; marker="$(head -1 "$RULES" | cut -c1-60)"; [ "$rules" -eq 1 ] || marker="no rules here"
   {
     echo "{\"type\":\"user\",\"entrypoint\":\"$ep\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}"
-    [ "$plug" -eq 1 ] && echo '{"type":"attachment","attachment":{"type":"skill_listing","text":"herdr:herdr ISA:ISA pj:wrap-up"}}'
+    [ "$plug" -eq 1 ] && echo '{"type":"attachment","attachment":{"type":"skill_listing","text":"herdr:herdr pj:wrap-up"}}'
     for i in $(seq 1 "$card"); do echo '{"type":"attachment","attachment":{"type":"hook_success","hookName":"SessionStart:startup","stdout":"pj start card: proj\nOpen items: 0\n"}}'; done
     for i in $(seq 1 "$ci"); do echo '{"type":"attachment","attachment":{"type":"hook_success","hookName":"SessionStart:startup","stdout":"CI watch (live)\n"}}'; done
     echo '{"type":"attachment","attachment":{"type":"output_style","style":"pj-voice:pj-voice"}}'
@@ -391,7 +391,7 @@ arm "selftests present, not run" has selftests "not run"
 
 # 1. launcher (F3)
 arm "launcher PASS names the script and no alias" has launcher "is a command, no alias"
-arm "launcher PASS counts 3 plugin dirs (pj-voice retired, option A)" has launcher "3 plugin dirs"
+arm "launcher PASS counts 2 plugin dirs (pj-voice retired, option A; ISA unwired with LifeOS)" has launcher "2 plugin dirs"
 awk -v skip="$HOME/.claude/pj" '$0=="--plugin-dir"{getline v; if (v==skip) next; print; print v; next} {print}' "$T/dryrun.ok" >"$T/dryrun"; run
 arm "launcher FAIL when a plugin-dir is missing from the dry-run" is launcher FAIL; arm "launcher FAIL names the dir" has launcher "plugin-dir ~/.claude/pj]"
 sed "s#$T/cache/prompt.md#$H/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md#" "$T/dryrun.ok" >"$T/dryrun"; run
@@ -477,7 +477,7 @@ arm "output-style fix never says restore pj-voice" bash -c '! grep -q "restore ~
 mv "$H/settings.project.json" "$T/sp.bak"; run; arm "output-style NOT MEASURED when settings file absent" is output-style "$NM"; arm "hooks-sync NOT MEASURED when settings file absent" is hooks-sync "$NM"; arm "hook-orphans NOT MEASURED when settings file absent" is hook-orphans "$NM"; mv "$T/sp.bak" "$H/settings.project.json"
 
 # 3. plugin dirs
-mv "$H/skills/ISA/SKILL.md" "$T/isa.bak"; run; arm "plugin-dirs FAIL on an empty plugin dir" is plugin-dirs FAIL; arm "plugin-dirs names it" has plugin-dirs "skills/ISA"; mv "$T/isa.bak" "$H/skills/ISA/SKILL.md"
+mv "$H/skills/herdr/SKILL.md" "$T/herdr.bak"; run; arm "plugin-dirs FAIL on an empty plugin dir" is plugin-dirs FAIL; arm "plugin-dirs names it" has plugin-dirs "skills/herdr"; mv "$T/herdr.bak" "$H/skills/herdr/SKILL.md"
 
 # 4. prompt file
 mv "$OR" "$T/or.bak"; run; arm "prompt-file NOT MEASURED when a source is missing" is prompt-file "$NM"; arm "rules-budget still PASS" is rules-budget PASS
@@ -719,7 +719,7 @@ arm "bin-strays never FAILs" not_has bin-strays "FAIL"
 arm "bin-strays says why it matters" has bin-strays "versioned nowhere"
 
 # M17 frontmatter (P10, W-20260921-A43). WARN, never FAIL. The baseline fixture holds the
-# three skill SKILL.md files and no agents/, so the baseline row already PASSes on 3.
+# two skill SKILL.md files (herdr, AgentRelay) and no agents/, so the baseline row already PASSes on 2.
 # These arms add three agents: one clean file (a control that must stay quiet), one quoted
 # file with a colon inside (must stay quiet: quoting is the fix), one block scalar (quiet),
 # and then the defect itself, which must be named.
@@ -729,7 +729,7 @@ printf -- "---\nname: quoted\ndescription: 'One invariant: quoted, so the colon 
 printf -- '---\nname: block\ndescription: >-\n  A block scalar: colons are fine here\n---\nbody\n' > "$H/agents/block.md"
 run
 arm "frontmatter PASS with three clean shapes (plain, quoted, block scalar)" is frontmatter PASS
-arm "frontmatter states its population (3 skills + 3 agents)" has frontmatter "6 frontmatters"
+arm "frontmatter states its population (2 skills + 3 agents)" has frontmatter "5 frontmatters"
 printf -- '---\nname: bad\ndescription: One invariant: Forge never audits its own output\n---\nbody\n' > "$H/agents/bad.md"
 run
 arm "frontmatter WARNs on an unquoted description holding ': '" is frontmatter WARN
