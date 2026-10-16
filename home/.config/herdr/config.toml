@@ -172,12 +172,12 @@ move_tab_next = "prefix+shift+right"
 [[keys.command]]
 key = "ctrl+alt+backtick"
 type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --toggle'"
+command = "sh -c 'exec env SPEAK_SOURCE=herdr \"$HOME/.local/bin/speak-clipboard\" --toggle'"
 
 [[keys.command]]
 key = "prefix+backtick"
 type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --toggle'"
+command = "sh -c 'exec env SPEAK_SOURCE=herdr \"$HOME/.local/bin/speak-clipboard\" --toggle'"
 
 # Speech rate and volume, on the digits beside the speak key (Gavin's
 # layout, 2026-10-08): 1 slower / 2 faster by 20 wpm, 3 quieter / 4 louder
@@ -194,34 +194,34 @@ command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --toggle'"
 [[keys.command]]
 key = "ctrl+alt+1"
 type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --set rate -20'"
+command = "sh -c 'exec env SPEAK_SOURCE=herdr \"$HOME/.local/bin/speak-clipboard\" --set rate -20'"
 
 [[keys.command]]
 key = "ctrl+alt+2"
 type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --set rate +20'"
+command = "sh -c 'exec env SPEAK_SOURCE=herdr \"$HOME/.local/bin/speak-clipboard\" --set rate +20'"
 
 [[keys.command]]
 key = "ctrl+alt+3"
 type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --set volume -10'"
+command = "sh -c 'exec env SPEAK_SOURCE=herdr \"$HOME/.local/bin/speak-clipboard\" --set volume -10'"
 
 [[keys.command]]
 key = "ctrl+alt+4"
 type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --set volume +10'"
+command = "sh -c 'exec env SPEAK_SOURCE=herdr \"$HOME/.local/bin/speak-clipboard\" --set volume +10'"
 
 # ctrl+alt+9: show the current settings as a notification, even with the
 # notify setting off (--notify overrides it for this one command).
 [[keys.command]]
 key = "ctrl+alt+9"
 type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --notify --settings'"
+command = "sh -c 'exec env SPEAK_SOURCE=herdr \"$HOME/.local/bin/speak-clipboard\" --notify --settings'"
 
 [[keys.command]]
 key = "ctrl+alt+0"
 type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --reset all'"
+command = "sh -c 'exec env SPEAK_SOURCE=herdr \"$HOME/.local/bin/speak-clipboard\" --reset all'"
 
 # Skip and stop by hand (Gavin, 2026-10-10). A second voice waits in line
 # behind the first (--queue, run from code, not a key). ctrl+alt+6 skips:
@@ -231,12 +231,12 @@ command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --reset all'"
 [[keys.command]]
 key = "ctrl+alt+6"
 type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --skip'"
+command = "sh -c 'exec env SPEAK_SOURCE=herdr \"$HOME/.local/bin/speak-clipboard\" --skip'"
 
 [[keys.command]]
 key = "ctrl+alt+7"
 type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --stop'"
+command = "sh -c 'exec env SPEAK_SOURCE=herdr \"$HOME/.local/bin/speak-clipboard\" --stop'"
 
 [ui.toast]
 delivery = "system"

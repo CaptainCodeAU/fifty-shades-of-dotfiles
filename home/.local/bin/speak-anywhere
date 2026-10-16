@@ -109,6 +109,7 @@ PLIST
     <dict>
         <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$HOME/.local/bin</string>
         <key>LANG</key><string>en_AU.UTF-8</string>
+        <key>SPEAK_SOURCE</key><string>speak-anywhere</string>
     </dict>
     <key>RunAtLoad</key><true/>
     <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>

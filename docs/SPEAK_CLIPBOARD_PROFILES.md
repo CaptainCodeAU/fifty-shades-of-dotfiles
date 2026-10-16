@@ -785,3 +785,45 @@ snapshot: macOS adds `public.utf16-external-plain-text` by itself.
 **Log:** `~/.local/state/herdr/speak-anywhere.log`, one line per press: the
 app in front, the path (`stop`, `terminal-clipboard`, `ax`, `copy`,
 `clipboard`, `no-permission`), characters and milliseconds. Never the text.
+
+**A switch that is on can still mean no permission (16 Oct, 2:05 PM).** The
+first build started at 12:41 PM and asked for Accessibility, which made the
+entry in System Settings. It was rebuilt at 12:42 PM, so the entry pointed
+at a build that no longer existed: Gavin's screenshot showed the switch on,
+and a restart at 2:05 PM still logged `accessibility=NO`. Removing the entry
+with `-` and adding `~/Applications/Speak Anywhere.app` with `+` fixed it
+(`accessibility granted` at 2:06 PM). So: never rebuild after the first start
+without saying the grant must be redone.
+
+**The clash that made two voices (16 Oct, 12:58 PM).** The Mac's own Speak
+Selection was on `cmd+option+backtick` (speech prefs
+`SpokenUIUseSpeakingHotKeyCombo = 2354`: key 50, the backtick, plus 0x900,
+Command and Option), and Brave had custom menu shortcuts "Start Speaking" on
+the same key and "Stop Speaking" on `cmd+option+1`. A press spoke the Brave
+highlight in the Mac's voice and the clipboard through the helper, in either
+order. The Mac's main shortcut list (`com.apple.symbolichotkeys`) holds
+neither, so checking it alone missed the clash; app menu shortcuts are
+`NSUserKeyEquivalents` in each app's domain. Gavin moved Speak Selection to
+`cmd+option+2` (now 2323) and, on Q34: 1, both Brave shortcuts were removed.
+
+## Who pressed: `source=` in the speak log (Gavin, 16 Oct: Q35: 1)
+
+Every line `speak-clipboard` writes to `~/.local/state/herdr/speak-clipboard.log`
+(a press, and a relayed press on a box that is not a Mac) now ends with
+`source=<name>`, taken from the `SPEAK_SOURCE` the caller sets. Before, the
+only clue was `ppid=`, a number to look up by hand that changes with every
+restart.
+
+| Caller                           | Sets                         |
+| -------------------------------- | ---------------------------- |
+| herdr's speak keys (config.toml) | `herdr`                      |
+| `Speak Anywhere.app` (its plist) | `speak-anywhere`             |
+| `speak-relay`, per box           | `speak-relay:<box>`          |
+| anything else (T33Remap today)   | nothing, so `unknown`        |
+
+Only letters, digits and `. _ : -` are kept, at most 64 characters, so a
+caller cannot write anything else into the log. The helper's name is set in
+its LaunchAgent, not in its code, because a rebuild loses the Accessibility
+grant; the app in front stays in the helper's own log, at the same second.
+Tests: 4 new arms (unset, given, unsafe characters cut, a relayed press), 283
+of 283 pass.

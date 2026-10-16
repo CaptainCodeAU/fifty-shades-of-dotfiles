@@ -338,7 +338,8 @@
 # name, and a line that is not a setting.
 #
 # LOGS (~/.local/state/herdr/, never any text): speak-clipboard.log has one
-# line per press (mode, outcome, profile, exit code, problems);
+# line per press (mode, outcome, profile, exit code, problems, and
+# source=, who pressed: see SPEAK_SOURCE below);
 # the player adds when its sound began ("mode=line ... outcome=sound
 # after=1.42s") or that none did ("outcome=no-sound"), and a stop says
 # whether the line it stopped had made any sound ("sound=none ran=3.02s
@@ -448,6 +449,16 @@
 # ============================================================================
 set -uo pipefail
 
+# Who pressed (Gavin, dotfiles-main Q35: 1, 2026-10-16): each caller sets
+# SPEAK_SOURCE (herdr, speak-anywhere, speak-relay:<box>, t33remap ...) and
+# every log line ends with source=<it>; none set is "unknown". Only letters,
+# digits and . _ : - are kept, at most 64, so a caller cannot write anything
+# else into the log. Before, the only clue was ppid, a number to look up.
+_source="${SPEAK_SOURCE:-unknown}"
+_source="${_source//[!A-Za-z0-9._:-]/}"
+_source="${_source:0:64}"
+[ -n "$_source" ] || _source="invalid"
+
 # Relay to the Mac (Gavin, dotfiles-main Q22 (v2): 1, 2026-10-16; the
 # Mac-collects design from Q26 / NP-2 Q4: 3). herdr runs a key's command on its
 # server, so in a `herdr --remote` tab the speak keys run here on the remote
@@ -474,7 +485,7 @@ if [ "$_relay_mac" = 0 ]; then
             else
                 _relay_result="could not write $HOME/.local/state/herdr/speak-relay.queue"
             fi
-            printf '%s mode=relay args="%s" result="%s"\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" "$_relay_result" \
+            printf '%s mode=relay args="%s" result="%s" source=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" "$_relay_result" "$_source" \
                 >>"$HOME/.local/state/herdr/speak-clipboard.log" 2>/dev/null
             [ "$_relay_result" = queued ] && exit 0
             echo "speak-clipboard: relay to the Mac failed: $_relay_result" >&2
@@ -1374,7 +1385,7 @@ trace() {
     else
         ts="$(date -u +%FT%TZ)"
     fi
-    printf '%s mode=%s ppid=%s %s\n' "$ts" "$mode" "${PPID:-?}" "$*" >>"$_trace_file" 2>/dev/null
+    printf '%s mode=%s ppid=%s %s source=%s\n' "$ts" "$mode" "${PPID:-?}" "$*" "$_source" >>"$_trace_file" 2>/dev/null
 }
 
 # Log trimming runs once, at exit, off the press path. The lock needs no
@@ -2729,7 +2740,7 @@ STANDIN
         local w
         for w in STANDIN_MS_PER_CHAR STANDIN_VOICES STANDIN_SAY2_SLOW STANDIN_SAY2_FAIL STANDIN_SAY2_HANG \
                  STANDIN_FFPLAY_QUIET STANDIN_FFPLAY_NAN STANDIN_FFPLAY_FREEZE_AT STANDIN_FFPLAY_DIE_AT STANDIN_FFPLAY_STUCK \
-                 STANDIN_OSASCRIPT_FAIL LC_ALL _SPEAK_CLIPBOARD_RENDER_TIMEOUT; do
+                 STANDIN_OSASCRIPT_FAIL LC_ALL _SPEAK_CLIPBOARD_RENDER_TIMEOUT SPEAK_SOURCE _SPEAK_CLIPBOARD_OS; do
             if eval "[ -n \"\${$w+x}\" ]"; then eval "pe+=(\"$w=\${$w}\")"; fi
         done
         env -i HOME="$T/home" TMPDIR="$T/tmp" PATH="$bin:$T/sys" XDG_CONFIG_HOME="$A/cfg" \
@@ -3092,6 +3103,18 @@ notify=off
     _release; _ok "...the line ends by itself" _st_idle
     _ok "both voices, back to back, in ONE player"          [ "$(_runs 1)" = "7000*$n1 -9000*$n2" ]
     _ok "...no second player was started"                  eval '[ -e "$A/standin/ffplay.1.exit" ] && [ ! -e "$A/standin/ffplay.2.pcm" ]'
+    # source= (Q35: 1): who pressed, from SPEAK_SOURCE; "unknown" when it is
+    # unset; anything but letters, digits and . _ : - is dropped.
+    _st_arm source; _st_file "$P2"
+    echo "ab" | _st --stdin >/dev/null 2>&1; _st_idle
+    _ok "no SPEAK_SOURCE: the press line ends source=unknown" eval '[[ "$(_log_last)" == *" source=unknown" ]]'
+    echo "ab" | SPEAK_SOURCE=speak-anywhere _st --stdin >/dev/null 2>&1; _st_idle
+    _ok "SPEAK_SOURCE=speak-anywhere is logged as given"     eval '[[ "$(_log_last)" == *"outcome=started"*" source=speak-anywhere" ]]'
+    echo "ab" | SPEAK_SOURCE='x y=1;$(id)' _st --stdin >/dev/null 2>&1; _st_idle
+    _ok "spaces, = ; and \$( ) are dropped from the source" eval '[[ "$(_log_last)" == *" source=xy1id" ]]'
+    SPEAK_SOURCE=herdr _SPEAK_CLIPBOARD_OS=linux _st --stop >/dev/null 2>&1
+    _ok "a relayed press (not a Mac) logs its source too" \
+        eval '[[ "$(tail -n 1 "$T/home/.local/state/herdr/speak-clipboard.log" 2>/dev/null)" == *"mode=relay args=\"--stop\""*" source=herdr" ]]'
     _st_arm queue-gap; _st_file "$P2"; _hold
     echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
     echo "$t2" | _st --stdin --queue 150 --profile simone_fast >/dev/null 2>&1
@@ -3648,7 +3671,7 @@ notify=off
     _st_cleanup
     trap - EXIT INT TERM
     echo
-    local ran=$((pass + fail)) expected=279
+    local ran=$((pass + fail)) expected=283
     if [ "$fail" -eq 0 ] && [ $((ran + skipped)) -eq "$expected" ]; then
         if [ "$skipped" -eq 0 ]; then echo "speak-clipboard --selftest: all $pass checks passed.";
         else echo "speak-clipboard --selftest: all $pass checks passed, $skipped skipped (said above why)."; fi

@@ -99,7 +99,7 @@ sub fetch_argv {
 }
 
 sub speak_now {
-    my ($words) = @_;
+    my ($words, $host) = @_;
     my $pid = fork;
     return "fork: $!" unless defined $pid;
     if ($pid == 0) {
@@ -109,6 +109,8 @@ sub speak_now {
         open STDIN,  '<', '/dev/null';
         open STDOUT, '>', '/dev/null';
         open STDERR, '>', '/dev/null';
+        # Who pressed, for speak-clipboard's log (Q35: 1).
+        $ENV{SPEAK_SOURCE} = "speak-relay:$host";
         { no warnings 'exec'; exec { $speak } $speak, split(/ /, $words); }
         POSIX::_exit(127);
     }
@@ -130,7 +132,7 @@ sub handle {
         log_line("$host stale '$words' (${age}s old)");
         return;
     }
-    my $err = speak_now($words);
+    my $err = speak_now($words, $host);
     log_line($err ? "$host failed '$words' ($err)" : "$host ran '$words'");
 }
 
