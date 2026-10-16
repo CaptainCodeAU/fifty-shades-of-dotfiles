@@ -828,6 +828,13 @@ grant; the app in front stays in the helper's own log, at the same second.
 Tests: 4 new arms (unset, given, unsafe characters cut, a relayed press), 283
 of 283 pass.
 
+**A changed key command needs `herdr server reload-config`, not `prefix+r`.**
+herdr runs a key's command in its server, and `prefix+r` reloads only the
+client (docs/HERDR.md, "the keymap drifts too"). After `prefix+r` at about
+4:15 PM, herdr presses at 4:15 and 4:18 PM still logged `source=unknown`; the
+server had run since 13 Oct. `herdr server reload-config` answered
+`"status":"applied"` with no diagnostics at 4:19 PM.
+
 ## A voice that ran 2.5 times too slow at exactly 440 (16 Oct, 3:01 PM; Q36: 1)
 
 Gavin heard a herdr press start slowly and then pick up. The first part of
