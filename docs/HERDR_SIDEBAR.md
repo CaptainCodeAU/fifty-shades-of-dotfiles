@@ -120,7 +120,7 @@ saved machine: `herdr machine add codebox.lan` (Gavin ran it, about 2:01 AM). Th
 Mac's sidebar then also shows codebox's herdr server, its workspaces and its agents,
 labelled with the machine; Claude must be started in a pane of that machine.
 
-- Profile: label `codebox.lan`, default remote session (the one `herdr --remote` uses).
+- Profile: label `codebox` (renamed from `codebox.lan` the same night), host codebox.lan, default remote session (the one `herdr --remote` uses).
 - NP-2 checked it against codebox's lockdown (CB D-008): Mac -> codebox only, over the
   ssh connection's stdio, no forwards; the codebox.lan Host entry and its admin key,
   never the speak-relay key; decline any install or update prompt (codebox's herdr
