@@ -110,3 +110,26 @@ facts behind the choices and the options not taken.
   shows only when it is unusual.
 - herdr 0.9.5 fixes Claude Code questions not showing as blocked in named sessions
   (#5192); herdr notices still say "claude needs attention" whatever the name (#4332).
+
+## codebox as a herdr machine (17 Oct, Q47: 1, Q48: 1)
+
+A Claude session started inside a Mac pane that runs `ssh codebox.lan` is not an
+agent to the Mac's herdr: herdr names a pane's agent from its foreground process
+(`detect/mod.rs` lookup_agent), and that process is `ssh`. The supported route is a
+saved machine: `herdr machine add codebox.lan` (Gavin ran it, about 2:01 AM). The
+Mac's sidebar then also shows codebox's herdr server, its workspaces and its agents,
+labelled with the machine; Claude must be started in a pane of that machine.
+
+- Profile: label `codebox.lan`, default remote session (the one `herdr --remote` uses).
+- NP-2 checked it against codebox's lockdown (CB D-008): Mac -> codebox only, over the
+  ssh connection's stdio, no forwards; the codebox.lan Host entry and its admin key,
+  never the speak-relay key; decline any install or update prompt (codebox's herdr
+  is pinned, a golden save is the only route that changes it).
+- herdr writes its OWN ssh config ($TMPDIR/herdr-ssh-*/config, a 0700 folder) that
+  Includes ~/.ssh/config and adds ControlMaster=auto, ControlPersist=600, BatchMode,
+  StrictHostKeyChecking=yes, ServerAlive 15/4. ~/.ssh/config is not changed.
+- **The trade-off Gavin accepted:** the ControlMaster socket (`/tmp/hssh-501/`, folder
+  0700, socket 0600, both his) is a standing logged-in path to codebox while the
+  machine is enabled, usable by any process running as him, even after his keys
+  leave the ssh agent. `herdr machine disable <id>` turns it off.
+- A codebox refresh drops the machine; herdr reconnects by itself.
