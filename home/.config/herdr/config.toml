@@ -241,6 +241,17 @@ command = "sh -c 'exec env SPEAK_SOURCE=herdr \"$HOME/.local/bin/speak-clipboard
 [ui.toast]
 delivery = "system"
 
+# The "needs attention" sound (Gavin, 17 Oct, dotfiles-main Q46): a short camera click
+# from his sound library (button_bunny/sounds/clicks/camera-digital.wav). herdr plays
+# only mp3 (a .wav falls back to its own sound, src/config/sound.rs), so it is converted
+# into ~/.config/herdr/sounds/request.mp3 on each Mac, NOT kept in this public repo: the
+# clip is an Epidemic Sound file. Where it is missing (codebox, a new Mac), herdr plays
+# its default sound and `herdr config check` names the missing file. Recreate it with:
+#   ffmpeg -i ~/CODE/CaptainCodeAU/button_bunny/sounds/clicks/camera-digital.wav \
+#     -codec:a libmp3lame -q:a 2 ~/.config/herdr/sounds/request.mp3
+[ui.sound]
+request_path = "sounds/request.mp3"
+
 [experimental]
 switch_ascii_input_source_in_prefix = true
 pane_history = true
