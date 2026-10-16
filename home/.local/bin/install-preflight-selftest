@@ -388,6 +388,10 @@ if grep -q 'PJ_PREREQS_OK=0' <<<"$out_missing"; then ok "bare machine: PJ_PREREQ
 else bad "bare machine: PJ_PREREQS_OK=0" "$(grep PJ_PREREQS_OK <<<"$out_missing")"; fi
 if grep -q 'git clone' <<<"$out_missing"; then ok "bare machine: the block carries the clone commands"
 else bad "bare machine: the block carries the clone commands" "$(head -4 <<<"$out_missing")"; fi
+# LifeOS retired 16 Oct 2026 (engage #2092): OPERATIONAL_RULES.md is a pj-global file in dot-claude,
+# so the block names one private repo, never lifeos-private or a ~/.claude/LIFEOS/USER link.
+if grep -q -e 'lifeos-private' -e 'LIFEOS/USER' <<<"$out_missing"; then bad "bare machine: the block names dot-claude only, no LifeOS clone or link" "$(grep -e lifeos-private -e LIFEOS/USER <<<"$out_missing")"
+else ok "bare machine: the block names dot-claude only, no LifeOS clone or link"; fi
 if grep -q 're-run ./install.sh' <<<"$out_missing"; then ok "bare machine: it says what to do next"
 else bad "bare machine: it says what to do next" "$(head -4 <<<"$out_missing")"; fi
 # CONTROL, the other half: a complete machine must NOT print the block and must

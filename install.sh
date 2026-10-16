@@ -5284,13 +5284,12 @@ _check_pj_prereqs() {
         echo -e "${RED}${BOLD}  ════════════════════════════════════════════════════════════${RESET}"
         echo -e "${RED}${BOLD}   pj is not ready on this machine${RESET}"
         echo -e "${RED}${BOLD}  ════════════════════════════════════════════════════════════${RESET}"
-        warn "Everything this installer owns is done. pj itself will NOT launch until the items marked ✗ above exist. They live in two PRIVATE repos this installer deliberately does not clone:"
+        warn "Everything this installer owns is done. pj itself will NOT launch until the items marked ✗ above exist. They live in a PRIVATE repo this installer deliberately does not clone:"
         echo -e "      ${CYAN}git clone <dot-claude>      ~/.claude${RESET}          ${DIM}(pj-global/, pj-voice/, the plugin symlinks)${RESET}"
-        echo -e "      ${CYAN}git clone <lifeos-private>  ~/CODE/CaptainCodeAU/lifeos-private${RESET}"
-        echo -e "      ${DIM}then link ~/.claude/LIFEOS/USER -> that clone. Clone dot-claude BEFORE running stow.${RESET}"
+        echo -e "      ${DIM}Clone dot-claude BEFORE running stow. (LifeOS retired 16 Oct 2026: OPERATIONAL_RULES.md is in pj-global/.)${RESET}"
         echo -e "      ${DIM}And keep this repo at ${required} -- the tracked symlinks point there.${RESET}"
         echo
-        echo -e "      ${DIM}Then re-run ./install.sh. When both are present this block is replaced by${RESET}"
+        echo -e "      ${DIM}Then re-run ./install.sh. When it is present this block is replaced by${RESET}"
         echo -e "      ${DIM}one green line, and ${RESET}${CYAN}pj-health${RESET}${DIM}'s pj-global row is the standing proof.${RESET}"
         echo -e "${RED}${BOLD}  ════════════════════════════════════════════════════════════${RESET}"
     fi
