@@ -248,6 +248,11 @@ pane_history = true
 [ui]
 agent_panel_sort = "priority"
 
+# Accent for highlights, borders and navigation UI: the active pane's border
+# was the "terminal" theme's blue. Gavin, 16 Oct: "change its color to yellow
+# or something". A soft gold, readable on the dark red background.
+accent = "#ffd75f"
+
 # Agent state as distinct static SHAPES rather than dots that differ only by
 # colour (herdr 0.8.2, #2260). blocked / working / done / idle / unknown stay
 # apart at a glance and without relying on colour perception. Default is "dots".
@@ -323,3 +328,9 @@ auto_switch = false
 # active Space/Agent row highlight (theme.custom.active_row_bg, unset here).
 [theme.custom]
 selection_bg = "#313244"
+# Inactive pane borders and their titles (Gavin, 16 Oct). herdr 0.9.3 draws a
+# focused border in ui.accent and every other border in overlay0
+# (src/ui/panes.rs). overlay0 is also the sidebar's dim secondary text, the
+# scrollbar and the "unknown" agent state, so those change with it; there is
+# no border-only setting.
+overlay0 = "#5c4a4a"
