@@ -827,3 +827,34 @@ its LaunchAgent, not in its code, because a rebuild loses the Accessibility
 grant; the app in front stays in the helper's own log, at the same second.
 Tests: 4 new arms (unset, given, unsafe characters cut, a relayed press), 283
 of 283 pass.
+
+## A voice that ran 2.5 times too slow at exactly 440 (16 Oct, 3:01 PM; Q36: 1)
+
+Gavin heard a herdr press start slowly and then pick up. The first part of
+the text (cut at the first pause mark) was "Got it. From now on, anything
+for win_go_app_test goes from this session straight to win_go_app_test-main
+by message. You will not get words to type for it." Measured with the
+player's own say2 call (`--engine siri --format pcm -o -`):
+
+- at `-r 440` it is 9.33 s, every time (3 live streams, a file render, a
+  repeat); at 436, 438, 439, 441, 442 and 444 it is 3.75 s; at 175 it is 4.09 s
+- "Got it." plays at normal speed; everything after it in that part about
+  2.5 times slower than at 430 or 450
+- the fault is in Apple's engine, not say2: `-r 440` is native rate
+  2.5142857, and `--rate 2.5142857142857142` (and 2.51428571) gives 9.33 s
+  while 2.514285 gives 3.75 s
+- small word changes avoid it too ("Okay." for "Got it.": 3.93 s)
+- 40 random paragraphs of this doc at 430, 440 and 450: none affected; the
+  bad text, run first as the control, was caught
+
+Why one step matters, as far as can be seen from outside: the engine likely
+works out how long each sound lasts from the speed, and at that one exact
+number, for that sentence, takes a wrong turn (a rounding edge). One word a
+minute moves the number off the edge. That is an inference, not a measurement
+of Apple's code.
+
+Fix (Gavin, Q36: 1): both profiles moved from 440 to 441 wpm, which cannot
+be heard; the same text is 3.77 s at 441. Other text may hit the same fault
+at another speed, rarely; nothing here detects it. If it recurs, the next
+step is a guard in the player that re-renders a part whose audio is far
+longer than its text needs (Q36 option 2).
