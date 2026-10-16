@@ -903,3 +903,31 @@ refused with a 60-character control, the Mac path through a stand-in speaker, th
 queue line off the Mac, the relay's shapes and 8 refusals, both watchers off the old
 addresses). Against a `speak-alert` that refuses nothing, 3 checks fail. The watchers'
 own suites still pass: `ccw-watch-selftest` 45, `ci-watch-selftest` 168.
+
+## A key press stops only a key's speech (Gavin, 17 Oct: Q45: 1)
+
+At 12:05 AM a herdr press started reading 3,142 characters; at 12:06 AM T33Remap
+read a reply with a plain press, which replaced it (`outcome=replaced`). At 12:07:43
+AM Gavin pressed again while a T33Remap "needs you" notice played: the toggle rule
+("any press while speaking stops") stopped the notice and read nothing, and two
+seconds later T33Remap spoke another notice. Headphones and volume were fine; every
+press logged `outcome=sound` within 0.7 s.
+
+Now the pid file's fourth line records the mode of the press that started the line.
+A `--toggle` press stops the speech only when a `--toggle` press started it (or the
+file predates this, with no fourth line). Speech started any other way, such as
+T33Remap's plain presses, is replaced by the key's own text, logged `outcome=replaced`.
+A second key press then stops it, as before.
+
+The other half, T33Remap queueing its automatic speech behind a key's reading
+instead of replacing it, is button_bunny's, asked of `understander`.
+
+Known gap until Speak Anywhere's next rebuild (W-20261016-A04): the helper checks
+"is anything speaking" itself and then runs `speak-clipboard --toggle` with no text.
+In a non-terminal app, a press during T33Remap's speech therefore reads the CLIPBOARD,
+not the highlight. A press when nothing speaks reads the highlight as before.
+
+Tests: 3 new arms (a key press during a plain press's speech is `replaced` and reads
+its text; a second key press stops it). Four older stop tests started their speech
+with a plain press, the way T33Remap does, and now start it with `--toggle`, which is
+what their names test. 286 of 286 pass.

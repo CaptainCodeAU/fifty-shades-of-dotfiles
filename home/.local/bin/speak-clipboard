@@ -1597,7 +1597,7 @@ start_speaker() {
             >/dev/null 2>>"$_render_log" 9>&- &
     fi
     local p=$!
-    printf '%s\n%s\n' "$p" "$(_start_of "$p")" >"$_pid_file"
+    printf '%s\n%s\n\n%s\n' "$p" "$(_start_of "$p")" "$mode" >"$_pid_file"
 }
 
 # A new line player with this press's voice first in it. The press opens
@@ -1621,7 +1621,7 @@ start_line() {
         3<&7 7<&- >/dev/null 2>>"$_render_log" 8>&- 9>&- &
     set +m
     local p=$!
-    printf '%s\n%s\nline\n' "$p" "$(_start_of "$p")" >"$_pid_file"
+    printf '%s\n%s\nline\n%s\n' "$p" "$(_start_of "$p")" "$mode" >"$_pid_file"
     _send_voice "$lead_in" >&7
     exec 7<&-
 }
@@ -3115,6 +3115,17 @@ notify=off
     SPEAK_SOURCE=herdr _SPEAK_CLIPBOARD_OS=linux _st --stop >/dev/null 2>&1
     _ok "a relayed press (not a Mac) logs its source too" \
         eval '[[ "$(tail -n 1 "$T/home/.local/state/herdr/speak-clipboard.log" 2>/dev/null)" == *"mode=relay args=\"--stop\""*" source=herdr" ]]'
+    # Q45: 1 (17 Oct): a key press stops only speech a key started; speech
+    # another program started (a plain press, as T33Remap makes) is replaced.
+    _st_arm owner; _st_file "$P2"; _hold
+    echo "$t1" | _st --stdin >/dev/null 2>&1
+    _wait_for 5 _size_is 1 $((n1 * 2))
+    echo "$t2" | _st --toggle --stdin >/dev/null 2>&1
+    _ok "a key press during another program's speech reads its own text"  _has "$(_log_last)" "mode=toggle"
+    _ok "...logged as replaced, not stopped"                               _has "$(_log_last)" "outcome=replaced"
+    echo "$t2" | _st --toggle --stdin >/dev/null 2>&1
+    _ok "a second key press then stops it, since a key started it"        _has "$(_log_last)" "outcome=stopped"
+    _release; _st_idle
     _st_arm queue-gap; _st_file "$P2"; _hold
     echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
     echo "$t2" | _st --stdin --queue 150 --profile simone_fast >/dev/null 2>&1
@@ -3240,7 +3251,8 @@ notify=off
     _ok "...the waiting voice never plays"                  eval '[ "$(_runs 1)" = "7000*$n1" ] && [ ! -e "$A/standin/ffplay.3.pcm" ]'
     _ok "...the new text plays alone (volume 50: 1500)"     [ "$(_runs 2)" = "1500*$(_n 5 100)" ]
     _st_arm toggle; _st_file "$P2"; _hold
-    echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
+    # Started by a key press (--toggle): since Q45: 1 a key stops only a key's speech.
+    echo "$t1" | _st --stdin --toggle >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
     echo "$t2" | _st --stdin --toggle >/dev/null 2>&1
     _ok "--toggle while speaking stops"                     _has "$(_log_last)" "outcome=stopped"
     _ok "...every player and render gone within 1 s"        _wait_for 1 _all_gone
@@ -3328,7 +3340,7 @@ notify=off
     _st --stop >/dev/null 2>&1; _release
     _ok "--stop after the sound began: sound=yes"           _has "$(_log_last)" "outcome=stopped sound=yes"
     _st_arm sound-toggle; _st_file "$P2"; _hold
-    echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
+    echo "$t1" | _st --stdin --toggle >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
     echo "$t1" | _st --stdin --toggle >/dev/null 2>&1; _release
     _ok "a --toggle stop before any sound: sound=none"      _has "$(_log_last)" "outcome=stopped sound=none ran="
     _st_arm sound-replace; _st_file "$P2"; _hold
@@ -3385,12 +3397,12 @@ notify=off
     else
         export STANDIN_MS_PER_CHAR=100
         _st_arm locale-1; _st_file "$P2"; _hold
-        echo "$t1" | LC_ALL=en_AU.UTF-8 _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
+        echo "$t1" | LC_ALL=en_AU.UTF-8 _st --stdin --toggle >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
         echo "$t1" | _st --stdin --toggle >/dev/null 2>&1
         _ok "started under en_AU, a toggle with no locale stops it" eval '_has "$(_log_last)" "outcome=stopped" && _wait_for 1 _all_gone'
         _release
         _st_arm locale-2; _st_file "$P2"; _hold
-        echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
+        echo "$t1" | _st --stdin --toggle >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
         echo "$t1" | LC_ALL=en_AU.UTF-8 _st --stdin --toggle >/dev/null 2>&1
         _ok "started with no locale, a toggle under en_AU stops it" eval '_has "$(_log_last)" "outcome=stopped" && _wait_for 1 _all_gone'
         _release
@@ -3671,7 +3683,7 @@ notify=off
     _st_cleanup
     trap - EXIT INT TERM
     echo
-    local ran=$((pass + fail)) expected=283
+    local ran=$((pass + fail)) expected=286
     if [ "$fail" -eq 0 ] && [ $((ran + skipped)) -eq "$expected" ]; then
         if [ "$skipped" -eq 0 ]; then echo "speak-clipboard --selftest: all $pass checks passed.";
         else echo "speak-clipboard --selftest: all $pass checks passed, $skipped skipped (said above why)."; fi
@@ -3927,12 +3939,22 @@ if [ "$mode" = "skip" ]; then
     exit 0
 fi
 
-# Toggle rule (v5): any press while speaking stops, whatever the clipboard
+# Toggle rule (v5): a press while speaking stops, whatever the clipboard
 # holds. Checked before the clipboard is read, so a stop costs no cleaner run.
+# Since 17 Oct (Gavin, dotfiles-main Q45: 1) it stops only speech a speak KEY
+# started (a --toggle press: the pid file's fourth line). Speech another
+# program started (T33Remap reading a reply or a "needs you" notice) is
+# replaced by this press's text instead, below, logged outcome=replaced. On
+# 17 Oct at 12:07 AM a press during a T33Remap notice only stopped the
+# notice, and Gavin's text was never read. A pid file from before this
+# change has no fourth line and counts as a key's, so it stops as before.
 if [ "$mode" = "toggle" ] && speaker_alive; then
-    stop_speaker
-    trace "outcome=stopped$_stop_note"
-    exit 0
+    _owner="$(sed -n 4p "$_pid_file" 2>/dev/null)"
+    if [ -z "$_owner" ] || [ "$_owner" = "toggle" ]; then
+        stop_speaker
+        trace "outcome=stopped$_stop_note"
+        exit 0
+    fi
 fi
 
 # Key repeat is a held key, so it counts only presses that read the
