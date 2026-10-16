@@ -2454,7 +2454,7 @@ fi
 # DOTFILES_PANE_TINT overrides the colour on any box; empty there means no tint.
 if [[ -o interactive && -t 1 ]]; then
     if [[ -z ${DOTFILES_PANE_TINT+x} && ${HOST%%.*} == codebox ]]; then
-        DOTFILES_PANE_TINT='#0f1a24'
+        DOTFILES_PANE_TINT='#0d2422'  # dark teal (Gavin, 17 Oct; navy #0f1a24 before)
     fi
     if [[ -n ${DOTFILES_PANE_TINT-} ]]; then
         printf '\e]11;%s\a' "$DOTFILES_PANE_TINT"
