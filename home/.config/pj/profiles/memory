@@ -14,11 +14,10 @@
 # redirects and the mechanism, so a report can show a marker from every edited file:
 #   pj-global/RULES.md      prompt_sources -> pj-prompt-file reads the branch copy
 #   pj-voice, the pj plugin plugins_root   -> --plugin-dir points into the worktree
-#   OPERATIONAL_RULES.md    prompt_sources -> the lifeos-private worktree's copy. It lives
-#                           in lifeos-private (reached through the ~/.claude/LIFEOS/USER
-#                           symlink), NOT in dot-claude, so a dot-claude branch cannot
-#                           carry an edit to it; that repo has its own worktree at
-#                           .worktree/memory on the same branch name.
+#   OPERATIONAL_RULES.md    prompt_sources -> the LIVE ~/.claude/pj-global copy. LifeOS is
+#                           retired (Q62: 1); the file was copied byte for byte into
+#                           dot-claude's pj-global, and the lifeos-private worktree copy
+#                           is no longer read.
 # The settings file stays ~/.claude/settings.project.json (RECORDS), so every hook
 # still runs from the live ~/.claude/hooks/. The drawer, rulings and pj-global that
 # open-items and decided write are always ~/.claude, whatever config_dir says.
@@ -29,14 +28,12 @@
 # THE WORKTREES ARE NOT REBUILT BY STOW OR install.sh. On a machine without them, this
 # profile's config dir is absent and pj-health's profile row WARNs, naming what to run:
 #   git -C ~/.claude worktree add ~/.claude-memory -b p10/memory
-#   git -C ~/CODE/CaptainCodeAU/lifeos-private worktree add \
-#       ~/CODE/CaptainCodeAU/lifeos-private/.worktree/memory -b p10/memory
 # then a /login and a trust dialog, once, like any new config dir.
 config_dir:      ~/.claude-memory
 setting_sources: project,local
 settings:        ~/.claude/settings.project.json
 prompt:          pj-prompt-file
-prompt_sources:  ~/CODE/CaptainCodeAU/lifeos-private/.worktree/memory/CONFIG/OPERATIONAL_RULES.md:~/.claude-memory/pj-global/RULES.md
+prompt_sources:  ~/.claude/pj-global/OPERATIONAL_RULES.md:~/.claude-memory/pj-global/RULES.md
 prompt_out:      ~/.cache/dotfiles/pj-system-prompt-memory.md
 plugins:         skills/herdr skills/ISA pj-voice pj
 plugins_root:    ~/.claude-memory
