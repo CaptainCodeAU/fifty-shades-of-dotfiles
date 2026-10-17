@@ -5078,7 +5078,7 @@ ${CC_SDK_VER:+  ·  SDK ${CYAN}${CC_SDK_VER}${RESET}}"
     fi
     if [[ -n "$PROFILE" ]]; then
         echo
-        echo -e "${BOLD}Profile ${PROFILE}:${RESET} the parts it leaves out are listed on the Mode line at the top; ${CYAN}docs/INSTALL_PROFILES.md${RESET} says why."
+        echo -e "${BOLD}Profile ${PROFILE}:${RESET} the parts it leaves out are listed on the Mode line at the top; ${CYAN}./install.sh --help${RESET} lists every flag."
     fi
 
     echo
@@ -5116,7 +5116,7 @@ show_help() {
     echo -e "  --skip-preflight          Skip pnpm conflict-detection AND the toolchain-takeover"
     echo -e "                            re-survey (does NOT skip consent itself -- see below)"
     echo
-    echo -e "${BOLD}Profiles, skip flags, unattended runs (docs/INSTALL_PROFILES.md):${RESET}"
+    echo -e "${BOLD}Profiles, skip flags, unattended runs:${RESET}"
     echo -e "  --profile NAME            A named bundle of the flags below. Known: codebox"
     echo -e "  --no-questions            Every yes/no prompt takes its recorded answer; typed gates decline"
     echo -e "  --no-sudo                 A step that needs sudo is printed and skipped, never run"
