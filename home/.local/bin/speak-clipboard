@@ -1597,7 +1597,7 @@ start_speaker() {
             >/dev/null 2>>"$_render_log" 9>&- &
     fi
     local p=$!
-    printf '%s\n%s\n\n%s\n' "$p" "$(_start_of "$p")" "$mode" >"$_pid_file"
+    printf '%s\n%s\n' "$p" "$(_start_of "$p")" >"$_pid_file"
 }
 
 # A new line player with this press's voice first in it. The press opens
@@ -1621,7 +1621,7 @@ start_line() {
         3<&7 7<&- >/dev/null 2>>"$_render_log" 8>&- 9>&- &
     set +m
     local p=$!
-    printf '%s\n%s\nline\n%s\n' "$p" "$(_start_of "$p")" "$mode" >"$_pid_file"
+    printf '%s\n%s\nline\n' "$p" "$(_start_of "$p")" >"$_pid_file"
     _send_voice "$lead_in" >&7
     exec 7<&-
 }
@@ -3950,8 +3950,9 @@ fi
 # read over T33Remap were stopped by a second press 2 to 4 s later. The stop
 # clears the line too. T33Remap reads this line's "mode=toggle ...
 # outcome=stopped ... source=herdr" shape to drop the replies it holds, so
-# keep that shape. The pid file's fourth line (who started it) is still
-# written; nothing reads it now.
+# keep that shape. Q45's fourth pid-file line (who started it) is no longer
+# written either (Gavin, dotfiles-main Q6: 1, #2906): the file is back to
+# its three lines, pid, start time and kind.
 if [ "$mode" = "toggle" ] && speaker_alive; then
     stop_speaker
     trace "outcome=stopped$_stop_note"

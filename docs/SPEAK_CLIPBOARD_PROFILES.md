@@ -957,8 +957,9 @@ The log line keeps its shape, `mode=toggle ppid=... outcome=stopped sound=... so
 T33Remap (button_bunny) reads those lines to drop the replies it holds, so a change to
 that shape must be told to button_bunny first.
 
-The pid file's fourth line (the mode of the press that started the speech) is still
-written; nothing reads it now. The Speak Anywhere gap above (a press during T33Remap's
+The pid file's fourth line (the mode of the press that started the speech) is no longer
+written either (dotfiles-main Q6: 1, #2906): the file is back to pid, start time and kind.
+The Speak Anywhere gap above (a press during T33Remap's
 speech read the clipboard, not the highlight) is gone with this rule: that press now
 stops.
 
