@@ -339,6 +339,8 @@ tab_bar_right_separator = " ┃ "
 # dropped, Gavin 17 Oct).
 # Swapped 17 Oct (Gavin): the workspace (the project folder) now leads line 1 and
 # the session name moved to line 2; the colours stayed with their lines.
+# herdr draws the workspace bold by default, so it carries bold = false here,
+# as in the spaces section (Gavin, 17 Oct, dotfiles-main Q52: 1).
 # Colours (Gavin, 16 Oct, Q40 then Q41: 2 and variation 5 of 6): herdr draws
 # the title and tab in overlay0, the dim border colour, so both get their own
 # fg here: white names on line 1, a muted warm grey line 2 (not bold) that
@@ -346,7 +348,7 @@ tab_bar_right_separator = " ┃ "
 # between entries: herdr's row_gap is whole lines only, 1 was too loose.
 [ui.sidebar.agents]
 row_gap = 0
-rows = [["state_icon", { token = "workspace", fg = "#ffffff" }, { token = "machine", fg = "#7fb0a8", rules = [{ equals = "Local", hide = true }] }], [{ token = "terminal_title_stripped", fg = "#c0ac90", bold = false }, { token = "tab", fg = "#c0ac90" }]]
+rows = [["state_icon", { token = "workspace", fg = "#ffffff", bold = false }, { token = "machine", fg = "#7fb0a8", rules = [{ equals = "Local", hide = true }] }], [{ token = "terminal_title_stripped", fg = "#c0ac90", bold = false }, { token = "tab", fg = "#c0ac90" }]]
 
 # Spaces section, coloured like the agents section (Gavin, 16 Oct): the space
 # name in white on line 1, the branch on line 2 in light sand #b0a084
