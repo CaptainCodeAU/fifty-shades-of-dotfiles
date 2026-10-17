@@ -343,7 +343,7 @@ tab_bar_right_separator = " ┃ "
 # purpose: not bold was tried (dotfiles-main Q52: 1) and Gavin, comparing the
 # two, went back to bold (17 Oct). The spaces section stays not bold.
 # The session name on line 2 is the spaces section's branch sand #b0a084
-# (Gavin, 17 Oct); the tab after it keeps the warm grey #c0ac90.
+# (Gavin, 17 Oct), and so is the tab after it (dotfiles-main Q53: 1).
 # Colours (Gavin, 16 Oct, Q40 then Q41: 2 and variation 5 of 6): herdr draws
 # the title and tab in overlay0, the dim border colour, so both get their own
 # fg here: white names on line 1, a muted warm grey line 2 (not bold) that
@@ -351,7 +351,7 @@ tab_bar_right_separator = " ┃ "
 # between entries: herdr's row_gap is whole lines only, 1 was too loose.
 [ui.sidebar.agents]
 row_gap = 0
-rows = [["state_icon", { token = "workspace", fg = "#ffffff" }, { token = "machine", fg = "#7fb0a8", rules = [{ equals = "Local", hide = true }] }], [{ token = "terminal_title_stripped", fg = "#b0a084", bold = false }, { token = "tab", fg = "#c0ac90" }]]
+rows = [["state_icon", { token = "workspace", fg = "#ffffff" }, { token = "machine", fg = "#7fb0a8", rules = [{ equals = "Local", hide = true }] }], [{ token = "terminal_title_stripped", fg = "#b0a084", bold = false }, { token = "tab", fg = "#b0a084" }]]
 
 # Spaces section, coloured like the agents section (Gavin, 16 Oct): the space
 # name in white on line 1, the branch on line 2 in light sand #b0a084
