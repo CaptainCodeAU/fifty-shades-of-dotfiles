@@ -17,9 +17,11 @@ facts behind the choices and the options not taken.
 - **Agents section:** line 1 the state mark, the workspace in bold white, then a
   remote machine name in soft teal `#7fb0a8`; line 2 the session's pane title in
   light sand `#b0a084` (the spaces section's branch colour), not bold, then the
-  tab in dusty blue `#8fb3d9`; no gap between entries (Q38 (v2): 1, Q40, Q41: 2,
-  variation 5 of 6; swapped and recoloured 17 Oct, Q52 tried and undone, Q53: 1
-  then Q54: 1).
+  tab in a dim periwinkle `#8186cf`; no gap between entries (Q38 (v2): 1, Q40,
+  Q41: 2, variation 5 of 6; swapped and recoloured 17 Oct, Q52 tried and undone,
+  Q53: 1, Q54: 1, then Q55 (v3): 1 after six colours tried live).
+- **No right-alignment:** a row's tokens are laid out left to right; herdr 0.9.3,
+  0.9.5 and master (17 Oct) have no align setting, and a rule cannot pad (Q56: 4).
 - **Spaces section:** the space name in white; the branch in light sand `#b0a084`
   (Q42: 1).
 - **Selected row bar** `#33201f`, **navigate cursor** `#432a28`. Each is ONE setting

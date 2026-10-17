@@ -343,9 +343,12 @@ tab_bar_right_separator = " ┃ "
 # purpose: not bold was tried (dotfiles-main Q52: 1) and Gavin, comparing the
 # two, went back to bold (17 Oct). The spaces section stays not bold.
 # The session name on line 2 is the spaces section's branch sand #b0a084
-# (Gavin, 17 Oct). The tab after it is dusty blue #8fb3d9, the opposite hue,
+# (Gavin, 17 Oct). The tab after it is a dim periwinkle #8186cf, a blue-violet,
 # so the two names do not run together for a dyslexic eye (Q53: 1 matched
-# them first; Gavin, dotfiles-main Q54: 1).
+# them first; dusty blue Q54: 1, then six tried live and dimmed twice,
+# Gavin, dotfiles-main Q55 (v3): 1). Contrast 4.57 on the selected row,
+# 3.90 on the navigate cursor row (below 4.5, accepted). herdr 0.9.3 to 0.9.5
+# cannot right-align a token; left as is (Q56: 4).
 # Colours (Gavin, 16 Oct, Q40 then Q41: 2 and variation 5 of 6): herdr draws
 # the title and tab in overlay0, the dim border colour, so both get their own
 # fg here: white names on line 1, a muted warm grey line 2 (not bold) that
@@ -353,7 +356,7 @@ tab_bar_right_separator = " ┃ "
 # between entries: herdr's row_gap is whole lines only, 1 was too loose.
 [ui.sidebar.agents]
 row_gap = 0
-rows = [["state_icon", { token = "workspace", fg = "#ffffff" }, { token = "machine", fg = "#7fb0a8", rules = [{ equals = "Local", hide = true }] }], [{ token = "terminal_title_stripped", fg = "#b0a084", bold = false }, { token = "tab", fg = "#8fb3d9" }]]
+rows = [["state_icon", { token = "workspace", fg = "#ffffff" }, { token = "machine", fg = "#7fb0a8", rules = [{ equals = "Local", hide = true }] }], [{ token = "terminal_title_stripped", fg = "#b0a084", bold = false }, { token = "tab", fg = "#8186cf" }]]
 
 # Spaces section, coloured like the agents section (Gavin, 16 Oct): the space
 # name in white on line 1, the branch on line 2 in light sand #b0a084
