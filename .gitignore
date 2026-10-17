@@ -41,6 +41,8 @@ node_modules/
 # Never commit private planning docs (internal infra hostnames, account
 # names, local paths) -- same .private convention as .zshrc.private above
 docs/*.private.md
+# install.sh profiles and who owns what on codebox: private (Gavin, 17 Oct 2026)
+docs/INSTALL_PROFILES.md
 
 # Never commit local-only SSH overrides (private hosts, ForwardAgent, etc.)
 home/.ssh/config.local
