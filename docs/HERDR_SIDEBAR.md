@@ -15,10 +15,11 @@ facts behind the choices and the options not taken.
 - **Active pane border** gold `#ffd75f` (`ui.accent`); **inactive borders** a dim
   warm grey `#5c4a4a` (`theme.custom.overlay0`).
 - **Agents section:** line 1 the state mark, the workspace in bold white, then a
-  remote machine name in soft teal `#7fb0a8`; line 2 the session's pane title and
-  the tab in light sand `#b0a084` (the spaces section's branch colour), not bold;
-  no gap between entries (Q38 (v2): 1, Q40, Q41: 2, variation 5 of 6; swapped and
-  recoloured 17 Oct, Q52 tried and undone, Q53: 1).
+  remote machine name in soft teal `#7fb0a8`; line 2 the session's pane title in
+  light sand `#b0a084` (the spaces section's branch colour), not bold, then the
+  tab in dusty blue `#8fb3d9`; no gap between entries (Q38 (v2): 1, Q40, Q41: 2,
+  variation 5 of 6; swapped and recoloured 17 Oct, Q52 tried and undone, Q53: 1
+  then Q54: 1).
 - **Spaces section:** the space name in white; the branch in light sand `#b0a084`
   (Q42: 1).
 - **Selected row bar** `#33201f`, **navigate cursor** `#432a28`. Each is ONE setting
