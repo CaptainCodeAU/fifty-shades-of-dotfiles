@@ -4481,8 +4481,9 @@ GITEOF"
         _ensure_python_313
     fi
 
-    # --- ccw (cc-warehouse), after uv: it is a uv tool ---
+    # --- ccw (cc-warehouse), after uv: it is a uv tool; then the plugin that calls it ---
     _ensure_ccw
+    _ensure_cc_capture_plugin
 
     # --- NVM ---
     # Pin the exact, audited tag (v${NVM_MIN_VERSION}); older nvm is affected by
@@ -4730,6 +4731,54 @@ _ccw_report_newer() {
         verbose "ccw: PyPI not reached, so a newer release was not looked for"
     elif [[ "$(_vercmp "$latest" "$have")" == "1" ]]; then
         info "ccw ${latest} is on PyPI (installed ${have}). Not installed by this run: raise CCW_MIN_VERSION in install.sh to take it."
+    fi
+    return 0
+}
+
+# The cc-capture plugin: the SessionEnd hook that hands each transcript to ccw. The
+# other half of cc-warehouse's setup contract ("install and enable it if it isn't
+# present at all yet"), under the same --skip-ccw switch, so capture is all or nothing
+# (Gavin, dotfiles-main Q5: 1, #2905, 17 Oct 2026). Present = in `claude plugin list
+# --json`. Present but DISABLED is a choice someone made, so it is reported, never
+# re-enabled. The marketplace is a public GitHub repo (no sign-in needed). Never `-y`:
+# that would accept a marketplace-declared command no one has read, so a plugin that
+# declares one is refused off a terminal, which is the safe way to fail. It acts on the
+# default Claude home (or CLAUDE_CONFIG_DIR when set), not engage's or makeitso's own.
+CC_CAPTURE_PLUGIN="cc-capture@cc-warehouse"
+CC_WAREHOUSE_MARKETPLACE="https://github.com/CaptainCodeAU/cc-warehouse.git"
+_ensure_cc_capture_plugin() {
+    [[ "$SKIP_CCW" == true ]] && return 0
+    if ! command -v claude &>/dev/null; then
+        info "cc-capture plugin not checked: Claude Code is not installed here (install.sh never installs it)."
+        return 0
+    fi
+    local list state
+    if ! list=$(claude plugin list --json 2>/dev/null) || ! jq -e 'type == "array"' <<<"$list" >/dev/null 2>&1; then
+        warn "cc-capture plugin not checked: 'claude plugin list --json' did not answer with a list."
+        return 0
+    fi
+    state=$(jq -r --arg id "$CC_CAPTURE_PLUGIN" 'map(select(.id == $id)) | if length == 0 then "missing" elif any(.enabled) then "enabled" else "disabled" end' <<<"$list")
+    case "$state" in
+        enabled)  success "cc-capture plugin installed and enabled (${CC_CAPTURE_PLUGIN})"; return 0 ;;
+        disabled) warn "cc-capture plugin is installed but DISABLED, so no transcript is archived. Left as it is; to turn it on: claude plugin enable ${CC_CAPTURE_PLUGIN}"; return 0 ;;
+    esac
+    info "cc-capture plugin is not installed: without it ccw is never called, and no transcript is archived."
+    confirm "Install the cc-capture plugin (${CC_CAPTURE_PLUGIN}) into Claude Code?" y y || return 0
+    local markets=""
+    markets=$(claude plugin marketplace list 2>/dev/null) || markets=""
+    if [[ "$markets" != *"$CC_WAREHOUSE_MARKETPLACE"* ]]; then
+        run_cmd claude plugin marketplace add "$CC_WAREHOUSE_MARKETPLACE" \
+            || { warn "claude plugin marketplace add ${CC_WAREHOUSE_MARKETPLACE} failed; the plugin was not installed."; return 0; }
+    fi
+    if ! run_cmd claude plugin install "$CC_CAPTURE_PLUGIN"; then
+        warn "claude plugin install ${CC_CAPTURE_PLUGIN} failed; transcripts are not archived until it works."
+        return 0
+    fi
+    [[ "$DRY_RUN" == true ]] && return 0
+    if claude plugin list --json 2>/dev/null | jq -e --arg id "$CC_CAPTURE_PLUGIN" 'any(.[]; .id == $id and .enabled)' >/dev/null 2>&1; then
+        success "cc-capture plugin installed and enabled; it takes effect in Claude sessions started from now on."
+    else
+        warn "claude plugin install ran, but ${CC_CAPTURE_PLUGIN} is not listed as enabled. Check: claude plugin list"
     fi
     return 0
 }
