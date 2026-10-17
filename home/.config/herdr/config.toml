@@ -329,14 +329,16 @@ tab_bar_right_separator = " ┃ "
 # ui.headless_cols; ignoring key" and that is the only reason it was caught.
 # Agents section of the left column (Gavin, 16 Oct, dotfiles-main Q38 (v2): 1).
 # Every agent here is Claude Code, so the default second line ("claude") said
-# nothing. Line 1 is the session's own name: Claude Code's pane title, which
-# pj sessions set to the session name (dotfiles-main, NP-2 ...). Line 2 is
-# where it is. "machine" is empty while only this Mac is attached; with a
+# nothing. The session's own name is Claude Code's pane title, which
+# pj sessions set to the session name (dotfiles-main, NP-2 ...); the other
+# line says where it is (see the 17 Oct swap below). "machine" is empty while only this Mac is attached; with a
 # second machine attached every row is labelled, local ones "Local". Since codebox became
 # a machine (17 Oct, Q48: 1), "Local" is hidden by a rule and a remote name shows on
-# line 1 after the session name, in soft teal #7fb0a8, so only agents on another machine
+# line 1 after the workspace, in soft teal #7fb0a8, so only agents on another machine
 # carry a label (the machine is labelled "codebox"; brackets were tried in the label and
 # dropped, Gavin 17 Oct).
+# Swapped 17 Oct (Gavin): the workspace (the project folder) now leads line 1 and
+# the session name moved to line 2; the colours stayed with their lines.
 # Colours (Gavin, 16 Oct, Q40 then Q41: 2 and variation 5 of 6): herdr draws
 # the title and tab in overlay0, the dim border colour, so both get their own
 # fg here: white names on line 1, a muted warm grey line 2 (not bold) that
@@ -344,7 +346,7 @@ tab_bar_right_separator = " ┃ "
 # between entries: herdr's row_gap is whole lines only, 1 was too loose.
 [ui.sidebar.agents]
 row_gap = 0
-rows = [["state_icon", { token = "terminal_title_stripped", fg = "#ffffff" }, { token = "machine", fg = "#7fb0a8", rules = [{ equals = "Local", hide = true }] }], [{ token = "workspace", fg = "#c0ac90", bold = false }, { token = "tab", fg = "#c0ac90" }]]
+rows = [["state_icon", { token = "workspace", fg = "#ffffff" }, { token = "machine", fg = "#7fb0a8", rules = [{ equals = "Local", hide = true }] }], [{ token = "terminal_title_stripped", fg = "#c0ac90", bold = false }, { token = "tab", fg = "#c0ac90" }]]
 
 # Spaces section, coloured like the agents section (Gavin, 16 Oct): the space
 # name in white on line 1, the branch on line 2 in light sand #b0a084
