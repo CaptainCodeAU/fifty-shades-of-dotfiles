@@ -126,6 +126,9 @@ SKIP_CCW=false               # ccw (cc-warehouse), the transcript archiver cc-ca
 SKIP_HERDR=false             # herdr (install, pin, service, plugin)
 SKIP_OMZ=false               # Oh My Zsh, its plugins and Powerlevel10k
 SKIP_GIT_IDENTITY=false      # the user.name / user.email prompt
+# Not a skip flag: only the codebox profile sets it. Places settings/codebox/claude-settings.json
+# as ~/.claude/settings.json (a copy, never a link); see _place_codebox_claude_settings.
+PLACE_CODEBOX_SETTINGS=false
 
 # --- Node.js default version ---
 # nvm alone leaves a box with no Node at all (measured: install.sh installed nvm and
@@ -5549,6 +5552,88 @@ _claude_post_stow() {
     _check_pj_prereqs
 }
 
+# codebox's ~/.claude/settings.json comes from settings/codebox/claude-settings.json
+# (Gavin, dotfiles-main Q4: 2, 17 Oct 2026; before that Network_Plan's regolden copied its
+# own template). Only the codebox profile runs this; --skip-claude still stows nothing
+# under ~/.claude. Rules, from Network_Plan-main's brief:
+#   - A COPY, never a stow link: Claude Code writes this file itself (/plugin, /tui, the
+#     theme), and through a link it would dirty the clone, which blocks codebox's refresh.
+#   - The source wins for the keys it has. A key on the box that the source lacks is KEPT
+#     and named, never dropped silently: Gavin changes settings live (/tui, /plugin).
+#     A value that differs is named and the source's value written.
+#   - Before any write, the old file is kept beside it as settings.json.pre-dotfiles.<time>.bak.
+#   - Nothing is written when the merged result equals the file already there.
+# A key is a leaf path through objects (arrays count as one value), named with dots.
+_place_codebox_claude_settings() {
+    [[ "$PLACE_CODEBOX_SETTINGS" == true ]] || return 0
+    local src="$REPO_DIR/settings/codebox/claude-settings.json"
+    local dst="$HOME/.claude/settings.json"
+    step "codebox: Claude Code settings"
+    if ! command -v jq &>/dev/null; then
+        warn "jq not found, so $(pretty_path "$dst") was not checked or placed."
+        return 0
+    fi
+    if ! jq -e 'type == "object"' "$src" >/dev/null 2>&1; then
+        warn "The source $(pretty_path "$src") is not a JSON object; nothing placed."
+        return 0
+    fi
+    local stamp bak tmp report merged
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    bak="$dst.pre-dotfiles.$stamp.bak"
+    if [[ -L "$dst" ]]; then
+        warn "$(pretty_path "$dst") is a link (to $(readlink "$dst")); it is moved aside and a copy of the source put in its place."
+        run_cmd mv "$dst" "$bak" || return 0
+        run_cmd cp "$src" "$dst" && [[ "$DRY_RUN" != true ]] && success "settings.json placed from the source (the link is kept as $(pretty_path "$bak"))"
+        return 0
+    fi
+    if [[ ! -e "$dst" ]]; then
+        run_cmd mkdir -p "$(dirname "$dst")"
+        run_cmd cp "$src" "$dst" && [[ "$DRY_RUN" != true ]] && success "settings.json placed from $(pretty_path "$src")"
+        return 0
+    fi
+    if ! jq -e 'type == "object"' "$dst" >/dev/null 2>&1; then
+        warn "$(pretty_path "$dst") is not a JSON object; it is kept as $(pretty_path "$bak") and the source put in its place."
+        run_cmd mv "$dst" "$bak" || return 0
+        run_cmd cp "$src" "$dst" && [[ "$DRY_RUN" != true ]] && success "settings.json placed from the source"
+        return 0
+    fi
+    # One jq pass: the keys only the box has, the keys whose values differ, the keys the
+    # box is missing, and the merged result (box, then the source over it).
+    report=$(jq -n --slurpfile L "$dst" --slurpfile S "$src" '
+        def lp: if type == "object" then (to_entries[] as $e | ($e.value | lp) as $p | [$e.key] + $p) else [] end;
+        def has_path($p): (try (getpath($p) != null) catch false);
+        $L[0] as $l | $S[0] as $s |
+        { extra:   [ $l | lp | select(. as $p | ($s | has_path($p)) | not) | join(".") ],
+          missing: [ $s | lp | select(. as $p | ($l | has_path($p)) | not) | join(".") ],
+          differ:  [ $s | lp | select(. as $p | ($l | has_path($p)) and (($l | getpath($p)) != ($s | getpath($p)))) | join(".") ],
+          same:    (($l * $s) == $l) }') || { warn "Could not compare $(pretty_path "$dst") with the source; nothing written."; return 0; }
+    local extra missing differ
+    extra=$(jq -r '.extra | join(", ")' <<<"$report")
+    missing=$(jq -r '.missing | join(", ")' <<<"$report")
+    differ=$(jq -r '.differ | join(", ")' <<<"$report")
+    [[ -n "$extra" ]] && info "On the box but not in the source, KEPT: ${extra}. To keep them for good, add them to settings/codebox/claude-settings.json."
+    if [[ "$(jq -r '.same' <<<"$report")" == true ]]; then
+        success "settings.json already holds every key and value of the source; nothing written."
+        return 0
+    fi
+    [[ -n "$differ" ]] && warn "Different on the box, the source's value is written: ${differ}."
+    [[ -n "$missing" ]] && info "Missing on the box, added from the source: ${missing}."
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] Would keep the old file as $(pretty_path "$bak") and write the merged settings.json."
+        return 0
+    fi
+    tmp="$dst.tmp.$$"
+    if ! merged=$(jq --slurpfile S "$src" '. * $S[0]' "$dst") || ! printf '%s\n' "$merged" > "$tmp"; then
+        warn "Could not write the merged settings; $(pretty_path "$dst") is unchanged."
+        [[ -e "$tmp" ]] && "$SAFE_RM" -f "$tmp" >/dev/null 2>&1
+        return 0
+    fi
+    cp -p "$dst" "$bak" && mv -f "$tmp" "$dst" \
+        && success "settings.json updated from the source (old file kept as $(pretty_path "$bak"))" \
+        || warn "Could not replace $(pretty_path "$dst"); the merged file is at $(pretty_path "$tmp")."
+    return 0
+}
+
 # ~/.zshrc.private.early is the machine-local file home/.zshrc reads BEFORE its
 # startup guards (section 3), the same file install.sh's takeover gate writes its
 # DOTFILES_ALLOW_* opt-outs to. A skip flag that changes what the stowed shell
@@ -5786,6 +5871,9 @@ main() {
     # prerequisites. All of it lives in ~/.claude, so --skip-claude skips all of it. ---
     _claude_post_stow
 
+    # --- codebox profile only: Claude Code's settings.json, placed as a copy ---
+    _place_codebox_claude_settings
+
     # --- Optional: pnpm-audit git hooks (confirm-gated) ---
     setup_pnpm_audit_hooks
 
@@ -5826,6 +5914,9 @@ _apply_profile() {
             SKIP_CLAUDE=true; SKIP_SSH=true; SKIP_SYSTEM_PACKAGES=true
             SKIP_TMUX=true; SKIP_DOCKER=true; SKIP_RUST=true; SKIP_YAZI=true
             SKIP_FONTS=true; SKIP_GIT_HOOKS=true
+            # Claude Code's settings on codebox come from this repo (Gavin, dotfiles-main Q4: 2,
+            # 17 Oct 2026); its CLAUDE.md stays with Network_Plan. docs/INSTALL_PROFILES.md.
+            PLACE_CODEBOX_SETTINGS=true
             ;;
         *)
             error "Unknown profile: $1 (known: codebox, none)"

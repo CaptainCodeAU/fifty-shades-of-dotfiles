@@ -1,0 +1,16 @@
+{
+  "cleanupPeriodDays": 1825,
+  "extraKnownMarketplaces": {
+    "cc-warehouse": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/CaptainCodeAU/cc-warehouse.git"
+      }
+    }
+  },
+  "tui": "fullscreen",
+  "theme": "dark",
+  "enabledPlugins": {
+    "cc-capture@cc-warehouse": true
+  }
+}

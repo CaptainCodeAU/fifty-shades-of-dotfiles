@@ -143,7 +143,8 @@ config, bun, herdr `HERDR_VERSION` from its pinned, sha256-verified Linux releas
 `~/.local/bin`, Oh My Zsh + the three plugins + Powerlevel10k, lazygit (GitHub release to
 `~/.local/bin`), ccw `CCW_MIN_VERSION` (cc-warehouse, a uv tool, since 2026-10-17). Then it stows `home/` minus the skipped names, enables the herdr systemd
 user unit, applies the npm guard to the new Node, adds the two marked blocks to
-`~/.zshenv`, and records `DOTFILES_PLAIN_CLAUDE=1`.
+`~/.zshenv`, records `DOTFILES_PLAIN_CLAUDE=1`, and places `~/.claude/settings.json` from
+`settings/codebox/claude-settings.json` (a copy; see "Who owns what on codebox").
 
 **It does not:** install Claude Code (nothing in `install.sh` ever does; the summary only
 points at the docs), touch git's remote URLs (the SSH `insteadOf` rewrites live only in
@@ -204,3 +205,42 @@ terminal, or by the recorded no-questions answer. So an unattended install shows
 (no-questions answer: yes)`, not as the `curl` it would run. The stow step is the
 exception: a dry run prints stow's own `-v2` plan (`stow -n` prints nothing at default
 verbosity, CLAUDE.md), so the LINK, UNLINK and MKDIR lines are listed.
+
+## Who owns what on codebox (17 Oct 2026)
+
+Gavin's rulings: Network_Plan-main Q7 "1 and 3" (write the split down; dotfiles takes over
+Claude's files on codebox), narrowed by dotfiles-main Q4: 2 the same evening (the settings
+file moves; CLAUDE.md stays private, because this repo is public and that file maps the
+box's guardrails). Network_Plan-main coordinates codebox (Gavin, dotfiles-main, 17 Oct).
+
+| Who | Owns on codebox |
+| --- | --- |
+| dotfiles (this repo, dotfiles-main) | `install.sh` and the `codebox` profile, the shell (`home/.zshrc` and the stowed files), the `claude()` launch wrapper, user-space tools (`ccw`), and `~/.claude/settings.json` (source: `settings/codebox/claude-settings.json`). |
+| Network_Plan (private, Network_Plan-main) | `~/.claude/CLAUDE.md` (its `templates/codebox-CLAUDE.md`), the golden images and rebuilds (`codebox-refresh.sh`), system packages (`golden-system.sh`), the network cage and the update window, GitHub, the token broker and the Apps, and the SCM/CB rules the instructions cite. |
+| Gavin | Anything beyond plain Claude Code (hooks, skills, permissions, MCP): his own ruling first, recorded by Network_Plan as a CB rule. His own commands on the box count (cc-capture, 17 Oct, CB D-024). |
+
+The route for a change: Gavin tells either session. dotfiles makes its part, proves it on
+codebox (dry run, real run, clean clone) and tells Network_Plan-main, which checks the box
+and rebuilds the golden on his "go ahead". A change to CLAUDE.md's wording that reaches
+dotfiles-main is sent to Network_Plan-main, never written here.
+
+### `~/.claude/settings.json` on codebox
+
+Placed by `_place_codebox_claude_settings`, in the `codebox` profile only (`--skip-claude`
+still stows nothing under `~/.claude`). It runs in every profile run, including the one
+`regolden` makes after a rollback to an older golden.
+
+- A COPY, never a stow link: Claude Code writes this file itself (`/plugin`, `/tui`, the
+  theme), and through a link it would dirty the clone, which blocks every refresh (CB D-015).
+- The source wins for the keys it has. A key on the box that the source lacks is KEPT and
+  named ("On the box but not in the source, KEPT: ..."), because Gavin changes settings
+  live. To keep one for good, add it to the source. A value that differs is named and the
+  source's value written. A key the source has and the box lacks is added.
+- Before any write the old file is kept beside it as `settings.json.pre-dotfiles.<time>.bak`.
+  Nothing is written when the box already holds every key and value of the source.
+- A link or a file that is not a JSON object is moved aside the same way, and the source copied in.
+
+Tested 17 Oct in throwaway homes, nine cases: missing, identical, an extra key (kept, nothing
+written), a different value plus an extra key (source value written, extra kept, backup
+holds the old), a missing key (added), not JSON, a link (moved aside, its target untouched),
+a dry run (nothing written), and a non-codebox run (nothing done).
