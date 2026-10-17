@@ -3168,7 +3168,7 @@ install_macos_prerequisites() {
                 export PNPM_HOME="$HOME/Library/pnpm"
                 export PATH="$PNPM_HOME/bin:$PATH"
                 # Regenerate zsh completion so .zshrc's `source "$PNPM_HOME/_pnpm"`
-                # picks up the just-installed pnpm version. Sourced at .zshrc:255.
+                # picks up the just-installed pnpm version. Sourced in .zshrc's "Source Other Completions" block.
                 if command -v pnpm &>/dev/null; then
                     pnpm completion zsh > "$PNPM_HOME/_pnpm" 2>/dev/null || true
                 fi
@@ -3402,7 +3402,7 @@ install_linux_prerequisites() {
             export PNPM_HOME="$HOME/.local/share/pnpm"
             export PATH="$PNPM_HOME/bin:$PATH"
             # Regenerate zsh completion so .zshrc's `source "$PNPM_HOME/_pnpm"`
-            # picks up the just-installed pnpm version. Sourced at .zshrc:255.
+            # picks up the just-installed pnpm version. Sourced in .zshrc's "Source Other Completions" block.
             if command -v pnpm &>/dev/null; then
                 pnpm completion zsh > "$PNPM_HOME/_pnpm" 2>/dev/null || true
             fi

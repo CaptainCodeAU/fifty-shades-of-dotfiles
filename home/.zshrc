@@ -203,7 +203,7 @@ fi
 # WSL stores Windows NVIDIA drivers here. When SSHing into WSL, this path
 # isn't automatically added, so we add it manually for GPU access.
 if [[ "$IS_WSL" == "true" && -d "/usr/lib/wsl/lib" ]]; then
-    export LD_LIBRARY_PATH="/usr/lib/wsl/lib:${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export LD_LIBRARY_PATH="/usr/lib/wsl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     path+=("/usr/lib/wsl/lib")
 fi
 
