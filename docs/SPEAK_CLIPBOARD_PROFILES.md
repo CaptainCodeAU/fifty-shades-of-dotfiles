@@ -749,6 +749,7 @@ press does is written at its top). Build, install, status and self-test:
 `speak-anywhere --install | --uninstall | --status | --selftest`.
 
 **One press:**
+
 - Speech playing: stop. Checked first, the same test as `speaker_alive`, so a
   stop never waits on a copy.
 - iTerm2, Ghostty or Terminal in front: speak the clipboard, as the herdr key
@@ -814,12 +815,12 @@ Every line `speak-clipboard` writes to `~/.local/state/herdr/speak-clipboard.log
 only clue was `ppid=`, a number to look up by hand that changes with every
 restart.
 
-| Caller                           | Sets                         |
-| -------------------------------- | ---------------------------- |
-| herdr's speak keys (config.toml) | `herdr`                      |
-| `Speak Anywhere.app` (its plist) | `speak-anywhere`             |
-| `speak-relay`, per box           | `speak-relay:<box>`          |
-| anything else (T33Remap today)   | nothing, so `unknown`        |
+| Caller                           | Sets                  |
+| -------------------------------- | --------------------- |
+| herdr's speak keys (config.toml) | `herdr`               |
+| `Speak Anywhere.app` (its plist) | `speak-anywhere`      |
+| `speak-relay`, per box           | `speak-relay:<box>`   |
+| anything else (T33Remap today)   | nothing, so `unknown` |
 
 Only letters, digits and `. _ : -` are kept, at most 64 characters, so a
 caller cannot write anything else into the log. The helper's name is set in
@@ -877,12 +878,12 @@ them. Found by engage-main; verified: nothing listened on either port.
 
 Now both call `speak-alert`, which knows four alerts and nothing else:
 
-| Alert | Words |
-| --- | --- |
-| `ci-red <label>` | Heads up. `<label>` C I just went red. |
-| `ci-reminder <days> <label>` | Reminder. `<label>` C I has been red for `<days>` days. |
-| `ccw-unconfirmed` | Heads up. Capture cannot be confirmed. |
-| `ccw-reminder <days>` | Reminder. Capture has been unconfirmed for `<days>` days. |
+| Alert                        | Words                                                     |
+| ---------------------------- | --------------------------------------------------------- |
+| `ci-red <label>`             | Heads up. `<label>` C I just went red.                    |
+| `ci-reminder <days> <label>` | Reminder. `<label>` C I has been red for `<days>` days.   |
+| `ccw-unconfirmed`            | Heads up. Capture cannot be confirmed.                    |
+| `ccw-reminder <days>`        | Reminder. Capture has been unconfirmed for `<days>` days. |
 
 `<label>` is 1-60 of `A-Za-z0-9 . _ / @ -` and space, not starting with a space or
 `-`; `<days>` is 1-4 digits (`ci-watch`'s `alert_label` trims a label to fit).
@@ -905,6 +906,9 @@ addresses). Against a `speak-alert` that refuses nothing, 3 checks fail. The wat
 own suites still pass: `ccw-watch-selftest` 45, `ci-watch-selftest` 168.
 
 ## A key press stops only a key's speech (Gavin, 17 Oct: Q45: 1)
+
+REPLACED the same day by dotfiles-main Q2: 1; see "A key press stops any speech"
+below. Kept for the reasoning.
 
 At 12:05 AM a herdr press started reading 3,142 characters; at 12:06 AM T33Remap
 read a reply with a plain press, which replaced it (`outcome=replaced`). At 12:07:43
@@ -931,3 +935,34 @@ Tests: 3 new arms (a key press during a plain press's speech is `replaced` and r
 its text; a second key press stops it). Four older stop tests started their speech
 with a plain press, the way T33Remap does, and now start it with `--toggle`, which is
 what their names test. 286 of 286 pass.
+
+## A key press stops any speech (Gavin, 17 Oct: dotfiles-main Q2: 1)
+
+Replaces Q45: 1 above. Gavin's words, in button_bunny's advisor session at about
+5:30 PM: "the button would then toggle the state, which means if it is already
+speaking, then pressing the button would stop it from speaking, and vice versa."
+
+Why: under Q45: 1, 11 presses read Gavin's clipboard over another program's speech
+(`outcome=replaced`), and 9 of those 11 were followed 2 to 4 seconds later by a
+second press that stopped it (counted in `~/.local/state/herdr/speak-clipboard.log`,
+17 Oct, 05:12 to 06:12 UTC). He pressed to silence T33Remap and got his clipboard
+read instead.
+
+Now a `--toggle` press while anything speaks stops it, whoever started it, reads
+nothing, and clears the line (anything waiting). A press when nothing speaks speaks,
+as before. The cost: reading your own text during another program's speech takes two
+presses, one to stop and one to speak; that is the 12:07 AM case above, accepted.
+
+The log line keeps its shape, `mode=toggle ppid=... outcome=stopped sound=... source=herdr`.
+T33Remap (button_bunny) reads those lines to drop the replies it holds, so a change to
+that shape must be told to button_bunny first.
+
+The pid file's fourth line (the mode of the press that started the speech) is still
+written; nothing reads it now. The Speak Anywhere gap above (a press during T33Remap's
+speech read the clipboard, not the highlight) is gone with this rule: that press now
+stops.
+
+Tests: the 3 Q45 arms became 4 (a key press during a plain press's speech is
+`stopped`, nothing is left speaking, the next key press is `started`). 287 of 287 pass.
+Against a copy with the Q45 rule put back, 3 of the 4 fail; the fourth only checks the
+press was logged as `mode=toggle`, which holds either way.

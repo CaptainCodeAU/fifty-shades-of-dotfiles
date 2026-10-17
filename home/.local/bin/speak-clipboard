@@ -3115,16 +3115,18 @@ notify=off
     SPEAK_SOURCE=herdr _SPEAK_CLIPBOARD_OS=linux _st --stop >/dev/null 2>&1
     _ok "a relayed press (not a Mac) logs its source too" \
         eval '[[ "$(tail -n 1 "$T/home/.local/state/herdr/speak-clipboard.log" 2>/dev/null)" == *"mode=relay args=\"--stop\""*" source=herdr" ]]'
-    # Q45: 1 (17 Oct): a key press stops only speech a key started; speech
-    # another program started (a plain press, as T33Remap makes) is replaced.
+    # Q2: 1 (17 Oct, replacing Q45: 1): a key press stops ANY speech, also
+    # speech another program started (a plain press, as T33Remap makes),
+    # reads nothing, and the next key press speaks.
     _st_arm owner; _st_file "$P2"; _hold
     echo "$t1" | _st --stdin >/dev/null 2>&1
     _wait_for 5 _size_is 1 $((n1 * 2))
     echo "$t2" | _st --toggle --stdin >/dev/null 2>&1
-    _ok "a key press during another program's speech reads its own text"  _has "$(_log_last)" "mode=toggle"
-    _ok "...logged as replaced, not stopped"                               _has "$(_log_last)" "outcome=replaced"
+    _ok "a key press during another program's speech stops it"            _has "$(_log_last)" "mode=toggle"
+    _ok "...logged as stopped, not replaced"                               _has "$(_log_last)" "outcome=stopped"
+    _ok "...and nothing is left speaking"                                  _wait_for 1 _all_gone
     echo "$t2" | _st --toggle --stdin >/dev/null 2>&1
-    _ok "a second key press then stops it, since a key started it"        _has "$(_log_last)" "outcome=stopped"
+    _ok "the next key press then speaks"                                   _has "$(_log_last)" "outcome=started"
     _release; _st_idle
     _st_arm queue-gap; _st_file "$P2"; _hold
     echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
@@ -3251,7 +3253,7 @@ notify=off
     _ok "...the waiting voice never plays"                  eval '[ "$(_runs 1)" = "7000*$n1" ] && [ ! -e "$A/standin/ffplay.3.pcm" ]'
     _ok "...the new text plays alone (volume 50: 1500)"     [ "$(_runs 2)" = "1500*$(_n 5 100)" ]
     _st_arm toggle; _st_file "$P2"; _hold
-    # Started by a key press (--toggle): since Q45: 1 a key stops only a key's speech.
+    # Started by a key press (--toggle); since Q2: 1 a key stops any speech.
     echo "$t1" | _st --stdin --toggle >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
     echo "$t2" | _st --stdin --toggle >/dev/null 2>&1
     _ok "--toggle while speaking stops"                     _has "$(_log_last)" "outcome=stopped"
@@ -3683,7 +3685,7 @@ notify=off
     _st_cleanup
     trap - EXIT INT TERM
     echo
-    local ran=$((pass + fail)) expected=286
+    local ran=$((pass + fail)) expected=287
     if [ "$fail" -eq 0 ] && [ $((ran + skipped)) -eq "$expected" ]; then
         if [ "$skipped" -eq 0 ]; then echo "speak-clipboard --selftest: all $pass checks passed.";
         else echo "speak-clipboard --selftest: all $pass checks passed, $skipped skipped (said above why)."; fi
@@ -3941,20 +3943,19 @@ fi
 
 # Toggle rule (v5): a press while speaking stops, whatever the clipboard
 # holds. Checked before the clipboard is read, so a stop costs no cleaner run.
-# Since 17 Oct (Gavin, dotfiles-main Q45: 1) it stops only speech a speak KEY
-# started (a --toggle press: the pid file's fourth line). Speech another
-# program started (T33Remap reading a reply or a "needs you" notice) is
-# replaced by this press's text instead, below, logged outcome=replaced. On
-# 17 Oct at 12:07 AM a press during a T33Remap notice only stopped the
-# notice, and Gavin's text was never read. A pid file from before this
-# change has no fourth line and counts as a key's, so it stops as before.
+# ANY speech stops, whoever started it: a speak key's, or another program's
+# such as T33Remap's plain or --queue presses (Gavin, dotfiles-main Q2: 1,
+# 17 Oct 2026, replacing that morning's Q45: 1, which let a key press read
+# over another program's speech). The log showed why: 9 of 11 presses that
+# read over T33Remap were stopped by a second press 2 to 4 s later. The stop
+# clears the line too. T33Remap reads this line's "mode=toggle ...
+# outcome=stopped ... source=herdr" shape to drop the replies it holds, so
+# keep that shape. The pid file's fourth line (who started it) is still
+# written; nothing reads it now.
 if [ "$mode" = "toggle" ] && speaker_alive; then
-    _owner="$(sed -n 4p "$_pid_file" 2>/dev/null)"
-    if [ -z "$_owner" ] || [ "$_owner" = "toggle" ]; then
-        stop_speaker
-        trace "outcome=stopped$_stop_note"
-        exit 0
-    fi
+    stop_speaker
+    trace "outcome=stopped$_stop_note"
+    exit 0
 fi
 
 # Key repeat is a held key, so it counts only presses that read the
