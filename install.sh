@@ -122,6 +122,7 @@ SKIP_NVM=false               # nvm and the default Node
 SKIP_PNPM=false              # pnpm (standalone)
 SKIP_BUN=false               # bun
 SKIP_UV=false                # uv and Python 3.13
+SKIP_CCW=false               # ccw (cc-warehouse), the transcript archiver cc-capture calls
 SKIP_HERDR=false             # herdr (install, pin, service, plugin)
 SKIP_OMZ=false               # Oh My Zsh, its plugins and Powerlevel10k
 SKIP_GIT_IDENTITY=false      # the user.name / user.email prompt
@@ -193,6 +194,19 @@ NODE_MIN_MAJOR="22"
 # a no-op until this floor is met. Keep in sync with BUN_MIN_VERSION in
 # home/.zsh_onboarding.
 BUN_MIN_VERSION="1.3.0"
+
+# --- ccw (cc-warehouse) version policy ---
+# ccw is the transcript archiver the cc-capture Claude Code plugin calls at every
+# SessionEnd; without it the hook logs "ccw is not installed" and archives nothing
+# (codebox, 17 Oct 2026: every SessionEnd since Gavin added the plugin). cc-warehouse's
+# docs/agent-setup-contract.md gives this installer the mechanical part: install ccw if
+# missing, raise it to this floor, and only REPORT a newer PyPI release (pin + floor +
+# notify), so a bump is a reviewed commit here. Installed with
+# `uv tool install cc-warehouse==<floor>`, which also upgrades from below the floor and is
+# a no-op at it (measured 2026-10-17 in a throwaway tool dir: 0.1.3 -> 0.1.4, then
+# "already installed", both exit 0). 0.1.4: published 2026-09-08, inside uv's
+# exclude-newer cutoff. --skip-ccw leaves it out.
+CCW_MIN_VERSION="0.1.4"
 
 # --- herdr release-cooldown policy ---
 # Days a herdr release must age before this estate adopts it. herdr has no
@@ -1658,7 +1672,7 @@ _stow_skip_names() {
 # system-packages, ...). Used by the Mode line and written to links/skips.
 _skip_flag_names() {
     local v n
-    for v in CLAUDE SSH SYSTEM_PACKAGES TMUX DOCKER RUST YAZI FONTS GIT_HOOKS NVM PNPM BUN UV HERDR OMZ GIT_IDENTITY; do
+    for v in CLAUDE SSH SYSTEM_PACKAGES TMUX DOCKER RUST YAZI FONTS GIT_HOOKS NVM PNPM BUN UV CCW HERDR OMZ GIT_IDENTITY; do
         n="SKIP_$v"
         [[ "${!n}" == true ]] && printf '%s\n' "$v" | tr 'A-Z_' 'a-z-'
     done
@@ -2238,6 +2252,8 @@ check_prerequisites() {
 
     echo -e "${BOLD}Optional:${RESET}"
     check_command_optional claude "Claude Code CLI" || true
+    if [[ "$SKIP_CCW" == true ]]; then echo -e "  ${DIM}-${RESET} ccw (cc-warehouse) — skipped (--skip-ccw)"
+    else check_command_optional ccw "ccw (cc-warehouse; installed in post-install)" || true; fi
     check_command_optional yazi     "yazi"     || true
     check_command_optional rustup   "rustup"   || true
     check_command_optional cargo    "cargo"    || true
@@ -4462,6 +4478,9 @@ GITEOF"
         _ensure_python_313
     fi
 
+    # --- ccw (cc-warehouse), after uv: it is a uv tool ---
+    _ensure_ccw
+
     # --- NVM ---
     # Pin the exact, audited tag (v${NVM_MIN_VERSION}); older nvm is affected by
     # CVE-2026-10796 (<= 0.40.4), CVE-2026-15921 (<= 0.40.5) and CVE-2026-94185
@@ -4648,6 +4667,75 @@ _ensure_default_node() {
             warn "Node ${NODE_DEFAULT_VERSION} install failed; later: nvm install ${NODE_DEFAULT_VERSION} && nvm alias default ${NODE_DEFAULT_VERSION}"
         fi
     fi
+}
+
+# ccw (cc-warehouse): install it at CCW_MIN_VERSION when missing or below it, and only
+# report a newer PyPI release (see the policy note at CCW_MIN_VERSION). Never fatal: a
+# box without ccw archives no transcripts, which is reported, not a failed install.
+_ensure_ccw() {
+    if [[ "$SKIP_CCW" == true ]]; then verbose "ccw skipped (--skip-ccw)"; return 0; fi
+    if [[ "$SKIP_UV" == true ]]; then
+        info "ccw (cc-warehouse) not checked: it installs through uv, which this run skips (--skip-uv)."
+        return 0
+    fi
+    if ! command -v uv &>/dev/null; then
+        [[ "$DRY_RUN" == true ]] && info "[dry-run] uv not present yet; a real run installs ccw ${CCW_MIN_VERSION} through it after uv (no-questions answer: yes)" \
+            || info "ccw (cc-warehouse) not checked: it installs through uv, which is not here."
+        return 0
+    fi
+    local have="" cmp=""
+    if command -v ccw &>/dev/null; then
+        have=$(ccw --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) || have=""
+    fi
+    if [[ -n "$have" ]]; then
+        cmp=$(_vercmp "$have" "$CCW_MIN_VERSION")
+        if [[ "$cmp" != "-1" ]]; then
+            success "ccw ${have} installed (floor ${CCW_MIN_VERSION})"
+            _ccw_report_newer "$have"
+            _ccw_config_note
+            return 0
+        fi
+        warn "ccw ${have} is below the floor ${CCW_MIN_VERSION}."
+        confirm "Upgrade ccw to ${CCW_MIN_VERSION} (uv tool install cc-warehouse==${CCW_MIN_VERSION})?" y y || return 0
+    else
+        info "ccw (cc-warehouse) is not installed: the cc-capture plugin's SessionEnd hook calls it to archive each transcript."
+        confirm "Install ccw ${CCW_MIN_VERSION} (uv tool install cc-warehouse==${CCW_MIN_VERSION})?" y y || return 0
+    fi
+    if run_cmd uv tool install "cc-warehouse==${CCW_MIN_VERSION}"; then
+        [[ "$DRY_RUN" == true ]] && return 0
+        hash -r 2>/dev/null || true
+        have=$(ccw --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) || have=""
+        if [[ "$have" == "$CCW_MIN_VERSION" ]]; then
+            success "ccw ${have} installed"
+            _ccw_config_note
+        else
+            warn "uv tool install finished, but ccw --version reads '${have:-nothing}', not ${CCW_MIN_VERSION}. Check: uv tool list"
+        fi
+    else
+        warn "uv tool install cc-warehouse==${CCW_MIN_VERSION} failed; transcripts are not archived until it works."
+    fi
+    return 0
+}
+
+# Report, never install, a PyPI release newer than the floor (pin + floor + notify).
+# One request with a 10 s limit; silence when PyPI cannot be reached is said out loud.
+_ccw_report_newer() {
+    local have="$1" latest=""
+    command -v curl &>/dev/null && command -v jq &>/dev/null || return 0
+    latest=$(curl -fsS --max-time 10 https://pypi.org/pypi/cc-warehouse/json 2>/dev/null | jq -r '.info.version // empty' 2>/dev/null) || latest=""
+    if [[ -z "$latest" ]]; then
+        verbose "ccw: PyPI not reached, so a newer release was not looked for"
+    elif [[ "$(_vercmp "$latest" "$have")" == "1" ]]; then
+        info "ccw ${latest} is on PyPI (installed ${have}). Not installed by this run: raise CCW_MIN_VERSION in install.sh to take it."
+    fi
+    return 0
+}
+
+# cc-warehouse hands a machine without ~/.config/cc-warehouse/config.toml to an agent
+# (its docs/agent-setup-contract.md). Capture still works without it; say so once.
+_ccw_config_note() {
+    [[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/cc-warehouse/config.toml" ]] && return 0
+    info "ccw has no ~/.config/cc-warehouse/config.toml: capture works with its defaults; cc-warehouse's docs/agent-setup-contract.md is the setup for a chosen layout."
 }
 
 # The installers above (uv, nvm, pnpm, bun) each like to append lines to the shell
@@ -4986,7 +5074,7 @@ show_help() {
     echo -e "  --skip-tmux               .tmux.conf, TPM"
     echo -e "  --skip-docker             .zsh_docker_functions, lazydocker"
     echo -e "  --skip-rust --skip-yazi --skip-fonts --skip-git-hooks --skip-git-identity"
-    echo -e "  --skip-nvm --skip-pnpm --skip-bun --skip-uv --skip-herdr --skip-omz"
+    echo -e "  --skip-nvm --skip-pnpm --skip-bun --skip-uv --skip-ccw --skip-herdr --skip-omz"
     echo
     echo -e "${BOLD}What it does:${RESET}"
     echo -e "  1. Checks and installs prerequisites (Homebrew, stow, uv, etc.)"
@@ -5799,6 +5887,7 @@ while [[ $# -gt 0 ]]; do
         --skip-pnpm)            SKIP_PNPM=true; _FLAGS_TYPED=true; shift ;;
         --skip-bun)             SKIP_BUN=true; _FLAGS_TYPED=true; shift ;;
         --skip-uv)              SKIP_UV=true; _FLAGS_TYPED=true; shift ;;
+        --skip-ccw)             SKIP_CCW=true; _FLAGS_TYPED=true; shift ;;
         --skip-herdr)           SKIP_HERDR=true; _FLAGS_TYPED=true; shift ;;
         --skip-omz)             SKIP_OMZ=true; _FLAGS_TYPED=true; shift ;;
         --skip-git-identity)    SKIP_GIT_IDENTITY=true; _FLAGS_TYPED=true; shift ;;
