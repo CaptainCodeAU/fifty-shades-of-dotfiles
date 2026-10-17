@@ -19,6 +19,8 @@
 # was tried first; Gavin went back to the iTerm2 fonts (option 5). The
 # difference he saw was in the drawing, not the font: see font-thicken and
 # adjust-cell-height below.
+# A blind test of five fonts (15 to 17 Oct) changed nothing: GeistMono, IosevkaTerm,
+# JetBrainsMono, MonoLisa and MesloLGS, shown as A to E; Gavin kept MesloLGS NF.
 font-family = MesloLGS NF
 font-family = FiraCode Nerd Font Mono
 font-size = 12
