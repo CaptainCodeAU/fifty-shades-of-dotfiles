@@ -1,3 +1,5 @@
+Read LANE.md first: `~/CODE/Scaffoldings/fifty-shades-of-dotfiles-isolinear/LANE.md`, in the private companion folder. It says what this project looks after, what it does not, and whose job the rest is (Gavin, dotfiles-main Q6: 1, 18 Oct 2026).
+
 Default branch is `master`.
 
 Open items arrive on the start card at the top of every `pj` session (count, titles, parked); do not run a listing to get them. `open-items` prints the detail, `open-items --all` every project. File one with `open-items add "title" --done-when "..."`; move one with `close`, `park`, `decline`, `reopen`; `--help` for the rest. Never hand-edit `OPEN.md`, it is generated. Where this project's handoff and records live: `.claude/pj-homes`. End a session that did real work with `/pj:wrap-up` (the pj plugin); a session that skips it leaves a warning on the next card, and `pj-wrap status` lists the transcripts.
@@ -469,6 +471,7 @@ Consequences, all measured:
   `"" api ...` rather than announcing itself. Same shape as everything else in this
   section: the defence failed quietly and looked like the defence working.
 - A correct probe is one of:
+
   ```bash
   # zsh (this machine's interactive shell)
   env -u GH_TOKEN -u GITHUB_TOKEN "$(whence -p gh)" api <path>
