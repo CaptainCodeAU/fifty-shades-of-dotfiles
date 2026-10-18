@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import platform
@@ -181,7 +182,8 @@ def fetch_release_assets(tag: str, timeout: int) -> dict[str, str] | None:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError,
+            json.JSONDecodeError):
         return None
     assets = data.get("assets") or []
     return {a["name"]: a["browser_download_url"] for a in assets if "name" in a and "browser_download_url" in a}
@@ -192,6 +194,7 @@ def sha256_of_url(url: str, timeout: int) -> str | None:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             digest = hashlib.sha256()
+            total = 0
             with tempfile.NamedTemporaryFile() as tmp:
                 while True:
                     chunk = resp.read(1 << 20)
@@ -199,8 +202,16 @@ def sha256_of_url(url: str, timeout: int) -> str | None:
                         break
                     digest.update(chunk)
                     tmp.write(chunk)
+                    total += len(chunk)
+            # resp.read(n) returns b"" when the connection drops early instead
+            # of raising IncompleteRead (CPython keeps that for compatibility),
+            # so a cut-short download would hash as a WRONG value with no
+            # error. Likely the cause of W-20260927-A32. A short body is None.
+            expected = resp.headers.get("Content-Length")
+            if expected is not None and total != int(expected):
+                return None
         return digest.hexdigest()
-    except (urllib.error.URLError, OSError):
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError):
         return None
 
 
