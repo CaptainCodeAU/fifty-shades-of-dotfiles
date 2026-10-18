@@ -26,10 +26,13 @@
 #
 # Typing goes through herdr-type (same folder), which reads the screen before
 # every key, never approves a permission prompt and refuses a shell pane.
-#   click        types the chip's text, no Enter, then closes
-#   right-click  types it and presses Enter, then closes
+#   click        types the chip's text (and Enter, when auto-submit is ticked)
+#   right-click  types it and presses Enter, whatever the tick box says
+#   ☐ auto-submit (top right, or the a key) ticks and unticks; remembered in
+#                ~/.local/state/herdr/palette-auto-submit between openings
+#   ✕ close (top right), Esc or q  closes; a pick does NOT close (Gavin, 19 Oct:
+#                "only closes if we press the close button")
 #   arrows/hjkl  move   Tab/Shift-Tab  change tab   Enter  type   1-9  pick
-#   Esc or q     close without typing
 #
 # Drawn with plain ANSI escapes in the alternate screen, mouse reporting in
 # SGR mode (1006) with motion (1003) for the hover highlight; truecolor.
@@ -58,6 +61,9 @@ PALETTE_FILE = os.environ.get(
     "HERDR_PALETTE_FILE", os.path.expanduser("~/.config/herdr/palette.toml"))
 HERDR_TYPE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "herdr-type")
 LOG = os.environ.get("HERDR_PALETTE_LOG", "")
+AUTO_FILE = os.environ.get(
+    "HERDR_PALETTE_AUTO_FILE",
+    os.path.expanduser("~/.local/state/herdr/palette-auto-submit"))
 
 # Colours: truecolor, matched to the herdr config (gold accent, navy rows).
 GOLD = (255, 215, 95)
@@ -247,6 +253,9 @@ class Palette:
         self.message = ""
         self.message_colour = DIM
         self.done = False
+        self.flash_until = 0.0
+        self.auto = os.path.exists(AUTO_FILE)
+        self.button_rects = []     # (x, y, w, name) for the title-bar buttons
 
     # -- drawing
     def size(self):
@@ -260,6 +269,24 @@ class Palette:
         title = " ✦ PROMPT PALETTE "
         who = f" → {self.info['name']} · {self.info['status']} "
         out.append(f"{ESC}[1;1H{bg(GOLD)}{fg(INK)}{BOLD}{title}{RESET}{fg(SAND)}{who}{RESET}")
+        # title-bar buttons, right-aligned: the auto-submit tick box and close
+        box = " ☑ auto-submit " if self.auto else " ☐ auto-submit "
+        close = " ✕ close "
+        cx = w - cell_width(close)
+        ax = cx - 1 - cell_width(box)
+        self.button_rects = [(ax, 1, cell_width(box), "auto"), (cx, 1, cell_width(close), "close")]
+        for x, y, bw, name in self.button_rects:
+            label = box if name == "auto" else close
+            hot = self.hover == ("button", name)
+            if name == "auto" and self.auto:
+                style = bg(GREEN) + fg(INK) + BOLD
+            elif name == "close" and hot:
+                style = bg(RED) + fg(INK) + BOLD
+            elif hot:
+                style = bg(NAVY_HI) + fg((255, 255, 255)) + BOLD
+            else:
+                style = bg(NAVY) + fg(TEXT)
+            out.append(f"{ESC}[{y};{x}H{style}{label}{RESET}")
         # tabs
         self.tab_rects = layout_tabs(self.groups, 3)
         for i, (x, y, tw, label) in enumerate(self.tab_rects):
@@ -299,7 +326,8 @@ class Palette:
             show = pick if cell_width(pick) < w - 14 else pick[: w - 17] + "…"
             out.append(f"{ESC}[{h - 2};3H{fg(DIM)}types: {RESET}{fg(PERI)}{show}{RESET}")
         # footer
-        hint = "click type  ·  right-click type + send  ·  ←↑↓→ move  ·  tab group  ·  esc close"
+        hint = ("click type" + (" + send" if self.auto else "") + "  ·  right-click type + send"
+                "  ·  a auto-submit  ·  ←↑↓→ move  ·  tab group  ·  esc close")
         if self.message:
             out.append(f"{ESC}[{h};3H{fg(self.message_colour)}{BOLD}{self.message}{RESET}")
         else:
@@ -313,6 +341,7 @@ class Palette:
         if not 0 <= i < len(chips):
             return
         text = chips[i]["text"]
+        send = send or self.auto
         cmd = [HERDR_TYPE, "send", self.target, text] + (["--enter"] if send else [])
         if self.dry_run:
             if LOG:
@@ -321,9 +350,7 @@ class Palette:
             self.flash = (i, TEAL)
             self.message = f"dry run: would type {text!r}" + (" + Enter" if send else "")
             self.message_colour = TEAL
-            self.draw()
-            time.sleep(0.4)
-            self.done = True
+            self.flash_until = time.monotonic() + 0.6
             return
         self.flash = (i, GOLD)
         self.draw()
@@ -332,9 +359,8 @@ class Palette:
             self.flash = (i, GREEN)
             self.message = f"✓ typed into {self.info['name']}" + (" and sent" if send else "")
             self.message_colour = GREEN
-            self.draw()
-            time.sleep(0.35)
-            self.done = True
+            self.flash_until = time.monotonic() + 0.6
+            self.info = target_info(self.target) | {"name": self.info["name"]}
         else:
             why = (r.stderr or r.stdout).strip().splitlines()
             self.flash = (i, RED)
@@ -355,12 +381,29 @@ class Palette:
         else:
             self.sel = max(0, min(len(rects) - 1, self.sel + dx))
 
+    def toggle_auto(self):
+        self.auto = not self.auto
+        try:
+            if self.auto:
+                os.makedirs(os.path.dirname(AUTO_FILE), exist_ok=True)
+                open(AUTO_FILE, "w").close()
+            elif os.path.exists(AUTO_FILE):
+                # the tick box's own marker file; renamed aside, never deleted
+                os.replace(AUTO_FILE, AUTO_FILE + ".off")
+        except OSError:
+            pass
+        self.message = "auto-submit on: a click also presses Enter" if self.auto else "auto-submit off"
+        self.message_colour = GREEN if self.auto else DIM
+
     def set_tab(self, i):
         self.tab = i % len(self.groups)
         self.sel = 0
         self.hover = None
 
     def hit(self, mx, my):
+        for x, y, bw, name in self.button_rects:
+            if y == my and x <= mx < x + bw:
+                return ("button", name)
         for i, (x, y, tw, _) in enumerate(self.tab_rects):
             if y == my and x <= mx < x + tw:
                 return ("tab", i)
@@ -387,7 +430,12 @@ class Palette:
                 if kind != "M" or not target:
                     continue
                 button = b & 3
-                if target[0] == "tab" and button == 0:
+                if target[0] == "button" and button == 0:
+                    if target[1] == "close":
+                        self.done = True
+                        return
+                    self.toggle_auto()
+                elif target[0] == "tab" and button == 0:
                     self.set_tab(target[1])
                 elif target[0] == "chip" and button in (0, 2):
                     self.pick(target[1], send=(button == 2))
@@ -416,6 +464,8 @@ class Palette:
                     self.done = True
                 elif ch == "\t":
                     self.set_tab(self.tab + 1)
+                elif ch == "a":
+                    self.toggle_auto()
                 elif ch in ("\r", "\n"):
                     self.pick(self.sel, send=False)
                 elif ch in "hjkl":
@@ -434,8 +484,11 @@ class Palette:
             tty.setraw(fd)
             self.draw()
             while not self.done:
-                ready, _, _ = select.select([fd], [], [], 0.5)
+                ready, _, _ = select.select([fd], [], [], 0.2)
                 if not ready:
+                    if self.flash and time.monotonic() > self.flash_until:
+                        self.flash = None
+                        self.draw()
                     continue
                 data = os.read(fd, 4096).decode("utf-8", "replace")
                 if data == "\x1b":              # a lone Esc, not a sequence start

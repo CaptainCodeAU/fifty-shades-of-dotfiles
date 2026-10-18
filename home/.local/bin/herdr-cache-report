@@ -1,0 +1,108 @@
+#!/bin/bash
+# herdr-cache-report -- put a Claude session's prompt-cache countdown on its row
+# in herdr's agents list ("◷ 42m"), from inside the session's status line.
+#
+#   herdr-cache-report --warm true|false --expires EPOCH [--ttl SECONDS]
+#   herdr-cache-report --selftest
+#
+# Gavin, 19 Oct 2026 (dotfiles-main Q70: 1): the minutes left before the cache
+# goes cold, against each agent in the sidebar. A status line already gets the
+# exact expiry from Claude Code (.prompt_cache.expires_at, .warm, .ttl) and
+# re-runs every 30 s, so each status line calls this once per run:
+#   ~/.claude/statusline-command.sh       (plain claude sessions)
+#   engage's statusline/session-line.sh   (engage sessions; engage's to wire)
+#
+# It reports one of three tokens on $HERDR_PANE_ID, clearing the other two:
+#   $cache_warm  "◷ 42m"    more than the last fifth of the ttl left
+#   $cache_low   "◷ 9m"     the last fifth (12 min of 1h, 1 min of 5m; 5 min
+#                           when the ttl is unknown)
+#   $cache_cold  "◷ cold"   expired, or Claude Code says it is not warm
+# Their colours are in herdr's config.toml, [ui.sidebar.agents], line 1.
+# --ttl-ms drops the token 2 minutes after the last report, so a pane whose
+# status line stopped shows none; --agent claude drops it when Claude exits.
+#
+# Silent and exit 0 outside herdr (HERDR_ENV unset), without a pane id, or
+# without herdr on PATH. The report runs in the background, so a slow herdr
+# never slows a status line. Exit 2 on bad arguments.
+set -u
+
+SOURCE="dotfiles-statusline-cache"
+
+minutes_left() { # epoch -> "42m", or "1h05m" past an hour
+    local d=$(($1 - $(date +%s)))
+    [ "$d" -lt 0 ] && d=0
+    if [ "$d" -ge 3600 ]; then printf '%dh%02dm' $((d / 3600)) $((d % 3600 / 60))
+    else printf '%dm' $((d / 60)); fi
+}
+
+# bucket WARM EXPIRES TTL -> warm | low | cold
+bucket() {
+    local left=$(($2 - $(date +%s))) warn_at=300
+    [ "$3" -gt 0 ] && warn_at=$(($3 / 5))
+    if [ "$1" != true ] || [ "$left" -le 0 ]; then echo cold
+    elif [ "$left" -le "$warn_at" ]; then echo low
+    else echo warm; fi
+}
+
+if [ "${1:-}" = "--selftest" ]; then
+    fx=$(mktemp -d "${TMPDIR:-/tmp}/herdr-cache-report.XXXXXX") || exit 1
+    mkdir -p "$fx/bin"
+    printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/args"\n' "$fx" > "$fx/bin/herdr"
+    chmod +x "$fx/bin/herdr"
+    pass=0 fail=0 now=$(date +%s)
+    run() { env HERDR_ENV=1 HERDR_PANE_ID=wT:p1 PATH="$fx/bin:$PATH" "$0" "$@"; }
+    got() { local n=0; while [ ! -s "$fx/args" ] && [ $n -lt 30 ]; do sleep 0.1; n=$((n + 1)); done
+            sleep 0.1; cat "$fx/args" 2>/dev/null; command mv "$fx/args" "$fx/args.$RANDOM" 2>/dev/null; }
+    check() { if printf '%s' "$2" | grep -qF -- "$3"; then g=yes; else g=no; fi
+              if [ "$g" = "$4" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL $1: '$3' present=$g, wanted $4"; fi; }
+    run --warm true --expires $((now + 1830)) --ttl 3600; a=$(got)
+    check "warm: token and value" "$a" "--token cache_warm=◷ 30m" yes
+    check "warm: others cleared" "$a" "--clear-token cache_low --clear-token cache_cold" yes
+    check "warm: pane, source, agent, expiry" "$a" "pane report-metadata wT:p1 --source $SOURCE --agent claude --ttl-ms 120000" yes
+    run --warm true --expires $((now + 630)) --ttl 3600; a=$(got)
+    check "last fifth of 1h: low" "$a" "--token cache_low=◷ 10m" yes
+    run --warm true --expires $((now + 630)); a=$(got)
+    check "no ttl, 10m left: warm (5 min rule)" "$a" "--token cache_warm=◷ 10m" yes
+    run --warm true --expires $((now + 215)) --ttl 300; a=$(got)
+    check "5m ttl, 3m left: warm" "$a" "--token cache_warm=◷ 3m" yes
+    run --warm false --expires $((now + 1830)) --ttl 3600; a=$(got)
+    check "not warm: cold" "$a" "--token cache_cold=◷ cold" yes
+    run --warm true --expires $((now - 5)) --ttl 3600; a=$(got)
+    check "expired: cold" "$a" "--token cache_cold=◷ cold" yes
+    sleep 0.3; command mv "$fx/args" "$fx/args.late" 2>/dev/null
+    env -u HERDR_ENV HERDR_PANE_ID=wT:p1 PATH="$fx/bin:$PATH" "$0" --warm true --expires $((now + 900)); sleep 0.3
+    check "outside herdr: nothing sent" "$([ -e "$fx/args" ] && echo sent || echo none)" "none" yes
+    run --warm true; rc=$?
+    check "no --expires: usage error" "$rc" "2" yes
+    run --warm true --expires 2>/dev/null; rc=$?
+    check "a flag given last with no value: usage error, no hang" "$rc" "2" yes
+    echo "herdr-cache-report selftest: $pass passed, $fail failed"
+    [ "$fail" -eq 0 ]
+    exit
+fi
+
+warm="" expires="" ttl=0
+while [ $# -gt 0 ]; do
+    # every flag takes a value; one given last with none cannot shift 2, so it
+    # is refused there rather than spinning this loop
+    case "$1" in
+        --warm) warm=${2:-}; shift 2 || { echo "herdr-cache-report: --warm needs a value" >&2; exit 2; } ;;
+        --expires) expires=${2%.*}; shift 2 || { echo "herdr-cache-report: --expires needs a value" >&2; exit 2; } ;;
+        --ttl) ttl=${2:-0}; shift 2 || { echo "herdr-cache-report: --ttl needs a value" >&2; exit 2; } ;;
+        *) echo "herdr-cache-report: unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+case "$warm" in true|false) ;; *) echo "herdr-cache-report: --warm true|false is required" >&2; exit 2 ;; esac
+case "$expires" in ''|*[!0-9]*) echo "herdr-cache-report: --expires EPOCH is required" >&2; exit 2 ;; esac
+case "$ttl" in ''|*[!0-9]*) ttl=0 ;; esac
+
+[ "${HERDR_ENV:-}" = 1 ] && [ -n "${HERDR_PANE_ID:-}" ] || exit 0
+command -v herdr >/dev/null 2>&1 || exit 0
+
+b=$(bucket "$warm" "$expires" "$ttl")
+if [ "$b" = cold ]; then value="◷ cold"; else value="◷ $(minutes_left "$expires")"; fi
+clear=()
+for other in warm low cold; do [ "$other" = "$b" ] || clear+=(--clear-token "cache_$other"); done
+( herdr pane report-metadata "$HERDR_PANE_ID" --source "$SOURCE" --agent claude \
+    --ttl-ms 120000 --token "cache_$b=$value" "${clear[@]}" >/dev/null 2>&1 & )
+exit 0

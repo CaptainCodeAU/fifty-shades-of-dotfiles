@@ -412,10 +412,15 @@ tab_bar_right_separator = " ┃ "
 [ui.sidebar.agents]
 row_gap = 0
 # Two lines (Gavin, 19 Oct: "two lines acceptable"): the session name beside the state word, no bar line.
+# Line 1 ends with the prompt-cache countdown, "◷ 42m" (Gavin, 19 Oct, Q70: 1),
+# reported by ~/.claude/statusline-command.sh every 30 s as $cache_warm (cyan),
+# $cache_low (bright yellow, the last fifth of the ttl) or $cache_cold (red):
+# the status line's own colours, from Ghostty's palette 14, 11 and 9 as the
+# status line uses them (96m, 93m, 91m). It expires 2 min after the last report.
 # The session name is a dimmer sand #8c8069 (Gavin, 19 Oct: "reduce their
 # brightness"), down from #b0a084; contrast 4.9 on the page, 4.1 on the navy row.
 # The two-bracket-line form is kept below, commented, to go back to.
-rows = [[{ token = "state_icon", bold = true }, { token = "workspace", fg = "#ffffff" }, { token = "tab", fg = "#8186cf" }, { token = "machine", fg = "#7fb0a8", rules = [{ equals = "Local", hide = true }] }], [{ token = "state_text", rules = [{ equals = "idle", hide = true }, { equals = "blocked", bold = true }, { equals = "╰ needs you", bold = true }, { equals = "╰ resting", fg = "#6e7a86" }, { equals = "└ your turn", fg = "#6f9f78" }] }, { token = "$session", fg = "#8c8069", bold = false }]]
+rows = [[{ token = "state_icon", bold = true }, { token = "workspace", fg = "#ffffff" }, { token = "tab", fg = "#8186cf" }, { token = "machine", fg = "#7fb0a8", rules = [{ equals = "Local", hide = true }] }, { token = "$cache_warm", fg = "#55ffff" }, { token = "$cache_low", fg = "#ffff55" }, { token = "$cache_cold", fg = "#ff5555" }], [{ token = "state_text", rules = [{ equals = "idle", hide = true }, { equals = "blocked", bold = true }, { equals = "╰ needs you", bold = true }, { equals = "╰ resting", fg = "#6e7a86" }, { equals = "└ your turn", fg = "#6f9f78" }] }, { token = "$session", fg = "#8c8069", bold = false }]]
 # rows = [[{ token = "state_icon", bold = true }, { token = "workspace", fg = "#ffffff" }, { token = "tab", fg = "#8186cf" }, { token = "machine", fg = "#7fb0a8", rules = [{ equals = "Local", hide = true }] }], [{ token = "$bar_working", fg = "#6e7a86" }, { token = "$bar_done", fg = "#00bbbb" }, { token = "$bar_idle", fg = "#00bb00" }, { token = "$bar_blocked", fg = "#ff5555" }, { token = "$bar_unknown", fg = "#5c4a4a" }, { token = "$bar_resting", fg = "#6e7a86" }, { token = "$session", fg = "#b0a084", bold = false }], [{ token = "state_text", rules = [{ equals = "idle", hide = true }, { equals = "blocked", bold = true }, { equals = "╰ needs you", bold = true }, { equals = "╰ resting", fg = "#6e7a86" }] }]]
 
 # Spaces section, coloured like the agents section (Gavin, 16 Oct): the space
