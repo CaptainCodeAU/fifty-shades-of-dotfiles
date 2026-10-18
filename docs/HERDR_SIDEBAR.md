@@ -65,6 +65,18 @@ facts behind the choices and the options not taken.
   cyan, green, bright red; `theme.custom` yellow; `overlay0`), so a palette
   change needs the bar colours changed too. Checked 18 Oct on all six agent
   panes: each held exactly one bar token, the one matching its `agent_status`.
+- **"your turn" only when a reply asks him** (Q66 (v2): 1): herdr's idle only
+  means the prompt is empty. Network_Plan read idle on 18 Oct with "2 shells, 2
+  monitors still running", waiting on its own workers. Gavin's reply style ends
+  a reply with a 👉 line exactly when something waits on him, so for idle and
+  done the plugin reads the session's transcript (found the way `herdr-type`
+  finds it) and shows "╰ your turn" when the last reply's last line starts
+  with 👉, and a grey "╰ resting" with a grey bar when it does not. No
+  transcript means "your turn", never resting. Checked 18 Oct: four fixture
+  arms (asks, no 👉 after an earlier 👉, a torn last line, no transcript) gave
+  yes, no, yes, unknown; live, e-conductor (idle, no 👉) went to resting and
+  Network_Plan, once its reply ended "👉 Tell me when uv cache prune has run",
+  read your turn.
 - **Colour only where Gavin is needed:** working is a cool slate grey
   (`theme.custom.yellow = "#6e7a86"`; orange and a warm grey were tried and
   dropped, the warm grey read as the session name's sand).

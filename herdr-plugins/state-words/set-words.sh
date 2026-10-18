@@ -30,11 +30,21 @@
 # - each report REPLACES its own source's whole label set, so a report must
 #   carry every label it wants, never just the one that changed.
 #
+# "your turn" only when the agent's last reply asks him something (Gavin,
+# Q66 (v2): 1). His reply style ends a reply with a line starting 👉 exactly
+# when something waits on him, and with none when nothing does. herdr's idle
+# only says the prompt is empty: Network_Plan read idle with its workers still
+# running on 18 Oct. So for idle and done this reads the session's transcript
+# (<claude home>/projects/*/<session id>.jsonl, the lookup herdr-type uses):
+# a last reply ending in a 👉 line gives "your turn"; one without gives a grey
+# "resting", with a grey bar. No transcript found gives "your turn", so an
+# agent that may need him is never shown as resting.
+#
 # Another source owns a pane's words when it has labelled idle with a word
 # that is not one of ours. engage's worker panes will (engage #3313, source
 # "engage": a worker waits on e-conductor, not on Gavin). So the labels are
-# reported only when the pane has no idle label, or an older wording of our
-# own (which moves a pane labelled before the bracket onto the new words).
+# reported only when the pane has no idle label or one of our own words, and
+# only when the word we want differs from the one it shows.
 # The $session token comes from a SEPARATE source and is reported on every
 # event, so a renamed session catches up at its next status change without
 # the label report ever overriding engage's word.
@@ -54,10 +64,12 @@ WORKING_WORD="╰ thinking"
 DONE_WORD="╰ your turn"
 IDLE_WORD="╰ your turn"
 BLOCKED_WORD="╰ needs you"
-# Idle words this script has used before; a pane holding one is still ours.
-OUR_OLD_IDLE_WORDS="your turn"
+RESTING_WORD="╰ resting"
+# Every idle word this script uses or has used; a pane holding one is ours.
+OUR_IDLE_WORDS="your turn|╰ your turn|╰ resting"
 BAR="│"
-STATES="working done idle blocked unknown"
+# resting is not a herdr state: it is idle or done with no 👉 in the last reply.
+STATES="working done idle blocked unknown resting"
 
 event_json=${HERDR_PLUGIN_EVENT_JSON:-}
 [ -n "$event_json" ] || exit 0
@@ -70,36 +82,67 @@ agent=$(printf '%s' "$event_json" | jq -r '.data.agent // empty')
 pane_json=$("$HERDR_BIN_PATH" pane get "$pane_id")
 idle_now=$(printf '%s' "$pane_json" | jq -r '.result.pane.state_labels.idle // empty')
 title=$(printf '%s' "$pane_json" | jq -r '.result.pane.terminal_title_stripped // empty')
+status=$(printf '%s' "$pane_json" | jq -r '.result.pane.agent_status // "unknown"')
+session_id=$(printf '%s' "$pane_json" \
+    | jq -r 'select(.result.pane.agent_session.kind == "id") | .result.pane.agent_session.value // empty')
+
+# asks: the last reply's last non-empty line starts with 👉. Prints yes, no,
+# or unknown (no transcript, or no reply in its last 400 lines).
+last_reply_asks() {
+    transcript=""
+    for f in "$HOME"/.claude*/projects/*/"$1".jsonl; do
+        [ -f "$f" ] && { transcript=$f; break; }
+    done
+    [ -n "$transcript" ] || { echo unknown; return; }
+    tail -n 400 "$transcript" | jq -Rrs '
+        [split("\n")[] | fromjson? | select(.type == "assistant" and (.isSidechain | not))
+         | .message.content[]? | select(.type == "text") | .text]
+        | if length == 0 then "unknown"
+          else (last | split("\n") | map(select(test("\\S"))) | last // ""
+                | if startswith("👉") then "yes" else "no" end)
+          end'
+}
+
+asks=unknown
+case "$status" in
+    idle|done) [ -z "$session_id" ] || asks=$(last_reply_asks "$session_id") ;;
+esac
+if [ "$asks" = no ]; then
+    want_idle=$RESTING_WORD; want_done=$RESTING_WORD
+else
+    want_idle=$IDLE_WORD; want_done=$DONE_WORD
+fi
 
 ours=no
-if [ -z "$idle_now" ] || [ "$idle_now" = "$IDLE_WORD" ]; then
+if [ -z "$idle_now" ]; then
     ours=yes
-elif [ "$idle_now" = "$OUR_OLD_IDLE_WORDS" ]; then
-    ours=yes
+else
+    case "|$OUR_IDLE_WORDS|" in *"|$idle_now|"*) ours=yes ;; esac
 fi
 
 # --agent ties labels and tokens to this agent: herdr drops them when it
 # exits, so a shell left behind in the pane carries none.
-if [ "$ours" = yes ] && [ "$idle_now" != "$IDLE_WORD" ]; then
+if [ "$ours" = yes ] && [ "$idle_now" != "$want_idle" ]; then
     "$HERDR_BIN_PATH" pane report-metadata "$pane_id" \
         --source "$LABEL_SOURCE" \
         --agent "$agent" \
         --state-label "working=$WORKING_WORD" \
-        --state-label "done=$DONE_WORD" \
-        --state-label "idle=$IDLE_WORD" \
+        --state-label "done=$want_done" \
+        --state-label "idle=$want_idle" \
         --state-label "blocked=$BLOCKED_WORD" \
         >/dev/null
-    echo "labelled $pane_id ($agent)"
+    echo "labelled $pane_id ($agent, $status, asks=$asks)"
 fi
 
-status=$(printf '%s' "$pane_json" | jq -r '.result.pane.agent_status // "unknown"')
 case " $STATES " in *" $status "*) ;; *) status=unknown ;; esac
+bar_state=$status
+[ "$asks" != no ] || bar_state=resting
 
 # One report: the bar for this state set, every other state's bar cleared,
 # and the session name.
-set -- --token "bar_$status=$BAR"
+set -- --token "bar_$bar_state=$BAR"
 for other in $STATES; do
-    [ "$other" = "$status" ] || set -- "$@" --clear-token "bar_$other"
+    [ "$other" = "$bar_state" ] || set -- "$@" --clear-token "bar_$other"
 done
 [ -z "$title" ] || set -- "$@" --token "session=$title"
 "$HERDR_BIN_PATH" pane report-metadata "$pane_id" \
