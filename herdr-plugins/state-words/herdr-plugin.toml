@@ -1,0 +1,17 @@
+id = "dotfiles.state-words"
+name = "State Words"
+version = "0.1.0"
+min_herdr_version = "0.9.5"
+description = "Gives every agent pane Gavin's words for its state in the sidebar (thinking, your turn, needs you), so 'your turn' stays after he looks and only goes when he sends a prompt"
+platforms = ["macos", "linux"]
+
+# agent_detected covers a new agent; agent_status_changed covers agents that
+# were already running when the plugin was linked, and every agent after a
+# server restart, which wipes reported labels.
+[[events]]
+on = "pane.agent_detected"
+command = ["./set-words.sh"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["./set-words.sh"]

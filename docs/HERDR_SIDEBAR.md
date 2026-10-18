@@ -42,6 +42,33 @@ facts behind the choices and the options not taken.
   shared by the spaces and agents sections (`active_row_bg`, `selection_bg`), so the
   two sections cannot have different bars.
 
+## State words (18 Oct, dotfiles-main Q60, Q61)
+
+- **Three lines per agent:** 1) the bold state icon, the project, the tab, the
+  machine; 2) the session name; 3) the state word on its own line. herdr drops a
+  line whose tokens are all empty or hidden, so a row with no word is two lines.
+- **Colour only where Gavin is needed:** working is a cool slate grey
+  (`theme.custom.yellow = "#6e7a86"`; orange and a warm grey were tried and
+  dropped, the warm grey read as the session name's sand).
+- **The words come from the `dotfiles.state-words` plugin**
+  (`herdr-plugins/state-words/`): thinking, your turn (done AND idle), needs you.
+  Idle gets a word because herdr turns done into idle the moment Gavin looks at
+  the tab, and he wants "your turn" to stay until he sends a prompt.
+- **How herdr combines labels** (measured 2026-10-18 on 0.9.5, and
+  `src/terminal/metadata.rs` effective_metadata_state_labels): per state the
+  newest label wins, whichever `--source` sent it; a report replaces its own
+  source's whole label set, so every report carries all its labels.
+- **The contract with engage** (engage #3313): a source that labels idle owns
+  that pane's words. The plugin labels a pane only when it has no idle label, so
+  engage-worker's `idle="waiting on e-conductor"` (source `engage`, a draft
+  wording) is never overwritten, whichever arrives first. Known limit: a server
+  restart wipes all labels; the plugin sets its own again on the next status
+  change, an engage label reported only at start does not come back.
+- **Seen live 18 Oct:** linked at about 10:51 PM, the plugin labelled the
+  dotfiles pane on its next status change and skipped it on the one after
+  (log: 3 runs, all `succeeded`). Other panes are labelled on their own next
+  status change, not at link time.
+
 ## Facts that decided the choices
 
 - **Agent names and the tab number are drawn in `overlay0`**, the same colour as
