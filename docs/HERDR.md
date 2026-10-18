@@ -486,7 +486,7 @@ These are ours, and nothing upstream will do them for you:
 | 5   | `home/.claude/skills/herdr/SKILL.md`                                                | whatever the merge pulls in                                                  |
 | 6-9 | `docs/HERDR*.md`                                                                    | one `herdr-verified:` line each                                              |
 | 10  | `home/.config/herdr/config.toml`                                                    | only when a release retires or adds a key -- run `herdr config check`        |
-| 11  | `home/.config/herdr/plugins/*/herdr-plugin.toml`                                    | `min_herdr_version`, and the plugin API if it moved                          |
+| 11  | `herdr-plugins/*/herdr-plugin.toml`                                                 | `min_herdr_version`, and the plugin API if it moved                          |
 | 12  | `home/.config/systemd/user/herdr.service`                                           | only if service flags change                                                 |
 | 13  | `~/.claude/hooks/herdr-agent-state.sh` + its `~/.claude/settings.json` registration | **NOT rewritten by an upgrade**: `herdr integration status` says `outdated`  |
 | 14  | macOS Full Disk Access (System Settings, not a file)                                | the grant names `Cellar/herdr/<v>/bin/herdr`: **re-grant by hand** (runbook) |
@@ -537,11 +537,16 @@ still a human's job. `herdr-linux-pin-check` covers 1 and 2.
 `_post_stow_herdr_plugins_and_skill` (added 2026-09-17) closes three gaps
 between "stow put the files there" and "herdr actually works here":
 
-- **`herdr plugin link`** for `window-title-fix`. Stow deploys the plugin FILES,
-  but herdr only knows a plugin exists once it is in `~/.config/herdr/plugins.json`
-  -- machine-local state this repo does not track, because it holds absolute
-  paths. Before this, a fresh box got the files and a silently broken window
-  title. `link`, never `install`: see `HERDR_PLUGINS.md` section 1.
+- **`herdr plugin link`** for every plugin in `herdr-plugins/`, linked from the
+  repo itself. herdr only knows a plugin exists once it is in
+  `~/.config/herdr/plugins.json` -- machine-local state this repo does not track,
+  because it holds absolute paths. Before this, a fresh box got the files and a
+  silently broken window title. `link`, never `install`: see `HERDR_PLUGINS.md`
+  section 1. Until 18 Oct 2026 `window-title-fix` was stowed from
+  `home/.config/herdr/plugins/`; it moved to `herdr-plugins/` so plugins sit
+  apart from the settings and can later move to a repo of their own in one step
+  (Gavin, dotfiles-main Q63: 1). A plugin still registered at its old path is
+  unlinked and linked again, and the dangling links stow left go to the Trash.
 - **The `~/.agents` skill symlink.** Codex discovers `~/.agents/skills` as a
   skill root by convention, with no config entry and nothing to grep for. Until
   2026-09-17 that was a separate copy of the herdr skill and it had drifted from

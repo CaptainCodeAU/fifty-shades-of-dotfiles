@@ -1432,12 +1432,15 @@ _post_stow_herdr_systemd_service() {
 # Everything herdr needs AFTER stow that stow itself cannot do. Three jobs,
 # all idempotent, none fatal -- a herdr problem must never fail the install.
 #
-# 1. PLUGIN REGISTRATION. home/.config/herdr/plugins/window-title-fix is stowed,
-#    but herdr only knows a plugin exists once `herdr plugin link` has recorded
-#    it in ~/.config/herdr/plugins.json -- machine-local state this repo does
-#    NOT track (it holds absolute paths, and tracking it would put a real
-#    username in a committed file). So on a fresh box the plugin FILES arrive
-#    and the window title silently stays broken. This closes that gap.
+# 1. PLUGIN REGISTRATION. Every plugin under herdr-plugins/ (each folder with a
+#    herdr-plugin.toml) is linked from the repo itself; none is stowed. herdr
+#    only knows a plugin exists once `herdr plugin link` has recorded it in
+#    ~/.config/herdr/plugins.json -- machine-local state this repo does NOT
+#    track (it holds absolute paths, and tracking it would put a real username
+#    in a committed file). A plugin registered at another path (before 18 Oct
+#    2026 window-title-fix was stowed into ~/.config/herdr/plugins/) is
+#    unlinked and linked again from the repo, and the dangling links stow left
+#    behind are moved to the Trash (Gavin, dotfiles-main Q63: 1).
 #    `link`, never `install`: link points at a local directory and skips
 #    [[build]] entirely, so no third-party code runs (docs/HERDR_PLUGINS.md).
 #
@@ -1456,35 +1459,58 @@ _post_stow_herdr_systemd_service() {
 _post_stow_herdr_plugins_and_skill() {
     command -v herdr &>/dev/null || return 0
 
-    local plugin_dir="$HOME/.config/herdr/plugins/window-title-fix"
     local skill_src="$REPO_DIR/home/.claude/skills/herdr/SKILL.md"
     local agents_skill="$HOME/.agents/skills/herdr/SKILL.md"
     local did_step=false
+    local manifest plugin_dir plugin_id plugin_list old_link
 
-    # --- 1. plugin ---
-    # Only when stow actually placed it; a missing manifest means link would
-    # fail, and a failure here should never look like a herdr problem.
-    if [[ -e "$plugin_dir/herdr-plugin.toml" ]]; then
-        # `plugin list` is PLAIN TEXT, not JSON (docs/HERDR_PLUGINS.md) -- grep it.
-        if herdr plugin list 2>/dev/null | grep -q "dotfiles.window-title-fix"; then
-            verbose "herdr plugin dotfiles.window-title-fix already registered"
-        elif [[ "$(_herdr_server_restart_status)" == yes:* ]]; then
+    # --- 0. leftovers of the stowed window-title-fix (before 18 Oct 2026) ---
+    # Only links that are dangling AND point at the old stow path; anything
+    # else in that folder is left alone, and so is the folder if it is not empty.
+    for old_link in "$HOME/.config/herdr/plugins/window-title-fix/"*; do
+        [[ -L "$old_link" && ! -e "$old_link" ]] || continue
+        [[ "$(readlink "$old_link")" == */home/.config/herdr/plugins/window-title-fix/* ]] || continue
+        run_cmd rm "$old_link"
+    done
+    if [[ -d "$HOME/.config/herdr/plugins/window-title-fix" ]] \
+        && [[ -z "$(ls -A "$HOME/.config/herdr/plugins/window-title-fix")" ]]; then
+        run_cmd rm -r "$HOME/.config/herdr/plugins/window-title-fix"
+    fi
+
+    # --- 1. plugins ---
+    # `plugin list` is PLAIN TEXT, not JSON (docs/HERDR_PLUGINS.md): each line
+    # reads `- <id> (<name>) enabled [local:<path>]`, or `[local:<path>; 1
+    # warning(s)]` when the manifest is missing, so grep it.
+    plugin_list="$(herdr plugin list 2>/dev/null || true)"
+    for manifest in "$REPO_DIR"/herdr-plugins/*/herdr-plugin.toml; do
+        [[ -f "$manifest" ]] || continue
+        plugin_dir="${manifest%/herdr-plugin.toml}"
+        plugin_id="$(sed -n 's/^id = "\(.*\)"$/\1/p' "$manifest" | head -n 1)"
+        [[ -n "$plugin_id" ]] || { warn "No id in $manifest; not linked."; continue; }
+        if grep -qF -- "- $plugin_id (" <<<"$plugin_list" \
+            && grep -qF -e "[local:$plugin_dir]" -e "[local:$plugin_dir;" <<<"$plugin_list"; then
+            verbose "herdr plugin $plugin_id already linked from $plugin_dir"
+            continue
+        fi
+        [[ "$did_step" == true ]] || { step "herdr plugin registration"; did_step=true; }
+        if [[ "$(_herdr_server_restart_status)" == yes:* ]]; then
             # A server older than the binary refuses every command (protocol_mismatch),
             # so linking now would only print herdr's raw JSON error. Say why instead.
-            step "herdr plugin registration"
-            did_step=true
-            warn "Skipped: the running herdr server is older than the installed herdr, so it would refuse the link."
+            warn "Skipped $plugin_id: the running herdr server is older than the installed herdr, so it would refuse the link."
             info "After restarting the server: ${CYAN}herdr plugin link $plugin_dir --enabled${RESET} (or re-run ./install.sh)"
-        else
-            step "herdr plugin registration"
-            did_step=true
-            if run_cmd herdr plugin link "$plugin_dir" --enabled; then
-                success "window-title-fix linked and enabled"
-            else
-                warn "herdr plugin link failed — is the herdr server running? Retry: ${CYAN}herdr plugin link $plugin_dir --enabled${RESET}"
-            fi
+            continue
         fi
-    fi
+        if grep -qF -- "- $plugin_id (" <<<"$plugin_list"; then
+            # Registered from somewhere else: link refuses a taken id, so unlink first.
+            run_cmd herdr plugin unlink "$plugin_id" >/dev/null \
+                || warn "herdr plugin unlink $plugin_id failed; the link below will say why."
+        fi
+        if run_cmd herdr plugin link "$plugin_dir" --enabled >/dev/null; then
+            success "$plugin_id linked and enabled from $plugin_dir"
+        else
+            warn "herdr plugin link failed — is the herdr server running? Retry: ${CYAN}herdr plugin link $plugin_dir --enabled${RESET}"
+        fi
+    done
 
     # --- 2. shared skill ---
     if [[ -f "$skill_src" ]]; then
