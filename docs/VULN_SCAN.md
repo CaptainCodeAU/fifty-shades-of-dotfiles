@@ -109,6 +109,14 @@ per 30s, which takes a full sweep from ~20 minutes to ~4. Resolved from, in orde
 2. `~/.config/dotfiles/nvd-api-key` — the portable path (Linux/WSL)
 3. macOS Keychain entry `nvd-api-key`
 
+codebox gets the Mac's key through path 2, as the one key that box holds (Gavin, 18 Oct
+2026, D-20261018-A02, "not for every key, this is just an exception for this particular
+key"). Gavin copies it once from the Keychain straight into that file, mode 600, by one
+command at his own terminal; each codebox golden builds on the one before, so it stays.
+codebox's check confirms the file exists with mode 600 without reading it (Network_Plan's
+side). The key was printed into a transcript on 18 Oct and kept on purpose; see
+[`CLAUDE_LAUNCH_ENV.md`](CLAUDE_LAUNCH_ENV.md).
+
 Free and instantly regenerable at
 <https://nvd.nist.gov/developers/request-an-api-key>. `install.sh` reports when
 it is missing and gives the platform-correct command; it never prompts or stores

@@ -16,16 +16,24 @@ exports them for the `claude` process alone, inside the throwaway SSH agent when
 file exists (`__cl_ssh_agent`) and without one when it does not. Since the split there is
 one chain, so the two can no longer drift apart.
 
-| Variable                               | Value                                     | Why                                                                                                                                                                      |
-| -------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `DISABLE_TELEMETRY`                    | empty                                     | The shell exports it for every tool. Empty counts as unset, so feature flags load and Remote Control can start.                                                          |
-| `DO_NOT_TRACK`                         | empty                                     | Same reason as `DISABLE_TELEMETRY`.                                                                                                                                      |
-| `NVD_API_KEY`                          | from the Keychain                         | Lifts NVD's rate limit for the CVE sweep. Not a credential to anything. Open item W-20261006-A44 (parked by Gavin) asks whether it should leave the session environment. |
-| `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` | `1`, or `0` when `PJ_RENDERER=fullscreen` | The classic-renderer lock; engage lifts it for full-screen sessions.                                                                                                     |
-| `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY`  | `1`                                       | Clearing `DISABLE_TELEMETRY` re-enables the "How is Claude doing?" survey; this keeps it off. Added 2026-10-06.                                                          |
-| `CLAUDE_CODE_NONBLOCKING_STDOUT`       | `1`                                       | A terminal that stops reading (paused pane, stalled SSH) cannot freeze Claude. Added 2026-10-06 (Q15: 17); the freeze itself is untestable on demand.                    |
-| `CLAUDE_AUTO_BACKGROUND_TASKS`         | `1`                                       | Long subagents move to the background. Engage sessions already launch subagents async, so no visible effect here; kept on Gavin's pick (Q15.1: 2).                       |
-| `CLAUDE_CODE_WORKER_CHECKIN_SCHEDULE`  | `600`                                     | Reminds Claude every 10 minutes to check background work still running. Live test with 60: the check-in arrived at 60.0 s; none without it.                              |
+The settings reach `claude` through the ENVIRONMENT, never as command-line arguments.
+From 16 to 18 Oct 2026 (a43b851) they crossed into the SSH agent's child as arguments,
+which put the NVD key's value on the command line of two launch processes, where any `ps`
+prints it; on 18 Oct a subagent's process listing printed it into a transcript. Fixed in
+71f641b: `__cl_ssh_agent` exports them in a subshell before `ssh-agent`. Measured with a
+probe setting: in the arguments of 2 launch processes before, 0 after, and still received
+by the session. An environment is readable only by the same user.
+
+| Variable                               | Value                                     | Why                                                                                                                                                                                                                                                                                                                                |
+| -------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DISABLE_TELEMETRY`                    | empty                                     | The shell exports it for every tool. Empty counts as unset, so feature flags load and Remote Control can start.                                                                                                                                                                                                                    |
+| `DO_NOT_TRACK`                         | empty                                     | Same reason as `DISABLE_TELEMETRY`.                                                                                                                                                                                                                                                                                                |
+| `NVD_API_KEY`                          | from the Keychain                         | Lifts NVD's rate limit for the CVE sweep. Not a credential to anything. Open item W-20261006-A44 (parked by Gavin) asks whether it should leave the session environment. Printed into a transcript on 18 Oct 2026 (see above); Gavin kept the same key rather than make a new one (D-20261018-A02); measured still valid that day. |
+| `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` | `1`, or `0` when `PJ_RENDERER=fullscreen` | The classic-renderer lock; engage lifts it for full-screen sessions.                                                                                                                                                                                                                                                               |
+| `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY`  | `1`                                       | Clearing `DISABLE_TELEMETRY` re-enables the "How is Claude doing?" survey; this keeps it off. Added 2026-10-06.                                                                                                                                                                                                                    |
+| `CLAUDE_CODE_NONBLOCKING_STDOUT`       | `1`                                       | A terminal that stops reading (paused pane, stalled SSH) cannot freeze Claude. Added 2026-10-06 (Q15: 17); the freeze itself is untestable on demand.                                                                                                                                                                              |
+| `CLAUDE_AUTO_BACKGROUND_TASKS`         | `1`                                       | Long subagents move to the background. Engage sessions already launch subagents async, so no visible effect here; kept on Gavin's pick (Q15.1: 2).                                                                                                                                                                                 |
+| `CLAUDE_CODE_WORKER_CHECKIN_SCHEDULE`  | `600`                                     | Reminds Claude every 10 minutes to check background work still running. Live test with 60: the check-in arrived at 60.0 s; none without it.                                                                                                                                                                                        |
 
 `GH_TOKEN` was removed from the launch on 2026-09-18; the note above `__cl_run_with_env`
 says why.
@@ -37,7 +45,8 @@ A box installed with `--skip-claude` (`DOTFILES_PLAIN_CLAUDE=1`; the codebox pro
 `DISABLE_TELEMETRY` and `DO_NOT_TRACK` stayed set, feature flags did not load and Remote
 Control could not start. Gavin chose (dotfiles-main Q10: 1) a small `claude()` function in
 `home/.zshrc`, defined only on such a box, that adds the table above minus `NVD_API_KEY`
-(such a box holds no keys): telemetry emptied with the survey kept off, non-blocking stdout
+(the launch carries no keys there; the one key codebox holds, the NVD key, is a file its
+golden places for the scan tools, D-20261018-A02): telemetry emptied with the survey kept off, non-blocking stdout
 (codebox is reached through `herdr --remote`, so a stalled link is a real case), the classic
 renderer (`1`; no `PJ_RENDERER` there), auto-background and the 600 s check-in. No SSH agent,
 hooks, pj or engage. Tested with a stand-in `claude` that prints its environment: all six
@@ -48,7 +57,9 @@ also gets `SSH_TTY` (the pane's tty), unless one is already set. Claude Code cop
 the box's own clipboard tool unless it believes it is over SSH (`SSH_CONNECTION`,
 `SSH_CLIENT` or `SSH_TTY`), and a herdr pane carries none of them, so a drag-copy made
 through `herdr --remote` landed on codebox's clipboard instead of the Mac's (herdr issue
+
 # 4833). With `SSH_TTY` set it copies through the terminal (OSC 52), which herdr passes to
+
 the attached client. Gavin tested it by hand: paste on the Mac showed Claude's words.
 Outside a herdr pane nothing is added, because Claude counts even an empty `SSH_TTY` as
 set. Stand-in test, four arms: herdr pane with a tty gets it; no herdr pane, none; an
