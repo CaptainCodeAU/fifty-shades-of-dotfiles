@@ -198,7 +198,7 @@ herdr pane split --current --direction right --cwd "$PWD" --no-focus
 
 Replace `right` with `down` when appropriate. Read the new pane ID from `.result.pane.pane_id`.
 
-A pane fresh from `split`, or the root pane from a fresh `workspace create`, may still be running shell startup scripts (dotfiles onboarding, environment checks, `direnv` loading) and is not yet an available shell. `agent start` on a busy pane fails immediately with `agent_pane_busy`. The delay is short and bounded (observed: a few seconds); do not guess a sleep, retry with a short bounded backoff. From 0.9.4 a new workspace, tab or split starts its shell at its own size instead of borrowing another pane's (#4419, per the 0.9.4 release notes, not measured); on 0.9.3 and earlier read a CLI-created pane's first output with `--source recent-unwrapped`, since it may be wrapped to the wrong width:
+A pane fresh from `split`, or the root pane from a fresh `workspace create`, may still be running shell startup scripts (dotfiles onboarding, environment checks, `direnv` loading) and is not yet an available shell. `agent start` on a busy pane fails immediately with `agent_pane_busy`. The delay is short and bounded (observed: a few seconds); do not guess a sleep, retry with a short bounded backoff (the loop below). From 0.9.4 a new workspace, tab or split starts its shell at its own size instead of borrowing another pane's (#4419, per the 0.9.4 release notes, not measured); on 0.9.3 and earlier read a CLI-created pane's first output with `--source recent-unwrapped`, since it may be wrapped to the wrong width. The retry loop:
 
 ```bash
 for i in 1 2 3 4; do
