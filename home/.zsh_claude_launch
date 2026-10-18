@@ -146,8 +146,14 @@ __cl_checkin_reminder() {
 # (`eval "$(ssh-agent -s)"` in a subshell, stopped from an exit trap) left the agent running
 # whenever the session was killed: 202 orphans up to 16 days old on 16 Oct 2026 (#1438, #1534,
 # engage-maker Q19: 1; the same way makeitso's L5 does it). The child is a fresh zsh, so it
-# reloads this file for its functions, and the launch settings (__cl_env) cross as arguments
-# before a lone "--". -t 43200 still drops the key after 12 hours. No key file, or no
+# reloads this file for its functions. The launch settings (__cl_env) are EXPORTED into
+# ssh-agent's environment, in a subshell, and reach claude by inheritance; they never cross
+# as arguments. From 16 to 18 Oct they did (a43b851), which put NVD_API_KEY's value on the
+# command line of the ssh-agent and zsh processes, where any `ps` of any user prints it; a
+# re-check's process listing printed it into a transcript on 18 Oct. An environment is
+# readable only by the same user, which is where the key sat before a43b851. Never pass a
+# setting as an argument here. Measured 18 Oct with a probe setting: in the arguments of 2
+# launch processes before, 0 after. -t 43200 still drops the key after 12 hours. No key file, or no
 # ssh-agent: the command runs with no agent. Test: ~/CODE/CaptainCodeAU/engage/tests/launch-agent.test.zsh
 # Its one local is named __cl_key, not key: a local is still in scope while claude runs, and
 # it would hide an inherited exported variable of the same name from claude.
@@ -167,13 +173,15 @@ typeset -g __cl_launch_file=${${(%):-%x}:A}
 __cl_ssh_agent() {
   local __cl_key="$HOME/.ssh/captaincodeau"
   if [[ -f "$__cl_key" ]] && command -v ssh-agent >/dev/null 2>&1; then
-    ssh-agent -t 43200 zsh -fc '
-      __cl_k=$1 __cl_f=$2; shift 2
-      source "$__cl_f"
-      typeset -a __cl_env=(); while (( $# )) && [[ $1 != -- ]]; do __cl_env+=("$1"); shift; done; shift
-      ssh-add --apple-use-keychain "$__cl_k" 2>/dev/null || ssh-add "$__cl_k"
-      unset __cl_k __cl_f
-      "$@"' __cl_ssh_agent "$__cl_key" "$__cl_launch_file" "${__cl_env[@]}" -- "$@"
+    (
+      (( ${+__cl_env} )) && (( ${#__cl_env} )) && builtin export "${__cl_env[@]}"
+      ssh-agent -t 43200 zsh -fc '
+        __cl_k=$1 __cl_f=$2; shift 2
+        source "$__cl_f"
+        ssh-add --apple-use-keychain "$__cl_k" 2>/dev/null || ssh-add "$__cl_k"
+        unset __cl_k __cl_f
+        "$@"' __cl_ssh_agent "$__cl_key" "$__cl_launch_file" "$@"
+    )
   else
     "$@"
   fi
