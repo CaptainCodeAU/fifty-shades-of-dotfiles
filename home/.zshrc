@@ -1050,7 +1050,9 @@ fi
 
 # Plain-Claude launch settings (Gavin, dotfiles-main Q10: 1, 2026-10-15). A box with
 # DOTFILES_PLAIN_CLAUDE (codebox) has no ~/.zsh_claude_launch, so `claude` started bare.
-# This adds the Mac launch's settings minus NVD_API_KEY (no keys on such a box):
+# This adds the Mac launch's settings minus NVD_API_KEY (no keys in the launch; the one
+# key codebox holds, the NVD key, is a file its golden writes and vulnlib.py reads,
+# ~/.config/dotfiles/nvd-api-key, Gavin's single exception, D-20261018-A02):
 # telemetry emptied for claude only, so feature flags load and Remote Control can start
 # (~/.zshenv sets it back for Claude's own commands), with the survey kept off; the
 # non-blocking stdout guard for a stalled `herdr --remote` link; the classic renderer;
