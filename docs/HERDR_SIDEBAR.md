@@ -180,9 +180,15 @@ labelled with the machine; Claude must be started in a pane of that machine.
   **18 Oct, `herdr machine list` shows TWO saved machines, both enabled, both host
   codebox.lan:** `codebox` and a second one labelled `codebox.lan`. Not known whether
   that is a re-add or a duplicate; each enabled machine may hold its own ssh path
-  (trade-off below). Not changed; for Gavin to look at. Re-measured later on
-  2026-10-18 on 0.9.5: still the same two, `codebox` and `codebox.lan`, both enabled,
-  both host codebox.lan.
+  (trade-off below). Re-measured later on 2026-10-18 on 0.9.5: still the same two.
+  Gavin then removed `codebox.lan` (dotfiles-main Q14), leaving `codebox` alone.
+  Both had read `auth required` (Permission denied (publickey)): herdr's background
+  ssh cannot prompt for the codebox-admin passphrase. `UseKeychain yes` and
+  `AddKeysToAgent yes` on Host codebox.lan in ~/.ssh/config.local (Q17 v2: 1, on
+  Network_Plan's advice) made it `reachable`. The sidebar still showed nothing,
+  because codebox's server had 0 workspaces (the Mac had 11, same command); a
+  refresh starts it empty. herdr.service now runs `herdr-ensure-workspace` as
+  ExecStartPost, which opens one workspace when none is saved (Q18 v2: 1).
 - NP-2 checked it against codebox's lockdown (CB D-008): Mac -> codebox only, over the
   ssh connection's stdio, no forwards; the codebox.lan Host entry and its admin key,
   never the speak-relay key; decline any install or update prompt (codebox's herdr
