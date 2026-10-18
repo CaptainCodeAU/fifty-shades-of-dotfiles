@@ -263,9 +263,10 @@ command = "sh -c 'exec env SPEAK_SOURCE=herdr \"$HOME/.local/bin/speak-clipboard
 key = ["prefix+p", "ctrl+alt+p"]
 type = "popup"
 command = "sh -c 'exec \"$HOME/.local/bin/herdr-palette\"'"
-# 95% wide (Gavin, 19 Oct: 80% was "too narrow").
-width = "95%"
-height = 20
+# 75% wide and 70% tall (Gavin, 19 Oct: 80% wide by 18 rows was "too narrow",
+# then 95% by 20 was too wide and "height is very less").
+width = "75%"
+height = "70%"
 
 [ui.toast]
 delivery = "herdr"
