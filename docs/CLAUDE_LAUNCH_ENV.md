@@ -137,7 +137,7 @@ A/B in a herdr pane.
 | `timeFormat: 12-hour`, `timeZone: Australia/Melbourne`                                             | "done 2:56 pm" → "done 2:55 pm": the Mac's locale already matched; pins it for other machines |
 | `maxProseWidth: 100`                                                                               | widest prose line 184 → 102 columns                                                           |
 | `prefersReducedMotion: true`, `spinnerTipsEnabled: false`                                          | spinner 6 cycling glyphs → 1 static; tips void                                                |
-| `footerLinksRegexes` for W-/D- IDs → dot-claude code search                                        | 0 → 2 footer badges                                                                           |
+| `footerLinksRegexes` for W-/D- IDs → dot-claude code search (REMOVED 18 Oct 2026, Gavin's ask)     | 0 → 2 footer badges; read from user settings even under `--setting-sources project,local`     |
 | `fallbackModel: ["claude-opus-5", "sonnet"]`                                                       | clean start both arms; the switch needs an overload (void)                                    |
 | `sandbox.failIfUnavailable: true`                                                                  | clean start both arms; the refusal needs a broken sandbox (void)                              |
 
