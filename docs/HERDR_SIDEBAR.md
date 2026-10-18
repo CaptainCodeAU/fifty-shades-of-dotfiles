@@ -47,6 +47,15 @@ facts behind the choices and the options not taken.
 - **Three lines per agent:** 1) the bold state icon, the project, the tab, the
   machine; 2) the session name; 3) the state word on its own line. herdr drops a
   line whose tokens are all empty or hidden, so a row with no word is two lines.
+- **A bracket hanging under the project** (Q64: 1): line 2 is the plugin's
+  `$session` token, "│ <session name>", and the words on line 3 start with "╰ ".
+  herdr has no border or fixed text, and puts " · " between any two tokens
+  except after the state icon (`src/ui/sidebar/tokens.rs`, separator), so the
+  box characters live inside the token values. The token comes from its own
+  source (`dotfiles-state-words-box`) and is re-sent on every status change; a
+  `/rename` shows at the next one, because plugins cannot hook `pane.updated`.
+  A pane the plugin has not reached shows no line 2. Seen live 18 Oct on the
+  dotfiles pane; 50 plugin runs, all `succeeded`.
 - **Colour only where Gavin is needed:** working is a cool slate grey
   (`theme.custom.yellow = "#6e7a86"`; orange and a warm grey were tried and
   dropped, the warm grey read as the session name's sand).
