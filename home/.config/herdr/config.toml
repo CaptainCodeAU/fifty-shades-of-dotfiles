@@ -431,6 +431,19 @@ auto_switch = false
 # resting grey 3.6, cyan 6.7, green 6.1, red 5.1 (copper gave 15.4 to 3.5).
 # One setting each, shared by the spaces and agents sections.
 [theme.custom]
+# Panel background (Gavin, 19 Oct, kept: the right-click menu's highlighted row was light text
+# on a light background, so "Rename pane" read as a header). herdr draws the
+# highlighted row on the accent (the gold) in panel_contrast_fg, which is
+# panel_bg, or surface_dim (ANSI dark grey #6c6c6c, contrast 3.8 on the gold)
+# while panel_bg is the terminal's own "reset". Setting panel_bg to Ghostty's
+# background #170d0d makes that text near-black, 13.8 on the gold, in every
+# menu, the focused tab and the settings screen. surface_dim was not touched:
+# it also draws the sidebar's divider and edge, scrollbar tracks and a pane's
+# text-selection background. panel_bg also paints the tab bar, popups and
+# herdr's own background, all in the colour Ghostty already shows there; what
+# may change is that Ghostty's 0.95 background-opacity no longer shows
+# through those areas (herdr 0.9.5 source, not seen yet).
+panel_bg = "#170d0d"
 selection_bg = "#24304a"
 active_row_bg = "#1a2233"
 # Inactive pane borders and their titles (Gavin, 16 Oct). As observed on herdr
