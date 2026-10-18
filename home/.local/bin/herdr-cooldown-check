@@ -89,6 +89,7 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -353,7 +354,8 @@ def latest_release(timeout: int) -> tuple[str, datetime] | None:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError,
+            json.JSONDecodeError):
         return None
     tag = data.get("tag_name")
     published = data.get("published_at")
@@ -383,7 +385,8 @@ def release_by_tag(tag: str, timeout: int) -> datetime | None:
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError,
+            json.JSONDecodeError):
         return None
     published = data.get("published_at")
     if not published:
