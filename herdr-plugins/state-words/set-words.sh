@@ -62,11 +62,15 @@ LABEL_SOURCE="dotfiles-state-words"
 TOKEN_SOURCE="dotfiles-state-words-box"
 WORKING_WORD="╰ thinking"
 DONE_WORD="╰ your turn"
-IDLE_WORD="╰ your turn"
+# Seen "your turn" (idle) uses a square corner so config.toml can colour it on
+# its own: herdr trims labels and drops control characters, and the icon and
+# word share one state colour, so a different glyph is the only way to give
+# the seen word a softer colour than its icon (Gavin, 19 Oct).
+IDLE_WORD="└ your turn"
 BLOCKED_WORD="╰ needs you"
 RESTING_WORD="╰ resting"
 # Every idle word this script uses or has used; a pane holding one is ours.
-OUR_IDLE_WORDS="your turn|╰ your turn|╰ resting"
+OUR_IDLE_WORDS="your turn|╰ your turn|└ your turn|╰ resting"
 BAR="│"
 # resting is not a herdr state: it is idle or done with no 👉 in the last reply.
 STATES="working done idle blocked unknown resting"
