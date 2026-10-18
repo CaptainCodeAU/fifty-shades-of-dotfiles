@@ -1085,6 +1085,13 @@ fi
 # the copy through the terminal (OSC 52), which herdr passes to the attached client.
 # Tested by hand that night: `SSH_TTY=$(tty) claude` in a remote pane, drag, paste on the
 # Mac showed Claude's words. An SSH_TTY already set (a real ssh login) is kept.
+#
+# And bypass permissions (Gavin, dotfiles-main Q74: 1, 19 Oct 2026), the way engage gives
+# them on the Mac: --dangerously-skip-permissions on the launch. Q74's first route,
+# permissions.defaultMode "bypassPermissions" in codebox's settings.json, does not hold:
+# measured on codebox that morning, Claude Code 2.1.302 rewrote it to "auto" at startup
+# (4:17 AM, one minute after the install wrote it) and the session started in auto mode.
+# The flag passes through Claude's subcommands (--version, mcp, update all ran with it).
 if [[ -n ${DOTFILES_PLAIN_CLAUDE-} ]]; then
     claude() {
         # Outside a herdr pane nothing is added: Claude counts even an empty SSH_TTY as set.
@@ -1096,7 +1103,7 @@ if [[ -n ${DOTFILES_PLAIN_CLAUDE-} ]]; then
         DISABLE_TELEMETRY= DO_NOT_TRACK= CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 \
         CLAUDE_CODE_NONBLOCKING_STDOUT=1 CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
         CLAUDE_AUTO_BACKGROUND_TASKS=1 CLAUDE_CODE_WORKER_CHECKIN_SCHEDULE=600 \
-            command env "${over_ssh[@]}" claude "$@"
+            command env "${over_ssh[@]}" claude --dangerously-skip-permissions "$@"
     }
 fi
 
