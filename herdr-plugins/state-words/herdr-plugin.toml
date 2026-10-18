@@ -2,7 +2,7 @@ id = "dotfiles.state-words"
 name = "State Words"
 version = "0.1.0"
 min_herdr_version = "0.9.5"
-description = "Gives every agent pane Gavin's words for its state in the sidebar (thinking, your turn, needs you), so 'your turn' stays after he looks and only goes when he sends a prompt"
+description = "Gives every agent pane Gavin's words for its state in the sidebar (thinking, your turn, resting, needs you): 'your turn' when the last reply ends on a 👉 line, 'resting' when it does not, and either stays after he looks until he sends a prompt"
 platforms = ["macos", "linux"]
 
 # agent_detected covers a new agent; agent_status_changed covers agents that

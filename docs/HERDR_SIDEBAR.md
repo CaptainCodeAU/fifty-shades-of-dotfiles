@@ -81,9 +81,11 @@ facts behind the choices and the options not taken.
   (`theme.custom.yellow = "#6e7a86"`; orange and a warm grey were tried and
   dropped, the warm grey read as the session name's sand).
 - **The words come from the `dotfiles.state-words` plugin**
-  (`herdr-plugins/state-words/`): thinking, your turn (done AND idle), needs you.
-  Idle gets a word because herdr turns done into idle the moment Gavin looks at
-  the tab, and he wants "your turn" to stay until he sends a prompt.
+  (`herdr-plugins/state-words/`): thinking; your turn or resting (done AND idle,
+  by the 👉 rule above); needs you. Idle gets a word because herdr turns done
+  into idle the moment Gavin looks at the tab, and he wants "your turn" to stay
+  until he sends a prompt. e-conductor read a test tab on 19 Oct: panes with no
+  engage label showed "╰ resting" for idle and done, as designed.
 - **How herdr combines labels** (measured 2026-10-18 on 0.9.5, and
   `src/terminal/metadata.rs` effective_metadata_state_labels): per state the
   newest label wins, whichever `--source` sent it; a report replaces its own
