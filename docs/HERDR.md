@@ -30,7 +30,9 @@ group's usage identical except the new `herdr plugin update`, and
 NOT RE-MEASURED, because each needs a step that ends or disturbs the running
 session: that closing the shell that started herdr, or a `SIGHUP`, no longer
 stops the server (0.9.4, #4920), and that sessions survive a Mac restart (0.9.4,
+
 # 4414). Also not re-measured: anything on codebox (reported on 0.9.5, not measured here), the Linux system
+
 unit and the `herdr()` guard on Linux, remote attach and the keymap-drift
 claims, the tmux comparison and copy mode, and speak-selection. The 0.9.4 and
 0.9.5 notes touch none of those beyond what is marked. A coverage audit of every
@@ -809,7 +811,7 @@ Two ways to close the gap:
 
   ```bash
   herdr --remote ssh://<host> --remote-keybindings server
-  export HERDR_REMOTE_KEYBINDINGS=server   # same choice, without the flag
+  export HERDR_REMOTE_KEYBINDINGS=server   # same choice, without the flag; NOT globally, see below
   ```
 
   This is the option that removes the failure class rather than re-fixing it per
@@ -828,10 +830,22 @@ re-made with `--remote-keybindings server`.
 
 Hit again 2026-10-16: the speak keys (`[[keys.command]]`) did nothing in a
 `herdr --remote codebox.lan` tab until the attach was re-made with
-`--remote-keybindings server`; then the first press spoke (Gavin's test). Since
-then `home/.zshrc` exports `HERDR_REMOTE_KEYBINDINGS=server` on every machine,
-so every remote attach uses the far box's keys without the flag. A far box must
+`--remote-keybindings server`; then the first press spoke (Gavin's test). From
+then `home/.zshrc` exported `HERDR_REMOTE_KEYBINDINGS=server` on every machine,
+so every remote attach used the far box's keys without the flag. A far box must
 pull the dotfiles to get a newly added key.
+
+**That export broke saved machines, so since 2026-10-18 only `--remote` gets it.**
+With the variable set, the Mac's NORMAL `herdr` screen never joined saved machines:
+no "machines" section, no ssh helper started, and nothing in the client log even
+with `HERDR_LOG=debug`, while `herdr machine status` read `reachable` and codebox had
+a workspace. Measured 18 Oct, the same screen and moment: plain `herdr` showed no
+codebox; `env -u HERDR_REMOTE_KEYBINDINGS herdr` showed `machines`, Local and
+codebox.lan at once. The `herdr()` function in `home/.zshrc` now adds
+`--remote-keybindings server` only when the arguments contain `--remote` and no
+explicit `--remote-keybindings`; nothing is exported. A shell opened before the
+change still carries the old variable until it is closed or runs
+`unset HERDR_REMOTE_KEYBINDINGS`.
 
 ### Linux / WSL: the systemd user service
 

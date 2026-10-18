@@ -813,7 +813,11 @@ pnpm() {
 # once (Gavin's test, codebox, 3:44 AM). Both ends stow the same config.toml,
 # so nothing is lost; a far box must pull the dotfiles to get a new key.
 # Why: docs/HERDR.md, "Two machines: the keymap drifts too".
-export HERDR_REMOTE_KEYBINDINGS=server
+# ONLY for `herdr --remote`, added by the function below. Until 18 Oct 2026 this was
+# `export HERDR_REMOTE_KEYBINDINGS=server` for every herdr start, and that stopped the
+# Mac's normal screen from joining saved machines at all: no "machines" section, no
+# ssh helper, nothing in the debug log. Measured 18 Oct: plain `herdr` showed no
+# codebox; `env -u HERDR_REMOTE_KEYBINDINGS herdr` showed Local and codebox.lan at once.
 herdr() {
     local _unit="$HOME/.config/systemd/user/herdr.service"
     local _plist="$HOME/Library/LaunchAgents/homebrew.mxcl.herdr.plist"
@@ -880,12 +884,18 @@ herdr() {
     if [[ "$1" == "update" ]] || [[ "$1" == "channel" && "$2" == "set" && "$3" == "preview" ]]; then
         echo "${err}BLOCKED: herdr $1${2:+ $2}${3:+ $3}${done}"
         echo
-        echo "  This bypasses Homebrew, the pin and the ${warn}${HERDR_COOLDOWN_DAYS:-5}-day release cooldown${done}."
+        echo "  This bypasses Homebrew, the pin and the ${warn}${HERDR_COOLDOWN_DAYS:-3}-day release cooldown${done}."
         echo
         echo "  Check state:  herdr-cooldown-check"
         echo "  Upgrade:      ./install.sh   (bumps automatically once the cooldown has elapsed)"
         echo "  By hand:      brew unpin herdr; HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade herdr; brew pin herdr"
         return 1
+    fi
+    # `herdr --remote` takes the far box's keys (see the note above the function);
+    # nothing else does. An explicit --remote-keybindings wins.
+    if (( ${@[(Ie)--remote]} )) && ! (( ${@[(Ie)--remote-keybindings]} )); then
+        command herdr --remote-keybindings server "$@"
+        return
     fi
     command herdr "$@"
 }

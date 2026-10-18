@@ -130,7 +130,7 @@ Creation responses expose the IDs to use next. `workspace create` returns `.resu
 
 ## Control a saved SSH machine (0.9.1 and later)
 
-This estate has one saved machine, `codebox` (ssh target `codebox.lan`); a duplicate `codebox.lan` profile was removed 2026-10-18 (Gavin, dotfiles-main Q14), and the login works without a prompt since the Keychain change that day (`herdr machine status codebox` read `reachable`, was `auth required`). The rest of this section is still upstream's text, not measured here, kept close to upstream's wording so the merge base stays comparable.
+This estate has one saved machine, `codebox` (ssh target `codebox.lan`); a duplicate `codebox.lan` profile was removed 2026-10-18 (Gavin, dotfiles-main Q14), and the login works without a prompt since the Keychain change that day (`herdr machine status codebox` read `reachable`, was `auth required`). Never export `HERDR_REMOTE_KEYBINDINGS`: with it set, the Mac's screen shows no saved machines at all (measured 2026-10-18); `.zshrc`'s `herdr()` adds `--remote-keybindings server` to `herdr --remote` only. The rest of this section is still upstream's text, not measured here, kept close to upstream's wording so the merge base stays comparable.
 
 IDs and live agent names are scoped to one server: two saved SSH machines can both have `w1:p1` or an agent named `reviewer`. Selecting a machine in the TUI does not retarget commands running in your pane; without `--machine` they use the inherited session and socket context.
 

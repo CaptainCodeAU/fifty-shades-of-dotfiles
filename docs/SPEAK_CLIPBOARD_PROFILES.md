@@ -687,8 +687,10 @@ Three pieces have to line up, and each failed alone that night:
    keys by default, and the speak keys then did nothing at all: no line in
    codebox's speak log. `--remote-keybindings server` fixed it at once (Gavin's
    test, 3:44 AM: the Mac's relay log shows `codebox.lan ran '--toggle'`).
-   `home/.zshrc` now exports `HERDR_REMOTE_KEYBINDINGS=server`, so no flag is
-   needed. Background: `docs/HERDR.md`, "Two machines: the keymap drifts too".
+   The `herdr()` function in `home/.zshrc` adds `--remote-keybindings server` to
+   every `herdr --remote`, so no flag is needed. (It was a global export until
+   18 Oct 2026, which stopped saved machines from showing in the Mac's screen.)
+   Background: `docs/HERDR.md`, "Two machines: the keymap drifts too".
 2. **The copy must land on the Mac.** Claude on codebox copies through the
    terminal only when it believes it is over SSH; codebox's `claude()` sets
    `SSH_TTY` inside a herdr pane (Q21, `docs/CLAUDE_LAUNCH_ENV.md`). A Claude
