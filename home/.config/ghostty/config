@@ -21,6 +21,11 @@
 # adjust-cell-height below.
 # A blind test of five fonts (15 to 17 Oct) changed nothing: GeistMono, IosevkaTerm,
 # JetBrainsMono, MonoLisa and MesloLGS, shown as A to E; Gavin kept MesloLGS NF.
+# 18 Oct: Gavin switched every font-family line off (kept below, commented, so any
+# can come back), so Ghostty draws with its built-in default font (JetBrains Mono,
+# per Ghostty's docs; `ghostty +show-config --default` shows font-family empty).
+# font-thicken is off too, and adjust-cell-width 7% and alpha-blending linear are
+# new; the size stays 12. Gavin called it finished the same evening.
 # Reference: https://ghostty.org/docs/config/reference
 
 # font-family = MesloLGS NF
