@@ -1,0 +1,539 @@
+#!/usr/bin/env -S uv run python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+# ============================================================================
+#  herdr-palette -- a clickable word palette that types into the Claude prompt
+#                   of the pane it was opened over
+# ============================================================================
+#
+# Opened by herdr's popup key (home/.config/herdr/config.toml, [[keys.command]]
+# type = "popup", ctrl+Space then p). herdr runs it in a session-modal popup and
+# passes HERDR_ACTIVE_PANE_ID, the pane that was focused when the key was
+# pressed, which is the session to type into (herdr 0.9.5 source,
+# src/app/custom_commands.rs custom_command_env). The popup closes when this
+# program exits.
+#
+# Asked for by Gavin, 19 Oct 2026 (dotfiles-main Q69): a third sidebar section
+# of words and icons that fill the prompt when clicked. herdr's sidebar has
+# exactly two sections and no plugin can draw in it, so this is a popup.
+#
+# The words live in ~/.config/herdr/palette.toml (stowed from this repo), one
+# tab per [[group]]. An extra "Answer" tab, first when present, is built from
+# the target session's last reply: its 👉 line names the open questions
+# ("Q66 (v2): 1, 2, 3, 4 or 5 ?"), and each option becomes a chip ("Q66: 3").
+#
+# Typing goes through herdr-type (same folder), which reads the screen before
+# every key, never approves a permission prompt and refuses a shell pane.
+#   click        types the chip's text, no Enter, then closes
+#   right-click  types it and presses Enter, then closes
+#   arrows/hjkl  move   Tab/Shift-Tab  change tab   Enter  type   1-9  pick
+#   Esc or q     close without typing
+#
+# Drawn with plain ANSI escapes in the alternate screen, mouse reporting in
+# SGR mode (1006) with motion (1003) for the hover highlight; truecolor.
+#
+#   herdr-palette                  run (needs HERDR_ACTIVE_PANE_ID or --target)
+#   herdr-palette --target w1:p1   run against a named pane
+#   herdr-palette --dry-run        never types; the chosen command is logged
+#   herdr-palette --selftest       offline checks of the pure parts
+#
+# Exit: 0 typed or closed, 2 usage or a broken palette file.
+
+import json
+import os
+import re
+import select
+import shutil
+import subprocess
+import sys
+import termios
+import time
+import tomllib
+import tty
+import unicodedata
+
+PALETTE_FILE = os.environ.get(
+    "HERDR_PALETTE_FILE", os.path.expanduser("~/.config/herdr/palette.toml"))
+HERDR_TYPE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "herdr-type")
+LOG = os.environ.get("HERDR_PALETTE_LOG", "")
+
+# Colours: truecolor, matched to the herdr config (gold accent, navy rows).
+GOLD = (255, 215, 95)
+NAVY = (26, 34, 51)
+NAVY_HI = (36, 48, 74)
+INK = (23, 13, 13)          # Ghostty's background, for text on gold
+TEXT = (220, 220, 220)
+DIM = (120, 112, 104)
+SAND = (176, 160, 132)
+TEAL = (0, 187, 187)
+GREEN = (0, 187, 0)
+RED = (255, 85, 85)
+PERI = (129, 134, 207)
+
+ESC = "\x1b"
+
+
+def fg(c):
+    return f"{ESC}[38;2;{c[0]};{c[1]};{c[2]}m"
+
+
+def bg(c):
+    return f"{ESC}[48;2;{c[0]};{c[1]};{c[2]}m"
+
+
+RESET = f"{ESC}[0m"
+BOLD = f"{ESC}[1m"
+
+
+# ------------------------------------------------------------------ text width
+def cell_width(s):
+    """Terminal cells for s: wide and emoji characters take 2, joiners and
+    variation selectors 0, and a character followed by U+FE0F (emoji
+    presentation) takes 2 whatever its own width."""
+    w = 0
+    chars = list(s)
+    for i, ch in enumerate(chars):
+        o = ord(ch)
+        if o in (0xFE0F, 0xFE0E, 0x200D) or unicodedata.combining(ch):
+            continue
+        nxt = chars[i + 1] if i + 1 < len(chars) else ""
+        if nxt == "️":
+            w += 2
+        elif unicodedata.east_asian_width(ch) in ("W", "F") or o >= 0x1F000:
+            w += 2
+        else:
+            w += 1
+    return w
+
+
+# ------------------------------------------------------------------ palette file
+def load_groups(path):
+    with open(path, "rb") as f:
+        data = tomllib.load(f)
+    groups = []
+    for g in data.get("group", []):
+        chips = []
+        for c in g.get("chip", []):
+            label = str(c.get("label", "")).strip()
+            if not label:
+                continue
+            chips.append({"icon": str(c.get("icon", "")), "label": label,
+                          "text": str(c.get("text", label))})
+        if chips:
+            groups.append({"name": str(g.get("name", "?")),
+                           "icon": str(g.get("icon", "")), "chips": chips})
+    return groups
+
+
+# ------------------------------------------------------------------ answers
+QUESTION = re.compile(
+    r"(Q\d+(?:-[a-z])?)(?:\s*\(v\d+\))?\s*:\s*((?:\d+\s*(?:,|or)?\s*)+)\??")
+
+
+def answer_chips(pointer_line):
+    """Chips for each option of each question named on a 👉 line.
+    'Q66 (v2): 1, 2 or 3 ?' gives Q66: 1, Q66: 2, Q66: 3 (the (vN) is
+    dropped: 'Q66: 1' means the latest version, by the reply style)."""
+    chips = []
+    for qid, opts in QUESTION.findall(pointer_line.replace("*", "")):
+        for n in re.findall(r"\d+", opts):
+            chips.append({"icon": "🎯", "label": f"{qid} · {n}",
+                          "text": f"{qid}: {n}"})
+    return chips
+
+
+def last_pointer_line(transcript):
+    """The last 👉 line of the last assistant reply in a transcript, or ''."""
+    try:
+        with open(transcript, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 2_000_000))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return ""
+    for raw in reversed(lines):
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            continue
+        if rec.get("type") != "assistant" or rec.get("isSidechain"):
+            continue
+        texts = [c.get("text", "") for c in (rec.get("message") or {}).get("content") or []
+                 if isinstance(c, dict) and c.get("type") == "text"]
+        if not texts:
+            continue
+        for line in reversed(texts[-1].splitlines()):
+            if line.strip().startswith("👉"):
+                return line.strip()
+        return ""
+    return ""
+
+
+def find_transcript(session_id):
+    roots = [os.environ.get("CLAUDE_CONFIG_DIR", ""), os.path.expanduser("~/.claude")]
+    home = os.path.expanduser("~")
+    roots += sorted(os.path.join(home, d) for d in os.listdir(home)
+                    if d.startswith(".claude") and os.path.isdir(os.path.join(home, d)))
+    for root in filter(None, roots):
+        proj = os.path.join(root, "projects")
+        if not os.path.isdir(proj):
+            continue
+        for d in os.listdir(proj):
+            p = os.path.join(proj, d, f"{session_id}.jsonl")
+            if os.path.isfile(p):
+                return p
+    return ""
+
+
+# ------------------------------------------------------------------ herdr
+def herdr_bin():
+    return os.environ.get("HERDR_BIN_PATH") or shutil.which("herdr") or "herdr"
+
+
+def target_info(pane_id):
+    """Name, herdr state and session id of the target pane (best effort)."""
+    try:
+        out = subprocess.run([herdr_bin(), "pane", "get", pane_id], capture_output=True,
+                             text=True, timeout=4).stdout
+        pane = json.loads(out)["result"]["pane"]
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+        return {"name": pane_id, "status": "?", "session": ""}
+    sess = pane.get("agent_session") or {}
+    return {
+        "name": pane.get("label") or pane.get("terminal_title_stripped") or pane_id,
+        "status": pane.get("agent_status") or ("shell" if not pane.get("agent") else "?"),
+        "session": sess.get("value", "") if sess.get("kind") == "id" else "",
+    }
+
+
+# ------------------------------------------------------------------ layout
+def layout_chips(chips, width, top):
+    """Place chips left to right, wrapping; each is 3 rows tall. Returns a
+    list of (x, y, w) with 1-based terminal coordinates."""
+    rects, x, y = [], 3, top
+    for c in chips:
+        w = cell_width(f" {c['icon']} {c['label']} ") + 2 if c["icon"] else cell_width(f" {c['label']} ") + 2
+        if x + w > width - 1 and x > 3:
+            x, y = 3, y + 3
+        rects.append((x, y, w))
+        x += w + 1
+    return rects
+
+
+def layout_tabs(groups, top):
+    rects, x = [], 3
+    for g in groups:
+        label = f" {g['icon']} {g['name']} " if g["icon"] else f" {g['name']} "
+        w = cell_width(label)
+        rects.append((x, top, w, label))
+        x += w + 1
+    return rects
+
+
+# ------------------------------------------------------------------ the screen
+class Palette:
+    def __init__(self, groups, target, info, dry_run):
+        self.groups = groups
+        self.target = target
+        self.info = info
+        self.dry_run = dry_run
+        self.tab = 0
+        self.sel = 0
+        self.hover = None          # ("chip", i) or ("tab", i)
+        self.flash = None          # (index, colour) after a pick
+        self.message = ""
+        self.message_colour = DIM
+        self.done = False
+
+    # -- drawing
+    def size(self):
+        s = shutil.get_terminal_size((80, 24))
+        return s.columns, s.lines
+
+    def draw(self):
+        w, h = self.size()
+        out = [f"{ESC}[H{ESC}[2J"]
+        # title bar
+        title = " ✦ PROMPT PALETTE "
+        who = f" → {self.info['name']} · {self.info['status']} "
+        out.append(f"{ESC}[1;1H{bg(GOLD)}{fg(INK)}{BOLD}{title}{RESET}{fg(SAND)}{who}{RESET}")
+        # tabs
+        self.tab_rects = layout_tabs(self.groups, 3)
+        for i, (x, y, tw, label) in enumerate(self.tab_rects):
+            if i == self.tab:
+                style = bg(GOLD) + fg(INK) + BOLD
+            elif self.hover == ("tab", i):
+                style = bg(NAVY_HI) + fg(TEXT)
+            else:
+                style = bg(NAVY) + fg(DIM)
+            out.append(f"{ESC}[{y};{x}H{style}{label}{RESET}")
+        out.append(f"{ESC}[4;3H{fg(NAVY_HI)}{'─' * max(0, w - 4)}{RESET}")
+        # chips
+        chips = self.groups[self.tab]["chips"]
+        self.chip_rects = layout_chips(chips, w, 6)
+        for i, ((x, y, cw), c) in enumerate(zip(self.chip_rects, chips)):
+            if y + 2 >= h - 2:
+                break
+            hot = self.hover == ("chip", i) or i == self.sel
+            if self.flash and self.flash[0] == i:
+                border, fill, ink = self.flash[1], self.flash[1], INK
+            elif hot:
+                border, fill, ink = GOLD, NAVY_HI, (255, 255, 255)
+            else:
+                border, fill, ink = (92, 74, 74), NAVY, TEXT
+            inner = cw - 2
+            body = f" {c['icon']} {c['label']} " if c["icon"] else f" {c['label']} "
+            pad = inner - cell_width(body)
+            num = f"{i + 1}" if i < 9 else " "
+            top_line = "╭" + num + "─" * (inner - 1) + "╮"
+            out.append(f"{ESC}[{y};{x}H{fg(border)}{top_line}{RESET}")
+            out.append(f"{ESC}[{y + 1};{x}H{fg(border)}│{RESET}{bg(fill)}{fg(ink)}"
+                       f"{BOLD if hot else ''}{body}{' ' * pad}{RESET}{fg(border)}│{RESET}")
+            out.append(f"{ESC}[{y + 2};{x}H{fg(border)}╰{'─' * inner}╯{RESET}")
+        # preview of what the selected chip types
+        if chips:
+            pick = chips[self.sel]["text"]
+            show = pick if cell_width(pick) < w - 14 else pick[: w - 17] + "…"
+            out.append(f"{ESC}[{h - 2};3H{fg(DIM)}types: {RESET}{fg(PERI)}{show}{RESET}")
+        # footer
+        hint = "click type  ·  right-click type + send  ·  ←↑↓→ move  ·  tab group  ·  esc close"
+        if self.message:
+            out.append(f"{ESC}[{h};3H{fg(self.message_colour)}{BOLD}{self.message}{RESET}")
+        else:
+            out.append(f"{ESC}[{h};3H{fg(DIM)}{hint[: w - 4]}{RESET}")
+        sys.stdout.write("".join(out))
+        sys.stdout.flush()
+
+    # -- actions
+    def pick(self, i, send):
+        chips = self.groups[self.tab]["chips"]
+        if not 0 <= i < len(chips):
+            return
+        text = chips[i]["text"]
+        cmd = [HERDR_TYPE, "send", self.target, text] + (["--enter"] if send else [])
+        if self.dry_run:
+            if LOG:
+                with open(LOG, "a") as f:
+                    f.write(json.dumps({"cmd": cmd}) + "\n")
+            self.flash = (i, TEAL)
+            self.message = f"dry run: would type {text!r}" + (" + Enter" if send else "")
+            self.message_colour = TEAL
+            self.draw()
+            time.sleep(0.4)
+            self.done = True
+            return
+        self.flash = (i, GOLD)
+        self.draw()
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if r.returncode == 0:
+            self.flash = (i, GREEN)
+            self.message = f"✓ typed into {self.info['name']}" + (" and sent" if send else "")
+            self.message_colour = GREEN
+            self.draw()
+            time.sleep(0.35)
+            self.done = True
+        else:
+            why = (r.stderr or r.stdout).strip().splitlines()
+            self.flash = (i, RED)
+            self.message = f"✗ not typed (exit {r.returncode}): {why[-1] if why else ''}"
+            self.message_colour = RED
+            self.draw()
+            self.flash = None
+
+    def move(self, dx, dy):
+        rects = self.chip_rects
+        if not rects:
+            return
+        x, y, _ = rects[self.sel]
+        if dy:
+            same = [i for i, r in enumerate(rects) if r[1] == y + 3 * dy]
+            if same:
+                self.sel = min(same, key=lambda i: abs(rects[i][0] - x))
+        else:
+            self.sel = max(0, min(len(rects) - 1, self.sel + dx))
+
+    def set_tab(self, i):
+        self.tab = i % len(self.groups)
+        self.sel = 0
+        self.hover = None
+
+    def hit(self, mx, my):
+        for i, (x, y, tw, _) in enumerate(self.tab_rects):
+            if y == my and x <= mx < x + tw:
+                return ("tab", i)
+        for i, (x, y, cw) in enumerate(self.chip_rects):
+            if y <= my <= y + 2 and x <= mx < x + cw:
+                return ("chip", i)
+        return None
+
+    # -- input
+    def handle(self, data):
+        i = 0
+        while i < len(data):
+            m = re.match(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])", data[i:])
+            if m:
+                i += m.end()
+                b, mx, my, kind = int(m[1]), int(m[2]), int(m[3]), m[4]
+                target = self.hit(mx, my)
+                if b & 32:                      # motion
+                    if target != self.hover:
+                        self.hover = target
+                        if target and target[0] == "chip":
+                            self.sel = target[1]
+                    continue
+                if kind != "M" or not target:
+                    continue
+                button = b & 3
+                if target[0] == "tab" and button == 0:
+                    self.set_tab(target[1])
+                elif target[0] == "chip" and button in (0, 2):
+                    self.pick(target[1], send=(button == 2))
+                continue
+            seq = data[i:]
+            keys = [("\x1b[A", (0, -1)), ("\x1b[B", (0, 1)), ("\x1b[C", (1, 0)),
+                    ("\x1b[D", (-1, 0)), ("\x1bOA", (0, -1)), ("\x1bOB", (0, 1)),
+                    ("\x1bOC", (1, 0)), ("\x1bOD", (-1, 0))]
+            for k, (dx, dy) in keys:
+                if seq.startswith(k):
+                    self.move(dx, dy)
+                    i += len(k)
+                    break
+            else:
+                if seq.startswith("\x1b[Z"):
+                    self.set_tab(self.tab - 1)
+                    i += 3
+                    continue
+                if seq.startswith("\x1b["):     # unknown CSI: skip it whole
+                    m2 = re.match(r"\x1b\[[0-9;?<]*[ -/]*[@-~]", seq)
+                    i += m2.end() if m2 else 2
+                    continue
+                ch = seq[0]
+                i += 1
+                if ch in ("\x1b", "q"):
+                    self.done = True
+                elif ch == "\t":
+                    self.set_tab(self.tab + 1)
+                elif ch in ("\r", "\n"):
+                    self.pick(self.sel, send=False)
+                elif ch in "hjkl":
+                    self.move(*{"h": (-1, 0), "l": (1, 0), "k": (0, -1), "j": (0, 1)}[ch])
+                elif ch.isdigit() and ch != "0":
+                    self.sel = min(int(ch) - 1, len(self.chip_rects) - 1)
+                    self.pick(self.sel, send=False)
+            if self.done:
+                return
+
+    def run(self):
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        sys.stdout.write(f"{ESC}[?1049h{ESC}[?25l{ESC}[?1003h{ESC}[?1006h")
+        try:
+            tty.setraw(fd)
+            self.draw()
+            while not self.done:
+                ready, _, _ = select.select([fd], [], [], 0.5)
+                if not ready:
+                    continue
+                data = os.read(fd, 4096).decode("utf-8", "replace")
+                if data == "\x1b":              # a lone Esc, not a sequence start
+                    break
+                self.handle(data)
+                if not self.done:
+                    self.draw()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            sys.stdout.write(f"{ESC}[?1006l{ESC}[?1003l{ESC}[?25h{ESC}[?1049l")
+            sys.stdout.flush()
+
+
+# ------------------------------------------------------------------ selftest
+def selftest():
+    fails = 0
+
+    def check(name, got, want):
+        nonlocal fails
+        ok = got == want
+        fails += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'} {name}" + ("" if ok else f": got {got!r}, want {want!r}"))
+
+    check("width: ascii", cell_width("abc"), 3)
+    check("width: emoji", cell_width("✅"), 2)
+    check("width: emoji + VS16", cell_width("⏸️"), 2)
+    check("width: astral emoji", cell_width("🗺️"), 2)
+    check("answers: one question, five options",
+          [c["text"] for c in answer_chips("👉 **Q66 (v2): 1, 2, 3, 4 or 5 ?**")],
+          ["Q66: 1", "Q66: 2", "Q66: 3", "Q66: 4", "Q66: 5"])
+    check("answers: two questions on one line",
+          [c["text"] for c in answer_chips("👉 **Q5: 1, 2 or 3 ? And Q4: 1 or 2 ?**")],
+          ["Q5: 1", "Q5: 2", "Q5: 3", "Q4: 1", "Q4: 2"])
+    check("answers: a lettered part", [c["text"] for c in answer_chips("👉 **Q9-b: 1 or 2 ?**")],
+          ["Q9-b: 1", "Q9-b: 2"])
+    check("answers: no question", answer_chips("👉 **Does it look right?**"), [])
+    rects = layout_chips([{"icon": "✅", "label": "x" * 10, "text": ""}] * 6, 40, 6)
+    overlap = any(a[1] == b[1] and a[0] < b[0] + b[2] and b[0] < a[0] + a[2]
+                  for i, a in enumerate(rects) for b in rects[i + 1:])
+    check("layout: no two chips overlap", overlap, False)
+    check("layout: every chip fits the width", all(x + w <= 40 for x, _, w in rects), True)
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        t = os.path.join(d, "t.jsonl")
+        with open(t, "w") as f:
+            f.write(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "old\n👉 **Q1: 1 or 2 ?**"}]}}) + "\n")
+            f.write(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "new reply\n\n👉 **Q2: 1, 2 or 3 ?**\n"}]}}) + "\n")
+            f.write("{torn line\n")
+        check("transcript: last reply's 👉 line, torn line skipped",
+              last_pointer_line(t), "👉 **Q2: 1, 2 or 3 ?**")
+        with open(t, "a") as f:
+            f.write(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "done, nothing for you"}]}}) + "\n")
+        check("transcript: newest reply has no 👉 gives ''", last_pointer_line(t), "")
+        check("transcript: missing file gives ''", last_pointer_line(os.path.join(d, "no")), "")
+    try:
+        groups = load_groups(PALETTE_FILE)
+        check("palette file loads with groups", len(groups) > 0, True)
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        check(f"palette file loads ({e})", False, True)
+    print(f"herdr-palette selftest: {fails} failed")
+    return 1 if fails else 0
+
+
+# ------------------------------------------------------------------ main
+def main(argv):
+    if "--selftest" in argv:
+        return selftest()
+    if "-h" in argv or "--help" in argv:
+        print(__doc__ or "", end="")
+        print(open(__file__).read().split("# Exit:")[0].split("# =====")[2])
+        return 0
+    target = os.environ.get("HERDR_ACTIVE_PANE_ID", "")
+    if "--target" in argv:
+        j = argv.index("--target")
+        target = argv[j + 1] if j + 1 < len(argv) else ""
+    if not target:
+        print("herdr-palette: no target pane (HERDR_ACTIVE_PANE_ID unset; use --target)",
+              file=sys.stderr)
+        return 2
+    try:
+        groups = load_groups(PALETTE_FILE)
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        print(f"herdr-palette: cannot read {PALETTE_FILE}: {e}", file=sys.stderr)
+        return 2
+    info = target_info(target)
+    if info["session"]:
+        answers = answer_chips(last_pointer_line(find_transcript(info["session"])))
+        if answers:
+            groups.insert(0, {"name": "Answer", "icon": "🎯", "chips": answers})
+    if not groups:
+        print(f"herdr-palette: {PALETTE_FILE} has no chips", file=sys.stderr)
+        return 2
+    Palette(groups, target, info, "--dry-run" in argv).run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -18,5 +18,6 @@
 !config.toml
 !gpu-status.sh
 !mac-status.sh
+!palette.toml
 !sounds/
 !sounds/request.mp3

@@ -1,0 +1,123 @@
+# The prompt palette's words (herdr-palette, opened with ctrl+Space then p).
+# Each [[group]] is a tab along the top; each [[group.chip]] is one button.
+#   icon  -- shown before the label (any emoji or symbol, may be empty)
+#   label -- what the button says
+#   text  -- what is typed into the prompt; defaults to the label
+# A click types the text into the Claude session the palette was opened over,
+# without Enter. A right-click types it AND presses Enter.
+#
+# SAMPLE CONTENTS (Gavin, 19 Oct: "populate with sample, example, whatever
+# you want ... then I can give you the contents"). The "Answer" tab is not
+# here: the palette builds it from the session's last 👉 line.
+
+[[group]]
+name = "Reply"
+icon = "💬"
+
+[[group.chip]]
+icon = "✅"
+label = "Yes, go ahead"
+
+[[group.chip]]
+icon = "🛑"
+label = "No, stop there"
+
+[[group.chip]]
+icon = "🔁"
+label = "Try again"
+
+[[group.chip]]
+icon = "👍"
+label = "Looks good, save it"
+
+[[group.chip]]
+icon = "⏸️"
+label = "Pause after this step"
+
+[[group.chip]]
+icon = "🐢"
+label = "Slower, one thing at a time"
+
+[[group]]
+name = "Ask"
+icon = "❓"
+
+[[group.chip]]
+icon = "📍"
+label = "status?"
+
+[[group.chip]]
+icon = "🧭"
+label = "What's next?"
+
+[[group.chip]]
+icon = "🗺️"
+label = "Show the progress map"
+
+[[group.chip]]
+icon = "🙋"
+label = "What do you need from me?"
+
+[[group.chip]]
+icon = "🧪"
+label = "How did you test it?"
+
+[[group.chip]]
+icon = "🔍"
+label = "Prove it"
+text = "Prove it: show me the check you ran and what it printed."
+
+[[group.chip]]
+icon = "🧒"
+label = "Explain it simply"
+text = "Explain that again in plain words, like you would to a twelve-year-old."
+
+[[group]]
+name = "Do"
+icon = "🛠️"
+
+[[group.chip]]
+icon = "💾"
+label = "Save it"
+text = "Commit this session's own changes by name. Don't push."
+
+[[group.chip]]
+icon = "🎯"
+label = "Do less"
+text = "Do less: only the essential part, and tell me what you left out."
+
+[[group.chip]]
+icon = "🐛"
+label = "Diagnose this"
+text = "Diagnose this properly before fixing anything: what is the cause, and what is the proof?"
+
+[[group.chip]]
+icon = "📝"
+label = "Write the handoff"
+text = "Write the handoff now, so the next session can pick this up."
+
+[[group.chip]]
+icon = "🧹"
+label = "Tidy up"
+text = "Tidy up what this session left behind: temp files, stray panes, open labels."
+
+[[group]]
+name = "Commands"
+icon = "⚡"
+
+[[group.chip]]
+icon = "📊"
+label = "/context"
+
+[[group.chip]]
+icon = "🗜️"
+label = "/compact"
+
+[[group.chip]]
+icon = "💰"
+label = "/cost"
+
+[[group.chip]]
+icon = "🏷️"
+label = "/rename"
+text = "/rename "

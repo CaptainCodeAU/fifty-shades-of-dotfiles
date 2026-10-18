@@ -250,6 +250,20 @@ key = "ctrl+alt+7"
 type = "shell"
 command = "sh -c 'exec env SPEAK_SOURCE=herdr \"$HOME/.local/bin/speak-clipboard\" --stop'"
 
+# The prompt palette (Gavin, 19 Oct, dotfiles-main Q69: 1): ctrl+Space then p
+# opens a popup of clickable words that herdr-type types into the Claude prompt
+# of the pane it was opened over (herdr passes that pane as
+# HERDR_ACTIVE_PANE_ID). The words are in palette.toml beside this file; an
+# "Answer" tab is built from the session's last 👉 line. prefix+p is free here
+# because previous_tab moved to shift+left above. A popup closes when its
+# command exits, which herdr-palette does after a pick or Esc.
+[[keys.command]]
+key = "prefix+p"
+type = "popup"
+command = "sh -c 'exec \"$HOME/.local/bin/herdr-palette\"'"
+width = "80%"
+height = 18
+
 [ui.toast]
 delivery = "herdr"
 
