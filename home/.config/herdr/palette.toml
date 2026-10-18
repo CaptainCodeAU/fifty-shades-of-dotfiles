@@ -1,4 +1,9 @@
 # The prompt palette's words (herdr-palette, opened with ctrl+Space then p).
+# Edit them here, or click ✎ edit in the palette (the e key), which opens this
+# file in your editor and reloads the buttons when you close it. A mistake in
+# the file keeps the old buttons and says why, in red, at the bottom.
+# Add a tab: a new [[group]] block. Add a button: a new [[group.chip]] under
+# it. Buttons appear in the order written; the first nine get number keys.
 # Each [[group]] is a tab along the top; each [[group.chip]] is one button.
 #   icon  -- shown before the label (any emoji or symbol, may be empty)
 #   label -- what the button says
