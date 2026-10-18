@@ -26,7 +26,12 @@
 #
 # Typing goes through herdr-type (same folder), which reads the screen before
 # every key, never approves a permission prompt and refuses a shell pane.
-#   click        types the chip's text (and Enter, when auto-submit is ticked)
+#   click        TWO clicks (Gavin, 19 Oct): the first selects the chip and
+#                shows its whole text in the preview box below the chips
+#                (wrapped, scrolled with the mouse wheel or PgUp/PgDn when
+#                long); a second click on the same chip types it (and presses
+#                Enter when auto-submit is ticked). Arrows and 1-9 select,
+#                Enter types the selected chip.
 #   right-click  types it and presses Enter, whatever the tick box says
 #   ☐ auto-submit (top right, or the a key) ticks and unticks; remembered in
 #                ~/.local/state/herdr/palette-auto-submit between openings
@@ -123,6 +128,32 @@ def cell_width(s):
         else:
             w += 1
     return w
+
+
+def wrap_cells(text, width):
+    """Wrap text to lines of at most width cells, keeping its own line
+    breaks; a word longer than a line is cut."""
+    out = []
+    for para in text.split("\n"):
+        line = ""
+        for word in para.split(" "):
+            cand = word if not line else line + " " + word
+            if cell_width(cand) <= width:
+                line = cand
+                continue
+            if line:
+                out.append(line)
+            while cell_width(word) > width:
+                cut = ""
+                for ch in word:
+                    if cell_width(cut + ch) > width:
+                        break
+                    cut += ch
+                out.append(cut)
+                word = word[len(cut):]
+            line = word
+        out.append(line)
+    return out
 
 
 # ------------------------------------------------------------------ palette file
@@ -268,6 +299,9 @@ class Palette:
         self.auto = os.path.exists(AUTO_FILE)
         self.button_rects = []     # (x, y, w, name) for the title-bar buttons
         self.mtime = None          # palette.toml's, for reloading on save
+        self.armed = False         # the selected chip was clicked once: the next click types it
+        self.scroll = 0            # first preview line shown
+        self.preview_rect = None   # (x, y, w, h) of the preview box, for the wheel
 
     # -- drawing
     def size(self):
@@ -325,6 +359,8 @@ class Palette:
             hot = self.hover == ("chip", i) or i == self.sel
             if self.flash and self.flash[0] == i:
                 border, fill, ink = self.flash[1], self.flash[1], INK
+            elif i == self.sel and self.armed:
+                border, fill, ink = GOLD, GOLD, INK
             elif hot:
                 border, fill, ink = GOLD, NAVY_HI, (255, 255, 255)
             else:
@@ -338,13 +374,43 @@ class Palette:
             out.append(f"{ESC}[{y + 1};{x}H{fg(border)}│{RESET}{bg(fill)}{fg(ink)}"
                        f"{BOLD if hot else ''}{body}{' ' * pad}{RESET}{fg(border)}│{RESET}")
             out.append(f"{ESC}[{y + 2};{x}H{fg(border)}╰{'─' * inner}╯{RESET}")
-        # preview of what the selected chip types
+        # preview: the selected chip's whole text, wrapped, scrollable
+        self.preview_rect = None
         if chips:
-            pick = chips[self.sel]["text"]
-            show = pick if cell_width(pick) < w - 14 else pick[: w - 17] + "…"
-            out.append(f"{ESC}[{h - 2};3H{fg(DIM)}types: {RESET}{fg(PERI)}{show}{RESET}")
+            last = max(y for _, y, _ in self.chip_rects if y + 2 < h - 2) if any(
+                y + 2 < h - 2 for _, y, _ in self.chip_rects) else 6
+            top, bottom = last + 4, h - 2
+            pw = w - 4
+            if bottom - top >= 2 and pw >= 20:
+                text = chips[self.sel]["text"]
+                rows = bottom - top - 1
+                lines = wrap_cells(text, pw - 5)
+                self.scroll = max(0, min(self.scroll, len(lines) - rows))
+                if self.armed:
+                    head = " ▶ click it again to " + ("type and send" if self.auto else "type it") + " "
+                    hc = GOLD
+                else:
+                    head = " preview: click a button once to choose it "
+                    hc = DIM
+                bar = "─" * max(0, pw - 2 - cell_width(head) - 1)
+                out.append(f"{ESC}[{top};3H{fg(NAVY_HI)}╭─{RESET}{fg(hc)}{BOLD}{head}{RESET}"
+                           f"{fg(NAVY_HI)}{bar}╮{RESET}")
+                for r in range(rows):
+                    j = self.scroll + r
+                    body = lines[j] if j < len(lines) else ""
+                    pad = pw - 5 - cell_width(body)
+                    sb = " "
+                    if len(lines) > rows:
+                        thumb_h = max(1, rows * rows // len(lines))
+                        thumb_y = (rows - thumb_h) * self.scroll // max(1, len(lines) - rows)
+                        sb = f"{fg(GOLD)}┃" if thumb_y <= r < thumb_y + thumb_h else f"{fg(NAVY_HI)}│"
+                    out.append(f"{ESC}[{top + 1 + r};3H{fg(NAVY_HI)}│ {RESET}{fg(PERI)}{body}"
+                               f"{' ' * max(0, pad)} {sb}{RESET}{fg(NAVY_HI)}│{RESET}")
+                out.append(f"{ESC}[{top + 1 + rows};3H{fg(NAVY_HI)}╰{'─' * (pw - 2)}╯{RESET}")
+                self.preview_rect = (3, top, pw, rows + 2)
         # footer
-        hint = ("click type" + (" + send" if self.auto else "") + "  ·  right-click type + send"
+        hint = ("click choose, click again " + ("type + send" if self.auto else "type")
+                + "  ·  right-click type + send  ·  wheel scrolls the preview"
                 "  ·  a auto-submit  ·  x clear  ·  e edit  ·  ←↑↓→ move  ·  tab group  ·  esc close")
         if self.message:
             out.append(f"{ESC}[{h};3H{fg(self.message_colour)}{BOLD}{self.message}{RESET}")
@@ -359,6 +425,7 @@ class Palette:
         if not 0 <= i < len(chips):
             return
         text = chips[i]["text"]
+        self.armed = False
         send = send or self.auto
         if not send and not text.endswith((" ", "\n")):
             text += " "
@@ -397,9 +464,9 @@ class Palette:
         if dy:
             same = [i for i, r in enumerate(rects) if r[1] == y + 3 * dy]
             if same:
-                self.sel = min(same, key=lambda i: abs(rects[i][0] - x))
+                self.choose(min(same, key=lambda i: abs(rects[i][0] - x)))
         else:
-            self.sel = max(0, min(len(rects) - 1, self.sel + dx))
+            self.choose(max(0, min(len(rects) - 1, self.sel + dx)))
 
     def edit_file(self):
         """Open the palette file in the app the Mac associates with it (or a
@@ -507,9 +574,18 @@ class Palette:
         self.message = "auto-submit on: a click also presses Enter" if self.auto else "auto-submit off"
         self.message_colour = GREEN if self.auto else DIM
 
+    def choose(self, i):
+        """First click or a key: select chip i and show it in the preview."""
+        if i != self.sel:
+            self.scroll = 0
+        self.sel = i
+        self.armed = True
+
     def set_tab(self, i):
         self.tab = i % len(self.groups)
         self.sel = 0
+        self.armed = False
+        self.scroll = 0
         self.hover = None
 
     def hit(self, mx, my):
@@ -533,11 +609,13 @@ class Palette:
                 i += m.end()
                 b, mx, my, kind = int(m[1]), int(m[2]), int(m[3]), m[4]
                 target = self.hit(mx, my)
-                if b & 32:                      # motion
-                    if target != self.hover:
-                        self.hover = target
-                        if target and target[0] == "chip":
-                            self.sel = target[1]
+                if b & 64:                      # wheel: scroll the preview
+                    if kind == "M":
+                        self.scroll += 1 if b & 1 else -1
+                        self.scroll = max(0, self.scroll)
+                    continue
+                if b & 32:                      # motion: only the hover highlight
+                    self.hover = target
                     continue
                 if kind != "M" or not target:
                     continue
@@ -554,8 +632,13 @@ class Palette:
                         self.toggle_auto()
                 elif target[0] == "tab" and button == 0:
                     self.set_tab(target[1])
-                elif target[0] == "chip" and button in (0, 2):
-                    self.pick(target[1], send=(button == 2))
+                elif target[0] == "chip" and button == 2:
+                    self.pick(target[1], send=True)
+                elif target[0] == "chip" and button == 0:
+                    if self.armed and target[1] == self.sel:
+                        self.pick(target[1], send=False)
+                    else:
+                        self.choose(target[1])
                 continue
             seq = data[i:]
             keys = [("\x1b[A", (0, -1)), ("\x1b[B", (0, 1)), ("\x1b[C", (1, 0)),
@@ -570,6 +653,11 @@ class Palette:
                 if seq.startswith("\x1b[Z"):
                     self.set_tab(self.tab - 1)
                     i += 3
+                    continue
+                if seq.startswith(("\x1b[5~", "\x1b[6~")):
+                    rows = (self.preview_rect[3] - 2) if self.preview_rect else 3
+                    self.scroll = max(0, self.scroll + (rows if seq[2] == "6" else -rows))
+                    i += 4
                     continue
                 if seq.startswith("\x1b["):     # unknown CSI: skip it whole
                     m2 = re.match(r"\x1b\[[0-9;?<]*[ -/]*[@-~]", seq)
@@ -592,8 +680,7 @@ class Palette:
                 elif ch in "hjkl":
                     self.move(*{"h": (-1, 0), "l": (1, 0), "k": (0, -1), "j": (0, 1)}[ch])
                 elif ch.isdigit() and ch != "0":
-                    self.sel = min(int(ch) - 1, len(self.chip_rects) - 1)
-                    self.pick(self.sel, send=False)
+                    self.choose(min(int(ch) - 1, len(self.chip_rects) - 1))
             if self.done:
                 return
 
@@ -649,6 +736,9 @@ def selftest():
     check("answers: a lettered part", [c["text"] for c in answer_chips("👉 **Q9-b: 1 or 2 ?**")],
           ["Q9-b: 1", "Q9-b: 2"])
     check("answers: no question", answer_chips("👉 **Does it look right?**"), [])
+    check("wrap: words to width", wrap_cells("aa bb cc dd", 5), ["aa bb", "cc dd"])
+    check("wrap: keeps line breaks", wrap_cells("one\ntwo", 10), ["one", "two"])
+    check("wrap: cuts a long word", wrap_cells("abcdefgh", 3), ["abc", "def", "gh"])
     rects = layout_chips([{"icon": "✅", "label": "x" * 10, "text": ""}] * 6, 40, 6)
     overlap = any(a[1] == b[1] and a[0] < b[0] + b[2] and b[0] < a[0] + a[2]
                   for i, a in enumerate(rects) for b in rects[i + 1:])
