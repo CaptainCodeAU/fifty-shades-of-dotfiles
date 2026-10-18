@@ -3047,6 +3047,35 @@ _preflight_purge_ytdlp() {
     fi
 }
 
+# rustup and yazi, when a profile said yes to them (YES_RUST / YES_YAZI). Linux/WSL only:
+# both installers are the Linux ones. Runs on every install, like the herdr and pnpm
+# pre-flights above, because install_linux_prerequisites() is reached only when
+# check_prerequisites() reports a MISSING REQUIRED tool, and rustup and yazi are optional.
+# A box missing nothing required therefore never reached them: codebox's dry run on
+# 18 Oct 2026 listed both "not installed (optional)" and offered neither. The profile's
+# yes is the consent, so nothing is asked here. Both install as the user (rustup into
+# ~/.cargo, adding its line to the real ~/.zshenv; yazi into ~/.local/bin).
+_preflight_profile_tools() {
+    [[ "$SKIP_PREFLIGHT" == true ]] && return 0
+    local os; os="$(check_os)"
+    [[ "$os" == "linux" || "$os" == "wsl" ]] || return 0
+    if [[ "$YES_RUST" == true && "$SKIP_RUST" != true ]] && ! command -v rustup &>/dev/null; then
+        step "rustup and cargo (the profile installs them)"
+        install_rust_toolchain || warn "rustup not installed; see the lines above"
+    fi
+    if [[ "$YES_YAZI" == true && "$SKIP_YAZI" != true ]] && ! command -v yazi &>/dev/null; then
+        step "yazi (the profile installs it)"
+        if [[ "$DRY_RUN" == true ]]; then
+            # install_yazi_release chmods files a dry run never downloaded, which would
+            # stop the whole script under set -e; say what a real run does instead.
+            info "[dry-run] Would install yazi from its latest GitHub release into ~/.local/bin"
+        else
+            install_yazi_release || warn "yazi not installed; see the lines above"
+        fi
+    fi
+    return 0
+}
+
 install_macos_prerequisites() {
     # --- Homebrew ---
     if ! command -v brew &>/dev/null; then
@@ -5853,6 +5882,11 @@ main() {
     # Unconditional for the same reason as the release-check above -- a box
     # missing nothing else would otherwise never reach it. ---
     _preflight_purge_ytdlp
+
+    # --- rustup and yazi, when the profile said yes (Linux/WSL). Unconditional for the
+    # same reason as the two above: they are optional, so check_prerequisites never
+    # reports them missing. ---
+    _preflight_profile_tools
 
     # --- Install prerequisites ---
     if ! check_prerequisites; then
