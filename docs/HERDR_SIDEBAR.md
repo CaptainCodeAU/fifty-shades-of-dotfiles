@@ -195,6 +195,7 @@ labelled with the machine; Claude must be started in a pane of that machine.
   the debug log). `env -u HERDR_REMOTE_KEYBINDINGS herdr` showed Local and
   codebox.lan at once (18 Oct, Gavin's screenshot). The variable is now added only
   to `herdr --remote` (docs/HERDR.md, "Two machines: the keymap drifts too").
+  The label is `Codebox` since the same evening (Gavin); the target stays `codebox.lan`.
 - NP-2 checked it against codebox's lockdown (CB D-008): Mac -> codebox only, over the
   ssh connection's stdio, no forwards; the codebox.lan Host entry and its admin key,
   never the speak-relay key; decline any install or update prompt (codebox's herdr
