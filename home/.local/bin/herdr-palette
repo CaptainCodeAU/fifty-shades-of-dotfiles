@@ -34,6 +34,10 @@
 #                scroll it when long). Arrows select, Enter or 1-9 type.
 #   ↑ from the top row of chips moves up to the tabs (Gavin, 19 Oct): there
 #                ←/→ change tab, and ↓ or Enter go back down to the chips.
+#                ← past the first tab, or → past the last, moves on to the
+#                title-bar buttons (clear, edit, auto-submit, close), which
+#                ←/→ walk and Enter presses; going past them returns to the
+#                tabs, so the row is one loop (Gavin, 19 Oct).
 #   right-click  types it and presses Enter, whatever the tick box says
 #   ☐ auto-submit (top right, or the a key) ticks and unticks; remembered in
 #                ~/.local/state/herdr/palette-auto-submit between openings
@@ -108,6 +112,7 @@ def bg(c):
 
 
 RESET = f"{ESC}[0m"
+BUTTONS = ["clear", "edit", "auto", "close"]   # the title-bar buttons, left to right
 BOLD = f"{ESC}[1m"
 
 
@@ -303,7 +308,8 @@ class Palette:
         self.mtime = None          # palette.toml's, for reloading on save
         self.armed = False         # (unused since one click types again; kept False)
         self.shown = 0             # the chip whose text the preview shows
-        self.focus = "chips"       # where the arrow keys act: "chips" or "tabs"
+        self.focus = "chips"       # where the arrow keys act: "chips", "tabs" or "buttons"
+        self.bfocus = 0            # which title-bar button, when focus is "buttons"
         self.scroll = 0            # first preview line shown
         self.preview_rect = None   # (x, y, w, h) of the preview box, for the wheel
 
@@ -334,7 +340,9 @@ class Palette:
         for x, y, bw, name in self.button_rects:
             label = labels[name]
             hot = self.hover == ("button", name)
-            if name == "auto" and self.auto:
+            if self.focus == "buttons" and name == BUTTONS[self.bfocus]:
+                style = bg((255, 255, 255)) + fg(INK) + BOLD + f"{ESC}[4m"
+            elif name == "auto" and self.auto:
                 style = bg(GREEN) + fg(INK) + BOLD
             elif name == "close" and hot:
                 style = bg(RED) + fg(INK) + BOLD
@@ -461,12 +469,32 @@ class Palette:
 
     def move(self, dx, dy):
         self.hover = None              # the keys lead; the preview follows them
+        if self.focus == "buttons":
+            if dy > 0:
+                self.focus = "chips"
+            elif dx:
+                b = self.bfocus + dx
+                if b < 0:
+                    self.set_tab(len(self.groups) - 1)
+                    self.focus = "tabs"
+                elif b >= len(BUTTONS):
+                    self.set_tab(0)
+                    self.focus = "tabs"
+                else:
+                    self.bfocus = b
+            return
         if self.focus == "tabs":
             if dy > 0:
                 self.focus = "chips"
             elif dx:
-                self.set_tab(self.tab + dx)
-                self.focus = "tabs"
+                t = self.tab + dx
+                if t < 0:
+                    self.focus, self.bfocus = "buttons", len(BUTTONS) - 1
+                elif t >= len(self.groups):
+                    self.focus, self.bfocus = "buttons", 0
+                else:
+                    self.set_tab(t)
+                    self.focus = "tabs"
             return
         rects = self.chip_rects
         if not rects:
@@ -689,7 +717,14 @@ class Palette:
                 elif ch == "x":
                     self.clear_prompt()
                 elif ch in ("\r", "\n"):
-                    if self.focus == "tabs":
+                    if self.focus == "buttons":
+                        name = BUTTONS[self.bfocus]
+                        if name == "close":
+                            self.done = True
+                            return
+                        {"clear": self.clear_prompt, "edit": self.edit_file,
+                         "auto": self.toggle_auto}[name]()
+                    elif self.focus == "tabs":
                         self.focus = "chips"
                     else:
                         self.pick(self.sel, send=False)
