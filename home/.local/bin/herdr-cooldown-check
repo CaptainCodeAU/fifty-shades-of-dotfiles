@@ -31,7 +31,7 @@
 #   1. homebrew-lag informational only: is Homebrew's current formula version
 #                    behind GitHub's absolute newest tag? (see GATING CANDIDATE)
 #   2. version     installed herdr vs the gating candidate (see below)
-#   3. cooldown    age of the gating candidate vs HERDR_COOLDOWN_DAYS (default 7)
+#   3. cooldown    age of the gating candidate vs HERDR_COOLDOWN_DAYS (default 3)
 #   4. pin         is the Homebrew formula pinned (so `brew upgrade` can't take it)
 #   5. phone-home  are update.version_check / update.manifest_check disabled
 #
@@ -73,10 +73,11 @@
 #
 # USAGE
 #   herdr-cooldown-check [options]
-#     --cooldown-days N  age gate in days (default: $HERDR_COOLDOWN_DAYS or 5).
+#     --cooldown-days N  age gate in days (default: $HERDR_COOLDOWN_DAYS or 3).
 #                        install.sh is CANONICAL and passes it explicitly; this
 #                        literal only covers a bare hand-run. Bump BOTH
-#                        (D-20260922-A10 lowered it from 7 to 5, 2026-09-22).
+#                        (D-20260922-A10 lowered it from 7 to 5, 2026-09-22;
+#                        Gavin lowered it to 3 on 2026-10-18, Q11: 3).
 #     --timeout SEC      per-network-call timeout (default: 8)
 #     --quiet            print only actionable + SKIPPED lines
 #     --json             emit a JSON report instead of the table
@@ -400,7 +401,7 @@ def release_by_tag(tag: str, timeout: int) -> datetime | None:
 def main() -> int:
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("--cooldown-days", type=float,
-                    default=float(os.environ.get("HERDR_COOLDOWN_DAYS", "5")))
+                    default=float(os.environ.get("HERDR_COOLDOWN_DAYS", "3")))
     ap.add_argument("--timeout", type=int, default=8)
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--json", dest="as_json", action="store_true")

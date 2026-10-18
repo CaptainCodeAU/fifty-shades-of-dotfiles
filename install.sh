@@ -246,7 +246,12 @@ CCW_MIN_VERSION="0.1.4"
 # pinned, herdr-cooldown-check stays read-only and self-tested, and
 # _preflight_herdr_bump_check still does the unpin/upgrade/re-pin itself once
 # the verdict reads ELIGIBLE. Only the number moves. `decided D-20260922-A10`.
-HERDR_COOLDOWN_DAYS="5"
+#
+# 3 days since 2026-10-18 (Gavin, dotfiles-main Q11: 3). He asked for v0.9.5,
+# a hotfix that followed v0.9.4 by one day, when it was 3.4 days old and the
+# 5-day gate still held it. The mechanism is unchanged again; only the number
+# moves. `decided D-20261018-A01`.
+HERDR_COOLDOWN_DAYS="3"
 
 # --- herdr pinned release (Linux/WSL only) ---
 # macOS gets herdr from Homebrew, whose formula hashes the SOURCE tarball and
