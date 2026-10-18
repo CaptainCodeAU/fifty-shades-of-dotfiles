@@ -35,6 +35,12 @@
 #   ✎ edit (top right, or the e key) opens palette.toml in the app the Mac
 #                associates with it (open; a text editor when none is; xdg-open
 #                on Linux); the buttons reload whenever the file is saved
+#   ⌫ clear (top right, or the x key) empties the prompt's draft: one ctrl+c,
+#                sent ONLY when herdr-type reads a draft (prompt-draft or
+#                prompt-menu). Claude Code quits on a second ctrl+c at an empty
+#                prompt and stops a working turn on one, so an empty prompt, a
+#                busy session or an open question box is refused, and a second
+#                click finds the prompt empty and does nothing (Gavin, 19 Oct)
 #   ✕ close (top right), Esc or q  closes; a pick does NOT close (Gavin, 19 Oct:
 #                "only closes if we press the close button")
 #   arrows/hjkl  move   Tab/Shift-Tab  change tab   Enter  type   1-9  pick
@@ -279,12 +285,14 @@ class Palette:
         box = " ☑ auto-submit " if self.auto else " ☐ auto-submit "
         close = " ✕ close "
         edit = " ✎ edit "
+        clear = " ⌫ clear "
         cx = w - cell_width(close)
         ax = cx - 1 - cell_width(box)
         ex = ax - 1 - cell_width(edit)
-        self.button_rects = [(ex, 1, cell_width(edit), "edit"), (ax, 1, cell_width(box), "auto"),
-                             (cx, 1, cell_width(close), "close")]
-        labels = {"edit": edit, "auto": box, "close": close}
+        kx = ex - 1 - cell_width(clear)
+        self.button_rects = [(kx, 1, cell_width(clear), "clear"), (ex, 1, cell_width(edit), "edit"),
+                             (ax, 1, cell_width(box), "auto"), (cx, 1, cell_width(close), "close")]
+        labels = {"clear": clear, "edit": edit, "auto": box, "close": close}
         for x, y, bw, name in self.button_rects:
             label = labels[name]
             hot = self.hover == ("button", name)
@@ -337,7 +345,7 @@ class Palette:
             out.append(f"{ESC}[{h - 2};3H{fg(DIM)}types: {RESET}{fg(PERI)}{show}{RESET}")
         # footer
         hint = ("click type" + (" + send" if self.auto else "") + "  ·  right-click type + send"
-                "  ·  a auto-submit  ·  e edit  ·  ←↑↓→ move  ·  tab group  ·  esc close")
+                "  ·  a auto-submit  ·  x clear  ·  e edit  ·  ←↑↓→ move  ·  tab group  ·  esc close")
         if self.message:
             out.append(f"{ESC}[{h};3H{fg(self.message_colour)}{BOLD}{self.message}{RESET}")
         else:
@@ -418,6 +426,42 @@ class Palette:
             why = (r.stderr.strip().splitlines() or [""])[-1] if r is not None else why
         self.message = f"✗ could not open palette.toml: {why}"
         self.message_colour = RED
+
+    def prompt_state(self):
+        try:
+            r = subprocess.run([HERDR_TYPE, "state", self.target], capture_output=True,
+                               text=True, timeout=15)
+            return json.loads(r.stdout).get("state", "unknown")
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return "unknown"
+
+    def clear_prompt(self):
+        """Empty the target's draft with one ctrl+c, only when there is a draft."""
+        before = self.prompt_state()
+        if before == "prompt-empty":
+            self.message, self.message_colour = "the prompt is already empty", DIM
+            return
+        if before not in ("prompt-draft", "prompt-menu"):
+            why = {"busy": "Claude is working, and ctrl+c would stop it",
+                   "shell": "that pane has no Claude session"}.get(
+                       before, f"the prompt is not a plain draft ({before})")
+            self.message, self.message_colour = f"✗ not cleared: {why}", RED
+            return
+        if self.dry_run:
+            if LOG:
+                with open(LOG, "a") as f:
+                    f.write(json.dumps({"clear": [herdr_bin(), "pane", "send-keys",
+                                                  self.target, "ctrl+c"], "state": before}) + "\n")
+            self.message, self.message_colour = f"dry run: would send ctrl+c ({before})", TEAL
+            return
+        subprocess.run([herdr_bin(), "pane", "send-keys", self.target, "ctrl+c"],
+                       capture_output=True, timeout=10)
+        time.sleep(0.25)
+        after = self.prompt_state()
+        if after == "prompt-empty":
+            self.message, self.message_colour = f"⌫ cleared the prompt in {self.info['name']}", GREEN
+        else:
+            self.message, self.message_colour = f"✗ sent ctrl+c, but the prompt now reads {after}", RED
 
     def reload_file(self):
         try:
@@ -504,6 +548,8 @@ class Palette:
                         return
                     if target[1] == "edit":
                         self.edit_file()
+                    elif target[1] == "clear":
+                        self.clear_prompt()
                     else:
                         self.toggle_auto()
                 elif target[0] == "tab" and button == 0:
@@ -539,6 +585,8 @@ class Palette:
                     self.toggle_auto()
                 elif ch == "e":
                     self.edit_file()
+                elif ch == "x":
+                    self.clear_prompt()
                 elif ch in ("\r", "\n"):
                     self.pick(self.sel, send=False)
                 elif ch in "hjkl":
