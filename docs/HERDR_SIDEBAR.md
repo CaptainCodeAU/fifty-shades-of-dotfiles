@@ -56,6 +56,15 @@ facts behind the choices and the options not taken.
   `/rename` shows at the next one, because plugins cannot hook `pane.updated`.
   A pane the plugin has not reached shows no line 2. Seen live 18 Oct on the
   dotfiles pane; 50 plugin runs, all `succeeded`.
+- **The bar takes the state's colour** (Q65: 1): one token per state
+  (`$bar_working`, `$bar_done`, `$bar_idle`, `$bar_blocked`, `$bar_unknown`),
+  each with its own fixed `fg` in `config.toml`; the plugin sets the one for the
+  pane's state and clears the others on every event. A token's colour is fixed
+  per name, and a separate token brings herdr's " · " before the session name,
+  which Gavin accepted. The bar colours copy the state colours (Ghostty palette
+  cyan, green, bright red; `theme.custom` yellow; `overlay0`), so a palette
+  change needs the bar colours changed too. Checked 18 Oct on all six agent
+  panes: each held exactly one bar token, the one matching its `agent_status`.
 - **Colour only where Gavin is needed:** working is a cool slate grey
   (`theme.custom.yellow = "#6e7a86"`; orange and a warm grey were tried and
   dropped, the warm grey read as the session name's sand).
