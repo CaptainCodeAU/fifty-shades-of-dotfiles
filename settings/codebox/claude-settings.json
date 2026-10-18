@@ -10,6 +10,11 @@
   },
   "tui": "fullscreen",
   "theme": "dark",
+  "statusLine": {
+    "type": "command",
+    "command": "bash \"$HOME/.claude/statusline-command.sh\"",
+    "refreshInterval": 30
+  },
   "enabledPlugins": {
     "cc-capture@cc-warehouse": true
   }

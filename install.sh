@@ -5752,6 +5752,38 @@ _place_codebox_claude_settings() {
     return 0
 }
 
+# codebox's status line (Gavin, dotfiles-main Q72: 1, 19 Oct 2026). The script is a copy of
+# the Mac's ~/.claude/statusline-command.sh, whose master lives in the private dot-claude
+# repo, which codebox does not have; settings/codebox/claude-settings.json's statusLine
+# runs it. A COPY, never a link, for the same reason as settings.json: an edit made live on
+# the box would dirty the clone. The source wins; a different file on the box is kept beside
+# it as statusline-command.sh.pre-dotfiles.<time>.bak. codebox-statusline-drift (run at
+# session start in this repo on the Mac) says when the Mac's copy and this one part.
+_place_codebox_statusline() {
+    [[ "$PLACE_CODEBOX_SETTINGS" == true ]] || return 0
+    local src="$REPO_DIR/settings/codebox/statusline-command.sh"
+    local dst="$HOME/.claude/statusline-command.sh"
+    local bak
+    bak="$dst.pre-dotfiles.$(date +%Y%m%d-%H%M%S).bak"
+    step "codebox: Claude Code status line"
+    if [[ ! -f "$src" ]]; then
+        warn "The source $(pretty_path "$src") is missing; no status line placed."
+        return 0
+    fi
+    if [[ -f "$dst" && ! -L "$dst" ]] && cmp -s "$src" "$dst"; then
+        success "statusline-command.sh already matches the source; nothing written."
+        return 0
+    fi
+    if [[ -e "$dst" || -L "$dst" ]]; then
+        warn "$(pretty_path "$dst") differs from the source; it is kept as $(pretty_path "$bak") and the source put in its place."
+        run_cmd mv "$dst" "$bak" || return 0
+    else
+        run_cmd mkdir -p "$(dirname "$dst")"
+    fi
+    run_cmd cp "$src" "$dst" && [[ "$DRY_RUN" != true ]] && success "statusline-command.sh placed from $(pretty_path "$src")"
+    return 0
+}
+
 # ~/.zshrc.private.early is the machine-local file home/.zshrc reads BEFORE its
 # startup guards (section 3), the same file install.sh's takeover gate writes its
 # DOTFILES_ALLOW_* opt-outs to. A skip flag that changes what the stowed shell
@@ -5994,8 +6026,9 @@ main() {
     # prerequisites. All of it lives in ~/.claude, so --skip-claude skips all of it. ---
     _claude_post_stow
 
-    # --- codebox profile only: Claude Code's settings.json, placed as a copy ---
+    # --- codebox profile only: Claude Code's settings.json and status line, placed as copies ---
     _place_codebox_claude_settings
+    _place_codebox_statusline
 
     # --- Optional: pnpm-audit git hooks (confirm-gated) ---
     setup_pnpm_audit_hooks

@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# codebox-statusline-drift -- has the Mac's status line moved on from codebox's copy?
+#
+# codebox runs a COPY of the Mac's ~/.claude/statusline-command.sh, kept in this repo as
+# settings/codebox/statusline-command.sh and placed on the box by install.sh's codebox
+# profile (Gavin, dotfiles-main Q72: 1, 19 Oct 2026). The master lives in the private
+# dot-claude repo, which codebox does not have, so the two can part without anyone
+# noticing. This compares them. The Mac's copy is the master; the fix is always --sync,
+# then commit.
+#
+# This repo is public, so the copy is the Mac's with the login name replaced by
+# "someone" (its selftest fixture holds a captured path; the leak scan refused it,
+# 19 Oct). The comparison applies the same replacement first.
+#
+# Usage:
+#   codebox-statusline-drift            compare, and say the answer either way
+#   codebox-statusline-drift --quiet    print only when they differ or the check refused
+#   codebox-statusline-drift --sync     write the Mac's copy, scrubbed, over the repo's
+#   codebox-statusline-drift --selftest prove every arm, and install.sh's placing step
+#
+# Exit: 0 the same · 1 DIFFERENT · 2 REFUSED: a copy is missing, so nothing was
+# compared, and that is not a pass.
+#
+# CODEBOX_STATUSLINE_MASTER and CODEBOX_STATUSLINE_COPY override the two paths (the
+# selftest uses them).
+
+set -uo pipefail
+
+_resolve_repo() {
+    local self="${BASH_SOURCE[0]}" dir target
+    dir="$(cd -- "$(dirname -- "$self")" && pwd)"
+    if [[ -L "$self" ]]; then
+        target="$(readlink "$self")"
+        [[ "$target" != /* ]] && target="$dir/$target"   # stow makes relative links
+        dir="$(cd -- "$(dirname -- "$target")" && pwd)"
+    fi
+    (cd -- "$dir/../../.." && pwd)   # dir is <repo>/home/.local/bin
+}
+REPO="$(_resolve_repo)"
+
+MASTER="${CODEBOX_STATUSLINE_MASTER:-$HOME/.claude/statusline-command.sh}"
+COPY="${CODEBOX_STATUSLINE_COPY:-$REPO/settings/codebox/statusline-command.sh}"
+LOGIN="${CODEBOX_STATUSLINE_LOGIN:-$(id -un)}"
+
+scrubbed() { sed "s#${LOGIN}#someone#g" "$MASTER"; }
+
+compare() { # $1 quiet: true|false
+    local f
+    for f in "$MASTER" "$COPY"; do
+        if [[ ! -f "$f" ]]; then
+            echo "codebox status line: REFUSED, $f is missing, so nothing was compared."
+            return 2
+        fi
+    done
+    if scrubbed | cmp -s - "$COPY"; then
+        [[ "$1" == true ]] || echo "codebox status line: the same as the Mac's ($(wc -l < "$MASTER" | tr -d ' ') lines)."
+        return 0
+    fi
+    local added removed
+    read -r added removed < <(scrubbed | diff "$COPY" - | awk '/^>/{a++} /^</{r++} END{print a+0, r+0}')
+    echo "codebox status line: DIFFERENT from the Mac's: the Mac's has $added line(s) the copy lacks, and the copy has $removed the Mac's lacks."
+    echo "  fix: codebox-statusline-drift --sync, then commit it; codebox picks it up at its next install run."
+    return 1
+}
+
+sync() {
+    [[ -f "$MASTER" ]] || { echo "codebox status line: REFUSED, $MASTER is missing, nothing written."; return 2; }
+    scrubbed > "$COPY.tmp.$$" && command mv -f "$COPY.tmp.$$" "$COPY" || { echo "codebox status line: could not write $COPY."; return 1; }
+    echo "codebox status line: $COPY now matches the Mac's; commit it."
+}
+
+selftest() {
+    local fx pass=0 fail=0 out rc
+    fx=$(mktemp -d "${TMPDIR:-/tmp}/codebox-statusline-drift.XXXXXX") || { echo "cannot make a fixture dir"; return 1; }
+    check() { # $1 arm, $2 wanted rc, $3 got rc, $4 needle, $5 output
+        if [[ "$2" == "$3" ]] && grep -qF -- "$4" <<<"$5"; then pass=$((pass + 1))
+        else fail=$((fail + 1)); echo "FAIL $1: rc $3 (wanted $2), output: $5"; fi
+    }
+    run() { CODEBOX_STATUSLINE_LOGIN=me CODEBOX_STATUSLINE_MASTER="$fx/$1" CODEBOX_STATUSLINE_COPY="$fx/$2" "${BASH_SOURCE[0]}" "${@:3}" 2>&1; }
+
+    printf 'a\nb\n' > "$fx/m"; printf 'a\nb\n' > "$fx/same"; printf 'a\nc\nd\n' > "$fx/moved"
+    out=$(run m same); rc=$?;            check "same" 0 "$rc" "the same as the Mac's (2 lines)" "$out"
+    out=$(run m same --quiet); rc=$?;    check "same, quiet" 0 "$rc" "" "$out"
+    [[ -z "$out" ]] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL same, quiet: printed: $out"; }
+    out=$(run m moved); rc=$?;           check "different" 1 "$rc" "the Mac's has 1 line(s) the copy lacks, and the copy has 2" "$out"
+    out=$(run m moved --quiet); rc=$?;   check "different, quiet" 1 "$rc" "DIFFERENT" "$out"
+    out=$(run gone same); rc=$?;         check "master missing" 2 "$rc" "REFUSED, $fx/gone is missing" "$out"
+    out=$(run m gone --quiet); rc=$?;    check "copy missing, quiet" 2 "$rc" "REFUSED, $fx/gone is missing" "$out"
+    # The login name is scrubbed before comparing, and --sync writes the scrubbed copy.
+    printf '/Users/me/x\n' > "$fx/mine"; printf '/Users/someone/x\n' > "$fx/pub"; printf '/Users/me/x\n' > "$fx/raw"
+    out=$(run mine pub); rc=$?;          check "login scrubbed, same" 0 "$rc" "the same as the Mac's" "$out"
+    out=$(run mine raw); rc=$?;          check "login not scrubbed, different" 1 "$rc" "DIFFERENT" "$out"
+    out=$(run mine raw --sync); rc=$?;   check "sync" 0 "$rc" "now matches" "$out"
+    out=$(run mine raw); rc=$?;          check "after sync, same" 0 "$rc" "the same as the Mac's" "$out"
+    grep -qF /Users/me/ "$fx/raw" && { fail=$((fail + 1)); echo "FAIL sync left the login name in"; } || pass=$((pass + 1))
+    out=$(run gone raw --sync); rc=$?;   check "sync, master missing" 2 "$rc" "REFUSED" "$out"
+    # The real pair, as used at session start: either answer is fine, a refusal is not.
+    out=$("${BASH_SOURCE[0]}" 2>&1); rc=$?
+    if [[ "$rc" == 0 || "$rc" == 1 ]]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL real pair: rc $rc: $out"; fi
+
+    # install.sh's _place_codebox_statusline, lifted out with sed and run against a fake HOME.
+    local fn
+    fn=$(sed -n '/^_place_codebox_statusline() {/,/^}/p' "$REPO/install.sh")
+    if [[ -z "$fn" ]]; then
+        fail=$((fail + 1)); echo "FAIL install.sh: _place_codebox_statusline not found"
+    else
+        mkdir -p "$fx/repo/settings/codebox"; printf 'new\n' > "$fx/repo/settings/codebox/statusline-command.sh"
+        place() { # $1 profile on: true|false, $2 dry run: true|false
+            ( HOME="$fx/home"; REPO_DIR="$fx/repo"; PLACE_CODEBOX_SETTINGS="$1"; DRY_RUN="$2"
+              step() { echo "STEP $*"; }; success() { echo "OK $*"; }; warn() { echo "WARN $*"; }
+              pretty_path() { echo "$1"; }
+              run_cmd() { if [[ "$DRY_RUN" == true ]]; then echo "DRY $*"; else "$@"; fi; }
+              eval "$fn"; _place_codebox_statusline ) 2>&1
+        }
+        local dst="$fx/home/.claude/statusline-command.sh"
+        out=$(place false false);            check "install: profile off" 0 "$([[ -z "$out" && ! -e "$dst" ]]; echo $?)" "" "$out"
+        out=$(place true true);              check "install: dry run writes nothing" 0 "$([[ ! -e "$dst" ]]; echo $?)" "DRY cp" "$out"
+        out=$(place true false);             check "install: placed when missing" 0 "$(cmp -s "$dst" "$fx/repo/settings/codebox/statusline-command.sh"; echo $?)" "OK statusline-command.sh placed" "$out"
+        out=$(place true false);             check "install: same, nothing written" 0 "$([[ -z "$(find "$fx/home/.claude" -name '*.bak' -print)" ]]; echo $?)" "already matches" "$out"
+        printf 'edited on the box\n' > "$dst"
+        out=$(place true false)
+        local kept; kept=$(find "$fx/home/.claude" -name 'statusline-command.sh.pre-dotfiles.*.bak' -print | head -1)
+        check "install: differs, old kept, source wins" 0 "$([[ -n "$kept" ]] && grep -qx 'edited on the box' "$kept" && cmp -s "$dst" "$fx/repo/settings/codebox/statusline-command.sh"; echo $?)" "WARN" "$out"
+    fi
+
+    rm -rf "$fx" >/dev/null 2>&1
+    echo "codebox-statusline-drift selftest: $pass passed, $fail failed."
+    [[ "$fail" == 0 ]]
+}
+
+case "${1:-}" in
+    --selftest) selftest ;;
+    --quiet)    compare true ;;
+    --sync)     sync ;;
+    "")         compare false ;;
+    -h|--help)  awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "${BASH_SOURCE[0]}" ;;
+    *)          echo "codebox-statusline-drift: unknown option $1 (try --help)" >&2; exit 2 ;;
+esac
