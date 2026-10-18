@@ -88,6 +88,13 @@ if [ -x "$NVSMI" ]; then
   output=$({ "$NVSMI" $NVSMI_ARGS; free -m | grep '^Swap:'; } 2>/dev/null) || output=""
   [ -n "$output" ] || { printf '3090 ?'; exit 0; }
 else
+  # A box with no ssh entry for the GPU host (codebox, a fresh Mac) has nothing to
+  # show: print nothing and never try. `ssh -G` resolves the config without
+  # connecting; an unknown alias comes back as its own name. Before 18 Oct 2026
+  # codebox tried every 30 s and showed "3090 ssh?" in its tab bar.
+  gpu_addr=$(ssh -G "$GPU_HOST" 2>/dev/null | awk '$1 == "hostname" {print $2; exit}') || gpu_addr=""
+  [ -n "$gpu_addr" ] && [ "$gpu_addr" != "$GPU_HOST" ] || exit 0
+
   if [ -f "$BACKOFF_FILE" ]; then
     last_fail=0 last_msg=""
     { read -r last_fail last_msg < "$BACKOFF_FILE"; } 2>/dev/null || true
