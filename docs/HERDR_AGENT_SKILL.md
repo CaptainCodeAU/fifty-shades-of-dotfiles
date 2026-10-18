@@ -3,7 +3,37 @@
 **Audience: an AI coding agent, not a human.** Read this before issuing any
 `herdr` command. It replaces reading <https://herdr.dev/docs/agent-skill/>.
 
-herdr-verified: 0.9.3
+herdr-verified: 0.9.5
+
+**THE 0.9.5 RE-VERIFY (2026-10-18), against a running 0.9.5 server** (protocol
+22), from inside a herdr pane. Scope: the 0.9.3 to 0.9.5 delta (0.9.4 feature
+release, 0.9.5 hotfix) and that day's skill merge. RE-RUN and unchanged: `herdr
+--skill` still exists, runs inside the sandbox (no socket) and is byte-identical
+to the stored `UPSTREAM.md` (both sha256 `fbd9d502...`); `herdr-skill-drift-check`
+reports skill-drift, base-version and all three upstream rows OK; every
+subcommand this document names is in 0.9.5's group listings (36 of 36, two
+invented controls missing), with `server stop`, `server reload-config` and
+`status [server|client]` in the top-level help and `herdr --help` still not
+listing `plugin` (0 lines, control: 4 for `agent`/`pane`); the output-format map
+for every read-only row (`pane list`, `agent list`, `workspace list`, `tab list`,
+`plugin list --json`, `plugin action list`, `plugin log list` JSON; `pane read`,
+`agent read`, `agent explain`, `plugin list` plain text, each non-empty, and
+`agent explain --json` JSON); `pane wait-output` JSON with `.result.read.text`; a
+bad pane id at exit 1 with `pane_not_found` as JSON on stderr; `--current` on
+`read`/`wait-output` refused at exit 2; `<group> <sub> --help` exit 0 for real
+and exit 2 for invented (section 4); the sandbox socket denial; new panes
+carrying `TERM_PROGRAM_VERSION=0.9.5`. MEASURED FOR THE FIRST TIME, because a
+live agent existed this time: `agent get` returns `.result.agent` and `agent
+list` `.result.agents`, and `agent explain` prints text with `--json` giving
+JSON. RE-MEASURED AND CHANGED: section 3's first fix does not work (the grant
+was in place and the call still failed), and section 9's list of
+`--current`/`--pane` subcommands was short (11 of 25, not three). NOT RE-RUN:
+`pane split`, `pane run`, `pane close` and the section 8 recipe need a pane of
+our own, and creating one is outside a read-only re-verify; the 0.9.4 `pane run`
+refusal on macOS and the CLI close getting no last-pane confirmation are DOC
+(release notes and the merged skill), not measured here. A coverage audit of
+every 0.9.2 to 0.9.5 release-note bullet followed the same day, and the gaps it
+found were added here and to SKILL.md, each marked measured or release notes.
 
 **THE 0.9.3 RE-VERIFY (2026-10-07), against a running 0.9.3 server.** Scope: the
 0.9.1 to 0.9.3 delta (0.9.2 feature release, 0.9.3 escape-key hotfix). RE-RUN
@@ -117,6 +147,20 @@ Our own edits are always recoverable as `diff UPSTREAM.md SKILL.md`. On a bump:
 Do not verify a merge by line count. After the 0.8.2 merge a line-level diff
 still reported five upstream lines "missing", because those sentences were
 rewritten rather than dropped. Verify by checking the FACTS are present.
+The 0.9.5 merge (2026-10-18) was checked that way: four upstream paragraphs
+changed (Ctrl+Z keeps an agent's identity; `idle`/`done` "normally" mean ready;
+`pane run` success means admitted, not executed, plus the macOS line-input
+refusal; a CLI close gets no last-pane confirmation), and each new fact counted
+1 in SKILL.md while the replaced phrasings ("both mean ready for input",
+"atomically sends") counted 0.
+
+**The session that does the merge keeps reading the OLD skill.** Measured
+2026-10-18: after SKILL.md was edited and committed, invoking the skill in the
+same session served the pre-merge text ("both mean ready for input",
+"atomically sends") because that session had loaded the file earlier; the file
+on disk held 0 of those phrases and 1 of each replacement. A new session loads
+the new text. So verify a merge against the FILE, never against what the skill
+invocation shows you, and do not "fix" a merge that only looks unapplied.
 
 0.8.2 refreshed the bundled skill wholesale to match the current CLI (#2847),
 and that merge recovered two behaviours ours had lost: `agent start` keeps the
@@ -145,6 +189,7 @@ server. The pane measured had `CLAUDE_CODE_SESSION_ID` length 0 (control: `HOME`
 length 17), but that server was started from a plain terminal, where the
 variable is absent either way, so the measurement does not prove the change.
 Treat it as DOC until a server started from a Claude shell is checked.
+OBSERVED on 0.9.5 (2026-10-18): the version follows the server, `TERM_PROGRAM_VERSION=0.9.5`.
 
 ---
 
@@ -160,19 +205,34 @@ Error: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" 
 This is not a herdr fault and not a broken install. The socket lives at
 `~/.config/herdr/herdr.sock` and the sandbox denies it.
 
-Two fixes:
+Since 0.9.2 the socket keeps accepting connections after a transient error, so
+CLI calls no longer fail while the server keeps running (#4601, per the 0.9.2
+release notes, not measured). So on 0.9.2 and later, a socket failure from
+inside Claude Code is this sandbox denial until shown otherwise, not a wedged
+server.
 
-1. Add the socket to `allowWrite` in `.claude/settings.local.json`:
+The fix that works:
+
+1. Per-call `dangerouslyDisableSandbox: true` on the Bash tool. Works
+   immediately but lifts the whole sandbox for that call.
+
+What does NOT work, although this document recommended it until 2026-10-18:
+
+1. Adding the socket to `allowWrite` in `.claude/settings.local.json`:
 
    ```json
    "allowWrite": ["~/.claude/MEMORY", "~/.config/herdr/herdr.sock"]
    ```
 
-   OBSERVED: sandbox config is read at **session start**. Editing it mid-session
-   does NOT take effect. Verify at the next session, not immediately.
-
-2. Per-call `dangerouslyDisableSandbox: true` on the Bash tool. Works
-   immediately but lifts the whole sandbox for that call.
+   OBSERVED 2026-10-18 on 0.9.5: in a session whose sandbox write list already
+   held `~/.config/herdr/herdr.sock`, a sandboxed `herdr agent list` still failed
+   with the error above (exit 1), while `herdr --version` in the same command
+   answered `herdr 0.9.5`. The skill has said the same since 2026-08-19. A write
+   grant on the path does not cover connecting to the socket. (Sandbox config is
+   also read only at session start, so a mid-session edit could never have been
+   tested anyway.) The skill describes one exception, engage's
+   `sandbox.excludedCommands`, which matches only when the whole command is the
+   tool.
 
 Do NOT widen the grant to the whole `~/.config/herdr` directory without
 thinking: on a stow-managed dotfiles setup `~/.config/herdr/config.toml` is a
@@ -202,6 +262,17 @@ herdr is NOT uniformly JSON. OBSERVED, per command:
 If a command returns nothing through `jq`, try it raw before assuming failure.
 
 RE-CHECKED 0.8.2: every row above still holds, `agent explain` included.
+RE-CHECKED 0.9.5 (2026-10-18): every row except `pane split`, `pane run`,
+`agent start`, `agent wait`, `agent send-keys`, `plugin action invoke` and
+`plugin pane open`, which need a pane or agent of our own. Each plain-text row
+was checked to be non-empty, so NOT-JSON there was not an empty reply.
+`pane wait-output`'s `.result.read` also carries `truncated` (0.8.0, #1717),
+the field the plain `pane read` text cannot show.
+
+`pane run`'s empty exit 0 means the input was ADMITTED, not that the command
+ran (upstream's 0.9.5 skill wording). Since 0.9.4 on macOS, `pane run` and
+`agent start` refuse a command too long for a shell that is still starting,
+instead of silently cutting it off (#4950). DOC, not measured here.
 
 A caution about checking, not about herdr. An earlier version of this line
 claimed `agent explain` was missing from `herdr agent`. It is not: both `herdr
@@ -275,6 +346,10 @@ help text APPEARING and the subcommand not existing look identical.
 
 Measure exit codes without a pipe. `herdr ... | head` reports `head`'s status.
 
+From 0.9.4 an out-of-range workspace number is an exit-1 `workspace_not_found`,
+not a server crash (#5096, per the 0.9.4 release notes, not measured). The rule
+that follows from it lives in SKILL.md's "Safety and coordination rules".
+
 ---
 
 ## 5. Command cheat sheet
@@ -308,6 +383,10 @@ herdr pane read <pane> --source visible --lines 400
 herdr pane close <pane>
 ```
 
+From 0.9.4 a new workspace, tab or split starts its shell at its own size
+(#4419, per the 0.9.4 release notes, not measured); what that means for reading
+a fresh pane on an older server is in SKILL.md, "Start and coordinate an agent".
+
 **NEVER** run `herdr server stop` (macOS) / `systemctl --user stop
 herdr.service` (Linux), or `herdr server reload-config` casually, while other
 agent sessions are live. (`brew services stop herdr` no longer applies: Homebrew
@@ -321,6 +400,11 @@ subcommand by omitting arguments; `herdr workspace create` executes on defaults.
 ## 6. `pane read` sources, and the `--lines` trap
 
 Sources: `visible`, `recent`, `recent-unwrapped`, `detection`.
+
+On 0.9.5 the `herdr pane` group listing shows only the first three for `pane
+read` and `pane wait-output`, but `herdr pane read --help` lists all four and
+`--source detection` ran at exit 0 for both (measured 2026-10-18). Another
+listing that is not the whole answer.
 
 **THE 0.7.5 TRAP NO LONGER REPRODUCES. Re-measured on 0.8.2, 2026-09-17**, one
 pane running `seq 1 300`, every read taken at the same moment:
@@ -427,25 +511,37 @@ herdr pane close "$P"
 already exists will match straight away. Omitting `--timeout` waits forever --
 always pass one.
 
+This recipe sends `pane run` straight after the split, while the new shell may
+still be starting. That is fine for a short command; on macOS since 0.9.4 a long
+one is refused rather than cut off, so wait for the shell prompt first (DOC; the
+recipe was not re-run on 0.9.5).
+
 ---
 
 ## 9. Rules
 
-- Do not close workspaces, tabs, panes or sessions you did not create.
+- Do not close workspaces, tabs, panes or sessions you did not create. The
+  last-pane confirmation 0.9.4 added is the TUI's; a CLI close does not get it
+  and closes at once (DOC, from the merged skill).
 - Never kill the main herdr process. Use a named test session for anything
   that needs an isolated server.
 - Parse IDs out of JSON responses. Never guess them, never derive them from
   sidebar order.
 - Prefer `--current` or an explicit pane ID. Omitting a target may hit the
   UI-focused pane, which can belong to the user or another client. **But only
-  `pane layout`, `pane current` and `pane split` accept `--current`/`--pane` at
-  all.** `pane read`, `run`, `send-keys`, `wait-output`, `close` and `move` take
-  the id as a bare positional argument and reject both flags with
-  `unknown option` and exit 2 -- one short line, no usage block, so it reads
-  like a server fault rather than a syntax error. The calling pane is
-  `herdr pane read "$HERDR_PANE_ID"`, never `herdr pane read --current`.
-  Measured 2026-09-20 against herdr 0.8.2 from each subcommand's `--help`,
-  after a session burned two round trips on the flag forms.
+  11 of the 25 `pane` subcommands accept `--current`/`--pane` at all**
+  (`current`, `layout`, `process-info`, `neighbor`, `edges`, `focus`,
+  `resize`, `swap`, `zoom`, `input`, `split`; the skill's "Use IDs" table says
+  which also take a positional id). `pane read`, `run`, `send-keys`,
+  `wait-output`, `close`, `move` and the rest take the id as a bare positional
+  argument and reject both flags with `unknown option` and exit 2 -- one short
+  line, no usage block, so it reads like a server fault rather than a syntax
+  error. The calling pane is `herdr pane read "$HERDR_PANE_ID"`, never `herdr
+pane read --current`. First measured 2026-09-20 against 0.8.2, when only
+  three flag subcommands were checked and this line wrongly said "only" those
+  three; re-measured 2026-10-18 on 0.9.5 from the `herdr pane` listing, with
+  `pane edges --current` exit 0 and `pane edges <id>` exit 2 as the two arms,
+  and `pane read --current` / `pane wait-output --current` exit 2.
 - Closed tab and pane IDs are never reused. After `pane move`, continue with
   `.result.move_result.pane.pane_id`.
 

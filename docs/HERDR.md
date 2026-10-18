@@ -1,13 +1,41 @@
 # herdr — release cooldown, daemon persistence, and the tmux question
 
-herdr-verified: 0.9.3
+herdr-verified: 0.9.5
 
-Re-verified 2026-10-07 against the installed 0.9.3 with a running 0.9.3 server,
-2026-09-22 (F9b) against 0.9.1, and 2026-09-17 against 0.8.2. The `herdr-verified:` line is machine-read by
+Re-verified 2026-10-18 against the installed 0.9.5 with a running 0.9.5 server,
+2026-10-07 against 0.9.3, 2026-09-22 (F9b) against 0.9.1, and 2026-09-17
+against 0.8.2. The `herdr-verified:` line is machine-read by
 `herdr-skill-drift-check`, which reports every `docs/HERDR*.md` that has fallen
 behind the binary. It replaced six hand-typed version mentions across four docs,
 all six of which had gone stale without anyone noticing. Move it only after
 actually re-checking.
+
+**WHAT THE 0.9.5 RE-VERIFY COVERED (2026-10-18).** The upgrade was 0.9.3 to
+0.9.5 under the new 3-day gate (D-20261018-A01, below), typed by hand with
+`HOMEBREW_NO_INSTALL_CLEANUP=1`, and the server restart was Gavin's, by hand.
+RE-RUN on 0.9.5: `herdr status` (client and server both 0.9.5, protocol 22,
+`restart_needed: no`) and `herdr status server --json` (`running: true`,
+`compatible: true`); `herdr config check` ok with both phone-home keys still
+`false`; `herdr-cooldown-check` (0 actionable, pin OK), `herdr-linux-pin-check`
+(Linux pin v0.9.5 matches) and `herdr-skill-drift-check`; `brew info herdr`
+(`pinned: true`, `service: null`, kegs 0.9.3 and 0.9.5 both installed); the
+running server's process tree, which corrected the PPID 1 claim in the
+persistent-server section; the server log, which now names why a server stopped
+(0.9.4, #4920); the multi-key and bad-key `config check` arms in throwaway
+configs; `herdr integration status` and a throwaway-home install of the Claude
+hook, now v11 (item 13 and the hooks section); `check-herdr-fda.py` PASS. Diffed
+against the kept 0.9.3 binary: `--help` identical (74 lines each), every command
+group's usage identical except the new `herdr plugin update`, and
+`--default-config` differs only by the Windows-only `allow_unelevated_clients`.
+NOT RE-MEASURED, because each needs a step that ends or disturbs the running
+session: that closing the shell that started herdr, or a `SIGHUP`, no longer
+stops the server (0.9.4, #4920), and that sessions survive a Mac restart (0.9.4,
+# 4414). Also not re-measured: anything on codebox (reported on 0.9.5, not measured here), the Linux system
+unit and the `herdr()` guard on Linux, remote attach and the keymap-drift
+claims, the tmux comparison and copy mode, and speak-selection. The 0.9.4 and
+0.9.5 notes touch none of those beyond what is marked. A coverage audit of every
+0.9.2 to 0.9.5 release-note bullet followed the same day, and the gaps it found
+are added in the sections they belong to, each marked measured or release notes.
 
 **WHAT THE 0.9.3 RE-VERIFY COVERED (2026-10-07).** RE-RUN: the cooldown and
 pin path end to end (`herdr-cooldown-check` ELIGIBLE at 7.2 days, the hand
@@ -28,7 +56,8 @@ W-20261007-A02): `send-keys ctrl+shift+c` into a shell no longer arrives as
 `0x03` (changelog #4581; "Who copies on a drag" is corrected), and an action
 now takes several keys, not one (the ported keymap's "single key per action"
 is corrected; #4653 is the related change that allows several prefix keys).
-0.9.3 itself only fixed Escape-prefixed keys (#4751).
+0.9.3 itself only fixed Escape-prefixed keys (#4751), which 0.9.2 had broken;
+"Keys in a Ghostty pane since 0.9.2" below has what broke.
 
 **WHAT THE 0.9.1 RE-VERIFY COVERED HERE.** This document is about the cooldown
 machinery, running herdr as a persistent server, and where it overlaps with
@@ -95,6 +124,15 @@ Four parts, each doing one thing:
 | **Homebrew pin**                      | makes the binary immovable by a routine `brew upgrade`          |
 | `herdr-cooldown-check`                | read-only: reports when a release has aged past the gate        |
 | `_preflight_herdr_bump_check` (macOS) | acts on that report: unpin/upgrade/re-pin once it says ELIGIBLE |
+
+**The number is 3 days since 2026-10-18** (D-20261018-A01, Gavin). It was 7
+until 2026-09-22, then 5 (D-20260922-A10), then 3 when he asked for v0.9.5 at
+3.4 days old with the 5-day gate still holding it. v0.9.5 was a hotfix that
+followed v0.9.4 by a day, which is the follow-up release the shorter wait is
+priced on; the accepted cost is less warning on every future herdr release.
+`install.sh` holds the value, and `herdr-cooldown-check` falls back to 3 when
+`HERDR_COOLDOWN_DAYS` is unset. Only the number moved: pin, checker and auto-bump
+are unchanged. `decided herdr cooldown` prints both rulings.
 
 **Why pin rather than trust a channel.** herdr's own `update.channel` only selects
 stable-vs-preview, not age. And upstream states that Homebrew installs ignore
@@ -351,13 +389,22 @@ Security > Full Disk Access > +, add the new path, remove the old entries.
 `~/CODE/CaptainCodeAU/Network_Plan/tools/check-herdr-fda.py` is on the box, runs
 it. Measured 2026-10-07 on 0.9.3: the 0.9.1 grant was stale after the upgrade,
 the re-grant gave `check-herdr-fda.py --check` PASS, and no herdr restart was
-needed (W-20261007-A16).
+needed (W-20261007-A16). Measured 2026-10-18 on 0.9.5: re-granted by hand at
+3:32 PM, and `check-herdr-fda.py --check` PASS (re-run for this re-verify,
+`granted + installed: /opt/homebrew/Cellar/herdr/0.9.5/bin/herdr`). Before that
+re-grant, with a 0.9.5 server and only the 0.9.3 grant, `/Volumes/mac` was still
+readable from a herdr pane. The likely reason is that Ghostty holds Full Disk
+Access and started the server, so macOS credited Ghostty's grant. Likely, not
+proven: do not count on it, and re-grant anyway.
 
 `;` rather than `&&` so the pin comes back even when the upgrade fails, and
 `HOMEBREW_NO_INSTALL_CLEANUP=1` because without it Homebrew deletes the old
 version and its cached bottle, which are the only way back. Measured 2026-10-07:
 the 0.9.1 to 0.9.3 upgrade was typed by hand without it, and cleanup removed both.
 `install.sh` has always set it; the hand-typed line printed here did not.
+Measured 2026-10-18: the 0.9.3 to 0.9.5 upgrade was typed with it, and the 0.9.3
+keg stayed (`brew info` lists 0.9.3 and 0.9.5). The 0.9.3 bottle is not in the
+Homebrew cache, where the 0.9.5 one is, so the kept keg is the way back.
 
 Linux/WSL is unchanged — `_preflight_herdr_release_check` already applies pinned,
 hash-verified `HERDR_VERSION` bumps automatically; see the runbook above the
@@ -448,7 +495,9 @@ updating the integration overwrites this file". This row used to say a bump
 rewrites it on its own. **Measured 2026-10-07, it does not:** the Claude hook
 was still `HERDR_INTEGRATION_VERSION=8`, dated 2026-09-06, after two upgrades
 (0.9.1 on 2026-09-22, 0.9.3 on 2026-10-07), and `herdr integration status`
-reported `claude: outdated (v8 < v10)`. The rewrite happens only on
+reported `claude: outdated (v8 < v10)`. The 0.9.5 upgrade on 2026-10-18 did the
+same: the live hook stayed v10 and `herdr integration status` reads
+`claude: outdated (v10 < v11)`. The rewrite happens only on
 `herdr integration install claude`, so after a bump, check `herdr integration
 status` and decide. It is executable code in real files under `~/.claude`, not
 stow symlinks, so a restow does not restore them. The section further down,
@@ -511,9 +560,16 @@ clients attach and detach. `herdr server` is the documented headless entrypoint
 definition on 2026-09-24 (homebrew-core `fe0006641fba`, "herdr: remove service
 definition"), so `brew services start|stop|restart herdr` no longer applies. The
 0.9.3 formula reports `service: null` and its keg ships 12 files where 0.9.1's
-shipped 14. herdr starts its own detached server when you attach, and that
-server's parent is PID 1 with no launchd job behind it (measured 2026-10-07:
-`launchctl list` had no herdr job; the server was PID 95343, PPID 1).
+shipped 14; 0.9.5 is the same (`service: null`, the same 12 files, not counting
+Finder's `.DS_Store`). herdr starts its own detached server when you attach, with
+no launchd job behind it. On 0.9.3 that server's parent was PID 1 (measured
+2026-10-07: `launchctl list` had no herdr job; the server was PID 95343, PPID 1).
+**On 0.9.5 its parent is the `herdr` client that started it**, but in a session
+of its own with no terminal (measured 2026-10-18: server PID 16675, PPID 16674,
+which is `herdr` in a Ghostty login shell; `ps` shows the server `Ss`, PGID
+16675, tty `??`; `launchctl list` had no herdr job, control: the Ghostty job
+listed in the same command). What its PPID becomes once that client exits was
+not measured.
 
 Measured on this Mac, 2026-10-07:
 
@@ -530,6 +586,41 @@ So **to restart onto a new build: `herdr server stop`, then open `herdr`.**
 `restart`, and never from inside a herdr pane. The server log shows the same
 clean cycle three times before this was written down (2026-09-30, and twice on
 2026-10-04), each one ending in `session restore evaluated ... workspaces=N`.
+It ran again on 2026-10-18 onto 0.9.5: the 0.9.3 server stopped at 3:27 PM and
+0.9.5 was up at 3:28 PM, then stopped and started once more at 3:32 to 3:33 PM;
+both 0.9.5 starts logged `workspaces=11`.
+
+**Restored agents start one at a time** since 0.9.2, 100 ms apart by default,
+rather than all at once (#4102, per the 0.9.2 release notes).
+`[session] startup_per_agent_delay_ms` sets the spacing, and 0 starts them
+with none. Measured 2026-10-18 on 0.9.5: `herdr --default-config` lists it at
+100, and a scratch config setting it passes `herdr config check` while a
+misspelt `startup_per_agent_delay_mz` is flagged as an unknown key. This config
+does not set it, and the stagger itself was not timed.
+
+**A restore no longer stalls on slow Git** (#4945, #4926, per the 0.9.4 release
+notes). The report was a launchd-started server that never answered after
+restoring a save written by a shell-started one. The same fix keeps worktree
+groups through a checkout that is briefly unavailable, and opening the same
+repository twice no longer nests the second workspace inside the first one's
+worktree group, where it could only be closed with the whole group (#4736). Not
+re-measured.
+
+**Since 0.9.4 the shell that started herdr no longer takes the server with it**
+(#4920, release notes): on macOS and Linux, closing that shell does not stop the
+server, and neither does `SIGHUP`. Stop it with `herdr server stop` or `SIGTERM`.
+Not re-measured here, because the test is closing the window that holds the
+server. What 0.9.4 also added, and this one IS measured, is that the server log
+now names the cause of every stop. The 0.9.3 log did not:
+
+```
+04:27:46Z server shutdown initiated                           # 0.9.3
+04:28:10Z server shutdown initiated reason=SIGINT             # 0.9.5
+04:32:03Z server shutdown initiated reason=server.stop request from pid 13659 (herdr), parent pid 52262 (zsh)
+```
+
+(`~/.config/herdr/herdr-server.log`, 2026-10-18, times UTC.) So the first
+question about an unexpected stop, "who asked?", is now one line of the log.
 
 What the Mac gave up: **crash-restart.** A crashed server stays down until the
 next attach. Start-at-login never mattered much, because attach starts it anyway.
@@ -569,6 +660,20 @@ regular use with `sudo pmset -a destroyfvkeyonstandby 1`.
 own server on attach — upstream: _"connects over SSH, starts or attaches to the
 remote Herdr server."_ After any reboot, the first attach brings the server up.
 
+And since 0.9.4 a planned restart keeps the sessions: herdr saves before macOS
+starts closing apps, so the agents come back where they were on the next attach
+(#4414, release notes). Saves are also written to disk before they replace the
+old file (#5150), so a crash or power cut cannot leave an unreadable save. Not
+re-measured: no restart was done for this re-verify.
+
+**If a restore goes wrong, older layouts are kept.** Since 0.9.2 herdr keeps up
+to 48 layout snapshots in `session-snapshots/` for recovery by hand, and on
+Linux with logind (codebox) it saves before the system shuts down (#4320, per
+the 0.9.2 release notes). Measured 2026-10-18 on 0.9.5:
+`~/.config/herdr/session-snapshots/` holds 48 `session-*.json` files, the cap
+exactly. How to restore from one was not tried, and the logind half was not
+measured.
+
 ### A leftover LaunchAgent from before 2026-09-24
 
 A Mac that ran `brew services start herdr` while the formula still had a service
@@ -604,7 +709,9 @@ forever, throttled to about one attempt every ten seconds.
 
 **PPID 1 does NOT tell the two apart.** This section used to give a launchd
 server's PPID 1 as part of the signature, but a server herdr 0.9.x starts itself
-detaches to PPID 1 too (PID 95343, 2026-10-07, no launchd job). Only launchd can
+detaches to PPID 1 too (PID 95343, 2026-10-07, no launchd job). On 0.9.5 a
+self-started server shows its attaching client as the parent instead
+(2026-10-18), which settles nothing either. Only launchd can
 answer, and `runs` climbing with `last exit code = 0` is the signature:
 
 ```bash
@@ -626,13 +733,17 @@ rm ~/Library/LaunchAgents/homebrew.mxcl.herdr.plist      # bare rm goes to the T
 ### Two machines: keep the versions in step
 
 Remote attach is not version-agnostic. Client and server negotiate a protocol,
-and `herdr status server` reports all three:
+and `herdr status server` reports the version, the protocol and whether they fit
+(0.9.5, 2026-10-18; 0.7.5 printed one `protocol: 17` and one `compatible: yes`
+line instead of the last four):
 
 ```
 status: running
-version: 0.7.5
-protocol: 17
-compatible: yes
+version: 0.9.5
+endpoint_compatible: yes
+private_protocol: 22
+private_protocol_compatible: yes
+socket: ~/.config/herdr/herdr.sock
 ```
 
 When the two ends diverge far enough to change that protocol, herdr prompts to
@@ -656,6 +767,11 @@ drift ahead of a pinned server and start forcing restarts. So:
 This is the one place where the cooldown design needs a human to remember
 something, because nothing on either box can see the other's version until they
 try to talk.
+
+Not every wire change forces the step. Since 0.9.2 a saved machine sends only
+the rows that changed when output scrolls, and a pre-0.9.2 client or server
+keeps working with the old format rather than refusing (#4711, per the 0.9.2
+release notes). Not measured; keep the ends in step anyway.
 
 ### Two machines: the keymap drifts too
 
@@ -699,7 +815,11 @@ Two ways to close the gap:
   machine: one file, one commit, no drift. The cost is that the client can no
   longer hold keybindings of its own — which costs nothing when both ends stow
   the same config anyway. There is no `[remote]` config key for this; the flag
-  and the environment variable are the only routes.
+  and the environment variable are the only routes. (A `[remote]` table does
+  exist, but its one key is `manage_ssh_config`: on 0.9.5 `herdr config check`
+  reports `unknown config key remote.keybindings`, while
+  `remote.manage_ssh_config` passes. Both flag and variable are still in the
+  0.9.5 binary, and a misspelt `--remote-keybinding` is refused with exit 2.)
 
 Confirmed 2026-08-01 the hard way: `previous_agent` / `next_agent` were added
 here, validated, and reloaded, and did nothing on the laptop until the attach was
@@ -751,8 +871,17 @@ shown the dotfiles welcome banner and exported the once-only flags
 (`_ONBOARDING_COMPLETE`, `_WELCOME_MESSAGE_SHOWN`), so every pane the server
 opened skipped the banner -- measured 2026-09-06 with
 `echo $_ONBOARDING_COMPLETE` inside a fresh pane returning `true`. The
-foreground server also died with the SSH session. systemd gives a clean
+foreground server also died with the SSH session (on 0.8.x; since 0.9.4 a
+`SIGHUP` no longer stops the server, #4920, so on 0.9.5 that half may not hold
+any more. Not re-measured on Linux; the environment half does not depend on
+it). systemd gives a clean
 environment, crash-restart, and (with linger) survival across logout.
+
+**Running out of processes no longer takes every pane down.** Before 0.9.4, a
+server whose systemd user slice hit `TasksMax` exited and every pane went with
+it; since 0.9.4 the server keeps running when the machine runs out of processes
+or threads (#3324, #4958, per the 0.9.4 release notes). That is this unit's
+shape exactly. Not measured on codebox.
 
 The unit sets `PATH` explicitly because the user manager's default has no
 `~/.local/bin`, which is where install.sh puts the pinned binary. It does not
@@ -814,6 +943,22 @@ describe SSH-then-`herdr` as _"the tmux-style path"_. Panes are genuine terminal
 (it vendors libghostty-vt, the Ghostty VT engine) with splits, tabs, scrollback,
 copy mode, named sessions and detach/reattach.
 
+What the screen does differently since 0.9.2, all per the release notes and
+none of it measured here:
+
+- **Images** (#4561, #4652, #4686). An app that draws Kitty graphics in a pane
+  reaches a local Ghostty through temporary files rather than terminal output,
+  popups and notifications crop around images instead of hiding them, and an
+  image scrolled out of view stays loaded. Nothing here draws images in a pane.
+- **No torn frames** (#2968, #4303). Apps that use synchronized output no
+  longer tear while you type, and the cursor no longer flickers when herdr
+  redraws status. Whether Claude Code uses synchronized output was not checked.
+- **Stale prompt rows after a resize are a known bug** (#3672, #4977, 0.9.4).
+  0.9.4 stopped Fish repeating prompt fragments on a pane resize; the same
+  problem with zsh and Powerlevel10k, this estate's prompt, is still open and
+  waits on a Ghostty fix. Repeated prompt rows after a split or resize are that
+  bug, not a broken config.
+
 Default keymap against this repo's `.tmux.conf`:
 
 | Action              | herdr                   | this repo's tmux         |
@@ -837,6 +982,18 @@ herdr --remote <host>      # thin client: UI streams to the local terminal
 keybindings against a remote server. It honours `~/.ssh/config` host aliases and
 normal OpenSSH auth.
 
+Two SSH fixes worth knowing, both per the release notes and not measured here:
+
+- **Stray characters after a focus switch** (#4630, 0.9.2). Over SSH, a mouse
+  report split across two reads used to leak into the shell as junk after a
+  focus switch. Junk like that in a codebox pane on 0.9.2 or later is a new
+  bug, not this one.
+- **A forwarded SSH agent is no longer polled every second** (#4931, #4962,
+  0.9.4). Before, a remote session with agent forwarding could make the Mac's
+  SSH agent unresponsive and break SSH and Git authentication. This matters for
+  a `ForwardAgent yes` host (which `install.sh` suggests for trusted LAN boxes);
+  the codebox machine route uses no forwards (`HERDR_SIDEBAR.md`).
+
 ### What dropping tmux would cost
 
 Measured against this repo's `home/.tmux.conf` and `home/.zsh_cursor_functions`:
@@ -851,10 +1008,17 @@ Measured against this repo's `home/.tmux.conf` and `home/.zsh_cursor_functions`:
   re-solving. The `tmux()` wrapper in `.zsh_cursor_functions` goes dead with it.
 - **`shift+Enter` — resolved, no action needed.** `.tmux.conf` had to reclaim it
   from tmux-tilit so Claude Code received newlines. herdr's default keymap binds
-  nothing to it, so no reclaim is required.
+  nothing to it, so no reclaim is required. Before 0.9.4, an outer-terminal
+  reset (the report was VS Code's Reload Window) could make Shift+Enter reach
+  the pane as a bare Enter, which submits a Claude prompt instead of adding a
+  newline; 0.9.4 keeps Shift+Enter and the other enhanced keys working across a
+  reset (#4985, #5088, per the 0.9.4 release notes, not measured).
 - **Copy mode — already equivalent.** herdr's copy mode is vi-style out of the
   box (`v` selects, `y` copies, `q`/Esc leaves), matching the `mode-keys vi`
   setup in `.tmux.conf`. Only `ctrl+v` rectangle-select has no counterpart.
+  Since 0.9.2 it also stays open while the pane keeps printing and a movement
+  key is held (#3812, #4281, per the 0.9.2 release notes, not measured), so on
+  an older build, output arriving mid-selection could drop you out of it.
 
 ### The ported keymap
 
@@ -872,6 +1036,19 @@ Scope is the whole session rather than the current workspace, and because
 `agent_panel_sort = "priority"` is set, they walk the sidebar's own order — next
 by which agent wants attention, not by position.
 
+**Closing asks first, and one key turns it off.** Closing a workspace's last tab
+asks for confirmation since 0.9.2 (#4379), and closing its only pane does too
+since 0.9.4 (#5143, #5173), per the release notes. The key is
+`[ui] confirm_close`, and `confirm_close = false` turns the only-pane question
+off; the notes do not say whether it also silences the last-tab one, and that
+was not tried. Measured 2026-10-18 on 0.9.5: `herdr --default-config` lists
+`confirm_close = true` ("Ask for confirmation before closing a workspace"),
+and a scratch config
+with `confirm_close = false` passes `herdr config check` while a misspelt
+`confirm_closee` is flagged as an unknown key. This config does not set it, so
+both questions are on. A close from the CLI or API does not ask
+(`HERDR_AGENT_AUTOMATION.md`, from the release notes, not measured).
+
 The one structural difference, **as of 0.9.1: herdr took a single key per
 action**, where tmux allowed several. `.tmux.conf` bound the right-hand split
 four ways (`|`, `Right`, `%`, `h`); only one survived the port. The same
@@ -885,6 +1062,9 @@ passes `herdr config check`, a bad entry in the list is flagged by name
 `prefix = ["ctrl+space", "ctrl+s"]` passes too (#4653). Measured with a
 throwaway `HOME` and a known-bad key as the control; whether the running server
 then answers every entry was not tested, and the live config is unchanged.
+Re-run on 0.9.5 on 2026-10-18 with the same throwaway configs, through
+`HERDR_CONFIG_PATH`: the four-key list and the two-key prefix pass, and the bad
+entry is flagged in the same words.
 Validate any change with `herdr config check`.
 
 **Recommendation: do not nest them, and do not delete tmux either.** Stop
@@ -892,6 +1072,40 @@ launching tmux and drive herdr for a couple of weeks instead. The tmux config
 costs nothing sitting on disk, and herdr is a young project — keep the retreat
 path intact. Prefixes do not collide (`ctrl+Space` vs `ctrl+b`) if you do end up
 nested, but layered multiplexers mangle keys and you will blame the wrong thing.
+
+### Keys in a Ghostty pane since 0.9.2
+
+What changed for keys and clicks between 0.9.2 and 0.9.5. All of it is per the
+release notes, and none of it was re-tested on Ghostty here unless marked.
+
+- **0.9.2 broke Escape-prefixed keys; 0.9.3 fixed them** (#4751). On 0.9.2, in
+  a pane, Option+Left/Right typed `b`/`f` instead of moving by word,
+  Option+Backspace deleted one character instead of a word (Ghostty's defaults
+  and iTerm2's Natural Text Editing preset both send these), and an
+  Escape-based Shift+Enter binding submitted to Claude Code instead of adding a
+  newline. 0.9.3 restored all three. The same fix stopped Alt+[ followed
+  quickly by another key merging into a different key; no binding here uses
+  Alt+[. If any of these misbehave, check the server is not on 0.9.2.
+- **A click no longer interrupts a working agent** (#3480, 0.9.2). Before 0.9.2,
+  clicking into a pane could send a stray Escape, which interrupts a Claude
+  turn in progress. 0.9.3 kept that fix while restoring the Escape-prefixed
+  keys above. On 0.9.1 or older, do not click into a pane whose agent is
+  working.
+- **The key after the prefix can arrive as plain text** (#5255, 0.9.5). 0.9.4
+  ignored it when the terminal sent it as text rather than a key event, which
+  broke Tern and the macOS Chinese, Japanese and Korean input methods, Ghostty `text:`
+  keybinds that send the prefix and a key together, and workspace navigation
+  the same way; 0.9.5 fixed it. This config sets
+  `[experimental] switch_ascii_input_source_in_prefix = true`, and the repo's
+  Ghostty config has no `text:` binds (2 `keybind` lines, 0 `text:`; read
+  2026-10-18). If a prefix chord ever does nothing again, suspect this before
+  the keymap.
+- **Ctrl+[ leaves workspace navigation** (#1431, #2340, 0.9.4). Ctrl+[ is the
+  Escape chord.
+- **The welcome screen shows the configured prefix** (#4745, #4747, 0.9.4),
+  `ctrl+Space` here, not the default `ctrl+b`. This config sets
+  `onboarding = false`, and whether the welcome screen still appears with it
+  was not checked.
 
 ## Speak-selection stops working inside herdr
 
@@ -1007,7 +1221,14 @@ which the drag never reaches the clipboard and the key appears dead.
   Ctrl+Shift+C), twice, while the controls in the same tab gave `03` for
   `ctrl+c` and `61` for `a`. A shell or program that does not decode CSI-u may
   still act on that sequence, so the rule stays: never send it to a pane not
-  known to be Claude.
+  known to be Claude. **0.9.4 changed this again** (#4356, #5017, per the 0.9.4
+  release notes): Ctrl+Shift+letter now reaches a plain shell as the Ctrl key,
+  as in Alacritty and WezTerm, and Super, Hyper and Meta shortcuts no longer
+  type escape-code junk into apps that cannot read them (the report, #4356, was
+  Super+Space typing `;9u` into a zsh pane in Ghostty). So a typed
+  Ctrl+Shift+C in a shell may be Ctrl+C again; whether
+  `send-keys ctrl+shift+c` into a shell is `0x03` again on 0.9.5 was not
+  re-measured. The rule above covers both.
 
 **So every drag overwrites what the clipboard held before**, and
 `speak-clipboard` cannot put it back: it only reads (`pbpaste`) and never sees
@@ -1096,6 +1317,15 @@ special case. User settings and engage's settings register SessionStart only, so
 behaviour is the same here. After the update `herdr integration status` reads
 `claude: current (v10)`.
 
+Measured 2026-10-18, v10 to v11 (herdr 0.9.5), steps 1 to 3 only. The live hook
+is still byte-identical to the reference copy. herdr's v11 hook differs from it
+in the `HERDR_INTEGRATION_VERSION` line alone. Its registration is SessionStart
+only, as before, but carries the matcher `^(startup|resume|clear|compact|fork)$`
+where ours has `*`; whether v10's registration already had that matcher was not
+recorded. Step 4 was not done: the live hook is v10, `herdr integration status`
+reads `claude: outdated (v10 < v11)`, and the reference copy here still names
+v10.
+
 ## Scope (and deliberate non-scope)
 
 - **In scope:** age-gating the herdr binary, keeping the pin asserted, keeping the
@@ -1109,6 +1339,9 @@ behaviour is the same here. After the update `herdr integration status` reads
   standing rule is `herdr plugin link` against a locally authored directory,
   never `herdr plugin install`, which clones a repo and executes its
   `[[build]]` commands. See [`docs/HERDR_PLUGINS.md`](HERDR_PLUGINS.md) §1.
+  `herdr plugin update`, new in 0.9.4, updates only plugins installed from
+  GitHub and leaves linked ones alone (release notes); the one plugin here,
+  `dotfiles.window-title-fix`, is linked (`herdr plugin list`, 2026-10-18).
 
 ## Related
 

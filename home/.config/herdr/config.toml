@@ -10,9 +10,14 @@ channel = "stable"
 # tmux is no longer launched (2026-07-29) but its config is kept on disk as a
 # retreat path. These bindings carry the muscle memory across.
 #
-# ONE BINDING PER ACTION. tmux allowed several keys for the same command
-# (splits were bound four ways: | Right % h). herdr takes a single string per
-# action, so each of those collapsed to the one that was actually used.
+# ONE BINDING PER ACTION, by choice now rather than by limit. tmux allowed
+# several keys for the same command (splits were bound four ways: | Right % h).
+# herdr up to 0.9.1 took a single string per action, so each of those collapsed
+# to the one that was actually used. Since 0.9.2 the prefix takes a list
+# (`prefix = ["ctrl+space", "ctrl+s"]`, #4653), and an action key takes a list
+# too: `focus_pane_left = ["prefix+h", "alt+left"]` passes `herdr config check`
+# on 0.9.5 (2026-10-18), and a bad entry in a list is flagged by name. Nothing
+# here uses a list yet; see docs/HERDR.md "The ported keymap".
 #
 # Everything NOT listed here already matched tmux by default and is therefore
 # left alone: new_tab prefix+c, switch_tab prefix+1..9, zoom prefix+z,
@@ -105,12 +110,19 @@ resize_pane_right = "prefix+right"
 move_tab_previous = "prefix+shift+left"
 move_tab_next = "prefix+shift+right"
 
+# clear_pane (herdr 0.9.2, #4383): clears the focused pane's screen and
+# scrollback but keeps the prompt line, and leaves full-screen apps such as Vim
+# alone. Unbound by default and left unbound here; "prefix+ctrl+k" (herdr's own
+# example) passes config check on 0.9.5.
+#
 # --- Deliberately NOT ported ---
 # Alt+Arrow pane switching (`bind -n M-Left/M-Right/...`): herdr accepts
-#   alt+left etc, but focus_pane_* takes ONE key, so binding the arrows would
-#   remove prefix+h/j/k/l. The vim keys won on grounds of matching the tmux
-#   j/k/l bindings that were already there. To swap, replace the four
-#   focus_pane_* defaults with alt+left / alt+down / alt+up / alt+right.
+#   alt+left etc. Up to 0.9.1 focus_pane_* took ONE key, so binding the arrows
+#   would have removed prefix+h/j/k/l, and the vim keys won on grounds of
+#   matching the tmux j/k/l bindings that were already there. Since a key takes
+#   a list (see the top of this section) both could be kept, e.g.
+#   focus_pane_left = ["prefix+h", "alt+left"]; not done, because bare alt+arrow
+#   never reaches herdr on most iTerm2 profiles here (the resize note above).
 # prefix+b break-pane: no herdr equivalent. b stays toggle_sidebar.
 # prefix+h split-right: a .tmux.conf accident (line 77 silently overrode the
 #   select-pane -L on line 31). herdr keeps h as focus-pane-left, which is what
@@ -254,6 +266,8 @@ delivery = "system"
 request_path = "sounds/request.mp3"
 
 [experimental]
+# While prefix mode is active, switch the macOS input source to an ASCII layout
+# so prefix commands register under an IME, then restore it (herdr --default-config).
 switch_ascii_input_source_in_prefix = true
 pane_history = true
 
@@ -383,9 +397,11 @@ auto_switch = false
 [theme.custom]
 selection_bg = "#432a28"
 active_row_bg = "#33201f"
-# Inactive pane borders and their titles (Gavin, 16 Oct). herdr 0.9.3 draws a
-# focused border in ui.accent and every other border in overlay0
-# (src/ui/panes.rs). overlay0 is also the sidebar's dim secondary text, the
+# Inactive pane borders and their titles (Gavin, 16 Oct). As observed on herdr
+# 0.9.3 (src/ui/panes.rs), a focused border is drawn in ui.accent and every
+# other border in overlay0; not re-read in source on 0.9.5, whose notes name no
+# border change and whose --default-config still says accent colours borders.
+# overlay0 is also the sidebar's dim secondary text, the
 # scrollbar and the "unknown" agent state, so those change with it; there is
 # no border-only setting.
 overlay0 = "#5c4a4a"

@@ -130,7 +130,7 @@ Creation responses expose the IDs to use next. `workspace create` returns `.resu
 
 ## Control a saved SSH machine (0.9.1 and later)
 
-Nothing on this estate has a saved machine yet, so none of this is measured here; it is upstream's text, kept close to upstream's wording so the merge base stays comparable.
+This estate has saved machines: `herdr machine list` showed two enabled profiles, `codebox` and `codebox.lan`, both targeting `codebox.lan` (measured read-only 2026-10-18 on 0.9.5). The rest of this section is still upstream's text, not measured here, kept close to upstream's wording so the merge base stays comparable.
 
 IDs and live agent names are scoped to one server: two saved SSH machines can both have `w1:p1` or an agent named `reviewer`. Selecting a machine in the TUI does not retarget commands running in your pane; without `--machine` they use the inherited session and socket context.
 
@@ -161,6 +161,8 @@ hwt <branch-name>
 Run it from inside the target repo (any subdirectory). It resolves the repo root, then calls `herdr worktree create --branch <branch-name> --cwd <repo-root> --path <repo-root>/.worktree/<branch-name>`. Extra flags (`--base REF`, `--label TEXT`, `--focus`, `--no-focus`) pass straight through.
 
 Never call `herdr worktree create` without `--path`: it defaults to the shared folder, and `--path` requires an absolute path (a relative one is rejected). `worktree list` and `worktree open` are unaffected; use them directly.
+
+Since 0.9.2 `worktree open` no longer takes over the repo's own workspace, so removing that worktree no longer closes the repo's workspace (#4293, per the 0.9.2 release notes, not measured); on an older server check `herdr workspace list` before removing a worktree you opened.
 
 NEVER `herdr worktree remove`: it deletes the git worktree AND its checkout directory permanently, not to the Trash, and the permanent-delete guard does not catch it (it does catch `git worktree remove`; gap filed as W-20261007-A20). Deletes go only through the Trash. Remove a worktree like this, after its work is committed or merged:
 
@@ -196,7 +198,7 @@ herdr pane split --current --direction right --cwd "$PWD" --no-focus
 
 Replace `right` with `down` when appropriate. Read the new pane ID from `.result.pane.pane_id`.
 
-A pane fresh from `split`, or the root pane from a fresh `workspace create`, may still be running shell startup scripts (dotfiles onboarding, environment checks, `direnv` loading) and is not yet an available shell. `agent start` on a busy pane fails immediately with `agent_pane_busy`. The delay is short and bounded (observed: a few seconds); do not guess a sleep, retry with a short bounded backoff:
+A pane fresh from `split`, or the root pane from a fresh `workspace create`, may still be running shell startup scripts (dotfiles onboarding, environment checks, `direnv` loading) and is not yet an available shell. `agent start` on a busy pane fails immediately with `agent_pane_busy`. The delay is short and bounded (observed: a few seconds); do not guess a sleep, retry with a short bounded backoff. From 0.9.4 a new workspace, tab or split starts its shell at its own size instead of borrowing another pane's (#4419, per the 0.9.4 release notes, not measured); on 0.9.3 and earlier read a CLI-created pane's first output with `--source recent-unwrapped`, since it may be wrapped to the wrong width:
 
 ```bash
 for i in 1 2 3 4; do
@@ -317,7 +319,7 @@ Use `--format ansi` when colors and styling are evidence; otherwise text.
 
 `--lines` asks for more rows from the pane's screen and host scrollback. If increasing it does not reveal more of a completed response, the pane is probably running the agent on the terminal's alternate screen, whose rows do not enter host scrollback. On 0.8.2 the floor had to be ruled out FIRST, because a read returning nothing at all was the floor rather than the alternate screen (misdiagnosed twice in one session on 2026-09-20); on 0.9.1 that confound is gone, so an empty read is now evidence about the pane rather than about `--lines`. From 0.9.x, for supported IDLE agents Herdr can collect application-owned history and restore the viewport afterwards, though not every application or response can be recovered; a bigger `--lines` is worth one more try on an idle agent before falling back.
 
-Herdr knows when it dropped rows: `PaneReadResult` carries a `truncated` field (herdr 0.8.0, #1717), confirmed 2026-09-17 in `herdr api schema --json` under both `success_response` and `subscription_event`. The plain CLI read prints text, so the field is not visible in normal use; `pane read --raw` is the likely way to see it, NOT verified (the trial pane produced no output, so the trial was void, not negative). Treat the flag as a signal to look for, not a recipe.
+Herdr knows when it dropped rows: `PaneReadResult` carries a `truncated` field (herdr 0.8.0, #1717), confirmed 2026-09-17 in `herdr api schema --json` under both `success_response` and `subscription_event`. Plain `pane read` prints text, so it cannot show the field, but `pane wait-output` prints JSON and does, at `.result.read.truncated`: measured read-only 2026-10-18 on 0.9.5, a default (`recent`) wait-output on a Claude pane returned `true`, beside `.result.read.text`. When completeness matters, read that field rather than guessing from the text.
 
 If a larger recent read still does not reveal the completed response, ask the agent to write it as Markdown in a temporary directory and reply only with the file path, then read that file ON THE SAME MACHINE. Fallback only; do not request file output in the initial prompt.
 
@@ -379,9 +381,11 @@ To correct a stale title without renaming, rebuild the display value from a fres
   Then closing the LONE WORKTREE workspace: exit 0, `{"result":{"type":"ok"}}`. Then closing the primary again, now childless: exit 0. The second and third arms are the controls, and they are what prove the refusal is about the group rather than about that workspace. Note the payload key is `code`, not `type`.
 
 - `pane close` takes the pane ID as a bare positional (`herdr pane close <pane_id>`), like 13 of the 25 `pane` subcommands (the measured table in Use IDs lists which take `--pane`/`--current` instead). `herdr pane close --pane <id>` is a syntax error (exit 2, `usage: herdr pane close <pane_id>`); a positional id that does not exist is `pane_not_found` (exit 1), both re-measured 2026-10-07 on 0.9.3 with a non-existent id. `workspace close <workspace_id>` is the same shape and returns `{"result":{"type":"ok"}}` (verified 2026-09-06).
+- From 0.9.4 an out-of-range workspace number returns `workspace_not_found` instead of crashing the server (#5096, per the 0.9.4 release notes, not measured). So never probe a server older than 0.9.4 (`herdr status server --json`) with a made-up workspace number.
 - Never run `herdr server stop` from an active session unless the user explicitly intends to stop the server and its pane processes.
 - Never run bare `herdr server`. On Linux/WSL the server is a systemd user service: `systemctl --user {start,restart,status} herdr.service`. On macOS there is no service: Homebrew removed herdr's on 2026-09-24, and herdr starts its own detached server on attach; restart onto a new build with `herdr server stop`, then open `herdr` (workspaces are restored). `brew services` no longer applies. A hand-started server inherits the launching shell's environment (made every pane skip the dotfiles welcome banner on the Linux box, 2026-09-06) and dies with that session. A `herdr()` function in `.zshrc` refuses the bare form on Linux, and on a Mac with a leftover pre-2026-09-24 LaunchAgent; on Linux it also starts the unit before an attach, because attach silently spawns its own server when none is running. Details: `docs/HERDR.md` in the dotfiles repo.
 - `herdr status server --json` is the canonical "is a server running" probe: `.running` (bool) and `.restart_needed` (true when the binary on disk is newer than the running server). It works with no server up (`"status":"not_running"`) and never starts one.
 - Config gotcha: a `tab_bar_right` `command` entry in `config.toml` runs on the SERVER host, under the server's environment, every `interval_seconds`. A path that exists on only one machine fails every tick on the other and floods `herdr-server.log` (12188 of 12641 lines on the Linux box before it was noticed). Use paths that are the same on every box and resolve the host inside the script.
 - Never kill the main Herdr process. Use named test sessions for experiments that need an isolated server.
+- Never run `herdr session attach` from a Bash tool: it needs a terminal and a tool has none. Since 0.9.2 it says so and stops (#4393, per the 0.9.2 release notes, not measured); older builds left a new session running, so check `herdr session list` if one was run.
 - CLI server errors are JSON on stderr with exit status 1. CLI syntax errors exit with status 2.

@@ -1,6 +1,20 @@
 # herdr — the left sidebar, colours, and what outside programs can change
 
-herdr-verified: 0.9.3
+herdr-verified: 0.9.5
+
+**Re-checked 2026-10-18 against the installed 0.9.5** (client and server both 0.9.5).
+Ran: `herdr config check` on the live config (`config: ok`) and on scratch copies with
+planted faults (italic, underline, a named colour, a `text` rule, a rule naming another
+token, a rule on `state_icon` and on `git_status` all refused; `align` reported as an
+unknown key and ignored; rules on `machine`, `branch`, `tab` and a `$k` token accepted
+with `equals`, `contains`, `starts_with`, `gt`, `lt`), `herdr --default-config`,
+`herdr api schema --json`, the `--help` of report-metadata, rename, machine and plugin,
+`herdr agent list`, `herdr machine list`, and strings in the 0.9.5 binary. Did NOT run:
+anything on screen (colours, symbols, contrast, what `machine` shows with one machine),
+the v0.9.5 source (file:line references below are still into v0.9.3), a plugin hook on
+`pane.updated`, or a live report-metadata. A coverage audit of every 0.9.2 to 0.9.5
+release-note bullet followed the same day, and the sidebar-related gaps it found are
+added below, each marked release notes or measured.
 
 Written 2026-10-16 in session dotfiles-main, from four research workers (herdr's
 changelog and community, its API and plugins, every sidebar and colour option,
@@ -41,13 +55,16 @@ facts behind the choices and the options not taken.
   those are the safe ones to change. `accent`, `panel_bg` and `overlay0` reach far.
 - **`ui.accent` applies only while `theme.custom.accent` is unset** (`app/mod.rs:261-269`).
 - **Token styles are `fg`, `bold` and `dim` only.** No italic, no underline
-  (`config/sidebar.rs:101-104`, deny_unknown_fields). **No text size:** a terminal
-  draws every character in one grid.
-- **`row_gap` is whole lines.** 1 was too loose; there is no half line.
+  (`config/sidebar.rs:101-104`, deny_unknown_fields). `fg` takes `#RGB`/`#RRGGBB`
+  only; `fg = "red"` is refused (0.9.5). A refused token is not skipped: the whole
+  config falls back to defaults. **No text size:** a terminal draws every character
+  in one grid.
+- **`row_gap` is whole lines.** 1 was too loose; there is no half line. 0 is 0.9.5's
+  default, so `row_gap = 0` in the config only pins it.
 - **Rules** (0.9.0+, `hide` 0.9.1+): a token can be restyled or hidden when its OWN
   value `equals`, `contains`, `starts_with`, or is `gt`/`lt` a number. A rule cannot
   replace the text, and cannot test another token. Not allowed on `state_icon` or
-  `git_status`.
+  `git_status` ("sidebar rules require a text-valued token"). At most 16 rules a token.
 - **`tab`** shows only when the space has more than one tab or the tab has a custom
   name. **`machine`** is empty while one machine is attached; with a second one,
   local rows say "Local" (a rule `equals = "Local", hide = true` drops it).
@@ -56,6 +73,34 @@ facts behind the choices and the options not taken.
   close to the gold accent.
 - **The Mac/GPU readout** in the tab bar is `overlay1`, pure white, the brightest
   text on screen.
+- **Colours come from the host terminal** (`theme.name = "terminal"`,
+  `auto_switch = false` in the config). Since 0.9.2, sending `SIGWINCH` to a herdr
+  client makes it re-read the terminal's colours, so after a Ghostty theme change
+  that sends no light/dark notice, `kill -WINCH <client pid>` refreshes the panes
+  (per the 0.9.2 release notes, #4349; not tried here).
+- **`branch` and `git_status`** in the spaces section come from Git lookups herdr
+  runs per workspace. Before 0.9.2 a slow one could freeze typing; it no longer does
+  (per the 0.9.2 release notes, #4492).
+
+## Moving around: Go To, cycling, the collapse button
+
+- **Go To is `prefix+g`**, herdr's default; this config does not rebind it
+  (measured 2026-10-18 on 0.9.5: `herdr --default-config` lists `goto = "prefix+g"`,
+  and `home/.config/herdr/config.toml` has no `goto` line). Since 0.9.2 it lists
+  every agent and terminal as its own row, grouped by workspace, with its status and
+  path, and Left/Right jump between workspaces (per the 0.9.2 release notes, #4384;
+  not tried here).
+- **Navigate mode on the `terminal` theme:** before 0.9.2 the workspace highlight
+  could not be seen on this theme; it now can (#4300). Here `selection_bg` colours
+  that row anyway. Session-navigator search matches each word on its own (#4408).
+  Both per the 0.9.2 release notes.
+- **Cycling agents** (`shift+up`/`shift+down` here, `previous_agent`/`next_agent`):
+  since 0.9.2 the sidebar scrolls to show the agent picked by cycling or a shortcut,
+  so the selection is never off screen (per the 0.9.2 release notes, #4273, #4535,
+  #4355).
+- **The collapse button** stays clickable when the agent list shows a scrollbar;
+  before 0.9.4 the two overlapped (per the 0.9.4 release notes, #4692, #4734; not
+  seen here).
 
 ## "Claude Code" in the sidebar, and naming
 
@@ -63,7 +108,8 @@ facts behind the choices and the options not taken.
   a hook's `sessionTitle`), the AI-made title, the `--agent` type, then the literal
   "Claude Code". So **"Claude Code" lasts only until the first typed prompt**.
 - herdr shows the title as-is (`terminal_title_stripped` drops one spinner mark,
-  `terminal/title.rs:1-22`) and cannot swap words in it.
+  `terminal/title.rs:1-22`) and cannot swap words in it. Seen 18 Oct in
+  `herdr agent list`: `"◐ dotfiles-main"` stripped to `"dotfiles-main"`.
 - **The fix taken (Q39 (v7): 1):** name the session at launch. `engage` already does
   (`<repo>-<role>[-<topic>]`, `engage/bin/engage` build_session_name).
   `makeitso` now does the same with role `makeitso` (makeitso L13, commit 279cb46).
@@ -79,8 +125,10 @@ facts behind the choices and the options not taken.
 
 - **`herdr pane report-metadata <pane> --source <id>`:** `--display-agent` becomes the
   `agent` token, `--title` the `pane` token, `--state-label done="your turn"` the
-  state word, `--token k=v` a `$k` token (32 keys, 80 characters, `--ttl-ms` to
-  expire). Values live until cleared, expired or the pane closes; a server restart
+  state word, `--token k=v` a `$k` token (`--ttl-ms` to expire, at most 24 hours).
+  The 0.9.5 schema: a pane holds up to 32 tokens, one report carries up to 16, a key
+  is 1-32 of `[A-Za-z0-9_-]`; the `--source` id is at most 80 characters (the 80 was
+  read as the value limit from the 0.9.3 source; not re-read). Values live until cleared, expired or the pane closes; a server restart
   loses them (`persist/restore.rs:430`). Values reported with `--agent claude` are
   wiped when Claude exits.
 - **`herdr workspace report-metadata`** feeds `$k` tokens in the spaces section.
@@ -92,6 +140,7 @@ facts behind the choices and the options not taken.
 - **Plugins** (`herdr-plugin.toml`, `herdr plugin link`): `[[startup]]`, `[[actions]]`,
   `[[events]]`. Event hooks can take `pane.focused`, `pane.agent_detected` and
   `pane.agent_status_changed`, but NOT `pane.updated` (title changes; herdr issue
+  #4912; from the 0.9.3 source, not re-tested on 0.9.5, whose notes do not mention
   #4912). A plugin cannot draw in the sidebar; it changes it through report-metadata.
   See [`HERDR_PLUGINS.md`](HERDR_PLUGINS.md).
 - **A pane's own background:** a program in the pane can set its default background
@@ -113,8 +162,10 @@ facts behind the choices and the options not taken.
 - A tint per project or for `codebox` panes, through OSC 11 at launch.
 - Hide the `master`/`main` branch in the spaces section with a rule, so a branch
   shows only when it is unusual.
-- herdr 0.9.5 fixes Claude Code questions not showing as blocked in named sessions
-  (#5192); herdr notices still say "claude needs attention" whatever the name (#4332).
+- herdr 0.9.5 (installed 18 Oct) fixes Claude Code questions not showing as blocked
+  in named sessions (#5192); every session here is named, so a question should now
+  show `×`. Not yet seen on screen. herdr notices still say "claude needs attention"
+  whatever the name (#4332; not in the 0.9.4/0.9.5 notes).
 
 ## codebox as a herdr machine (17 Oct, Q47: 1, Q48: 1)
 
@@ -126,6 +177,12 @@ Mac's sidebar then also shows codebox's herdr server, its workspaces and its age
 labelled with the machine; Claude must be started in a pane of that machine.
 
 - Profile: label `codebox` (renamed from `codebox.lan` the same night), host codebox.lan, default remote session (the one `herdr --remote` uses).
+  **18 Oct, `herdr machine list` shows TWO saved machines, both enabled, both host
+  codebox.lan:** `codebox` and a second one labelled `codebox.lan`. Not known whether
+  that is a re-add or a duplicate; each enabled machine may hold its own ssh path
+  (trade-off below). Not changed; for Gavin to look at. Re-measured later on
+  2026-10-18 on 0.9.5: still the same two, `codebox` and `codebox.lan`, both enabled,
+  both host codebox.lan.
 - NP-2 checked it against codebox's lockdown (CB D-008): Mac -> codebox only, over the
   ssh connection's stdio, no forwards; the codebox.lan Host entry and its admin key,
   never the speak-relay key; decline any install or update prompt (codebox's herdr
@@ -133,8 +190,21 @@ labelled with the machine; Claude must be started in a pane of that machine.
 - herdr writes its OWN ssh config ($TMPDIR/herdr-ssh-*/config, a 0700 folder) that
   Includes ~/.ssh/config and adds ControlMaster=auto, ControlPersist=600, BatchMode,
   StrictHostKeyChecking=yes, ServerAlive 15/4. ~/.ssh/config is not changed.
+  Since 0.9.2 herdr also asks ssh for compression, so remote panes catch up faster
+  on a slow link (per the 0.9.2 release notes, #4340). The 18 Oct audit found the
+  newest generated config holding only the Includes and ServerAlive 15/4, so compression,
+  like ControlMaster and BatchMode, is passed some other way, most likely the
+  command line; not checked.
+- Repeated `herdr --machine codebox ...` calls open far fewer ssh connections since
+  0.9.2 (per the 0.9.2 release notes, #4252). The other half of that fix, forwarded
+  ssh agents surviving a reconnect (#1931), does not apply: codebox's lockdown
+  allows no forwards.
 - **The trade-off Gavin accepted:** the ControlMaster socket (`/tmp/hssh-501/`, folder
   0700, socket 0600, both his) is a standing logged-in path to codebox while the
   machine is enabled, usable by any process running as him, even after his keys
   leave the ssh agent. `herdr machine disable <id>` turns it off.
-- A codebox refresh drops the machine; herdr reconnects by itself.
+- A codebox refresh drops the machine; herdr reconnects by itself. From 0.9.4 the
+  sidebar width, collapsed groups and agent sorting for a remote machine survive the
+  reconnect (#4364, #5019; release notes, not seen here yet), and switching
+  workspaces quickly while changing machines is no longer cancelled (#4536, #5061;
+  release notes).

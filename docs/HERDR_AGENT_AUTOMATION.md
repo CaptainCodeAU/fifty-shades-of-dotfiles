@@ -3,7 +3,38 @@
 **Audience: an AI coding agent, not a human.** This replaces reading
 <https://herdr.dev/docs/preview/agent-automation/>.
 
-herdr-verified: 0.9.3
+herdr-verified: 0.9.5
+
+**THE 0.9.5 RE-CHECK (2026-10-18) WAS NARROW TOO**, scoped to the 0.9.3 to 0.9.5
+delta, against a running 0.9.5 server from inside a herdr pane. RE-RAN: every
+command in section 3 is still in 0.9.5's group listings and `--help` (a
+misspelt `--timeoutt` exits 2, the real `--timeout` parses); `agent list` and
+`agent get` keep their different result keys (`agents`+`type` vs
+`agent`+`type`); `agent explain` text and `--json` on this session's own pane;
+`herdr integration status`; and, in ONE throwaway pane closed afterwards,
+`pane send-keys` validating a bogus key (`invalid_key`, exit 1) and `pane run`
+plus `pane wait-output`. CHANGED and written in below: the kinds list is now 24
+(section 3); the Claude hook reads `outdated (v10 < v11)` (section 2); detection
+now reports a `bundled` manifest (section 2); and the Trap 1 wait regex matched
+this repo's banner, not its prompt (section 4). RE-READ FROM --help ONLY: the
+`agent prompt --wait` stall rule (section 6). DOC ONLY (0.9.4/0.9.5 notes and
+upstream's 0.9.5 skill, not measured here): Claude Code questions now show
+`blocked` in named sessions (#4573); Antigravity and Grok read `idle` with
+background work still running (#3530); Ctrl+Z keeps an agent's identity while
+its process lives (#1647); on macOS `agent start`/`pane run` refuse a command
+too long for a still-starting shell (#4950); closing a workspace's only pane
+now asks first in the TUI (#5143), which a CLI/API close does not; closing the
+shell that launched herdr no longer stops the server (#4920). NOT RE-MEASURED:
+everything that needs a live agent we started (`agent start`,
+`agent_pane_busy`, `agent prompt`, `agent wait`, `agent send-keys`), because
+starting one is outside a re-check (D-20260924-A05); the last-pane close
+prompt, which needs a throwaway workspace; Codex status, because no Codex agent
+was started (the Codex program is installed here, at `~/.bun/bin/codex`, but
+herdr's Codex integration is not: `herdr integration status` reads
+`codex: not installed`; both checked read-only, 2026-10-18 on 0.9.5). A
+coverage audit of every 0.9.2 to 0.9.5 release-note bullet against this
+document followed the same day, and the gaps it found are written in below
+(section 2 and the 0.9.3 note).
 
 **THE 0.9.3 RE-VERIFY (2026-10-07) WAS NARROW, and says so.** Against a running
 0.9.3 server, scope the 0.9.1 to 0.9.3 delta. RE-RUN and unchanged: every
@@ -20,7 +51,11 @@ NOT RE-RUN: everything that needs a live agent (`agent start` /
 `agent explain`). No agent was running (all 21 panes `agent_status: unknown`)
 and starting one is outside a re-verify (D-20260924-A05). The 0.9.2 changes
 that touch those claims are DOC only here: an agent's first task now counts as
-`done` even when started with a prompt (#3338), agents may self-report a resume
+`done` even when started with a prompt (#3338); starting the server, restoring
+sessions and Pi's `/new` no longer fire false `done` notifications (#3990); and
+hook-reported status survives a live handoff (#3916). So on 0.9.2 and later a
+`done` right after a restart or restore is worth reading, not dismissing as
+restart noise (per the 0.9.2 release notes, not measured). Also: agents may self-report a resume
 command (#4687), and an event reader that falls behind gets `events_lost`
 instead of silently skipped events (#4178).
 
@@ -79,6 +114,10 @@ it. Not terminal IDs, not bare kind labels. Names must match
 `[a-z][a-z0-9_-]{0,31}` and be unique among live agents. A name follows the
 pane occupant and is cleared when that agent exits or is replaced.
 
+DOC (0.9.4, #1647): suspending an agent with Ctrl+Z and resuming it with `fg`
+keeps its name and saved conversation, as long as the process lives. Kept is
+not foreground: while it is suspended the pane's foreground is the shell.
+
 ---
 
 ## 2. Lifecycle states
@@ -93,6 +132,13 @@ pane occupant and is cleared when that agent exits or is replaced.
 
 `done` vs `idle` is purely about whether you have looked at it. Focusing the
 tab, or `pane focus` / `agent focus`, marks it seen. CLI **reads do not**.
+
+DOC (0.9.4/0.9.5): `idle` and `done` NORMALLY mean ready, not "nothing is
+running". Antigravity and Grok count as `idle` once back at their prompt even
+while their own background tasks or subagents still run (#3530). And since
+0.9.5 a Claude Code question shows as `blocked` in a named session too (#4573);
+before that, a named Claude session could sit at a question and not read
+`blocked`, so the section 7 script could miss it.
 
 ### How herdr actually knows
 
@@ -118,14 +164,50 @@ Consequences:
   `unknown`. Never treat `unknown` as "finished".
 - `agent explain` outputs plain text; add `--json` for machine parsing.
 
+OBSERVED on 0.9.5 (2026-10-18): the same command now reports `manifest:
+bundled 2026.10.11.1`, and `--json` carries the reason in `warning`: the remote
+cache (`claude.toml`, `2026.07.13.1`, files dated 29 Jul) is IGNORED because
+the bundled manifest is newer, while `remote_update_status` still reads
+`current`. So the remote channel still exists, but the manifest in force here
+came with the binary. Read `manifest_source` before assuming either.
+
 The Claude-side integration hook (`~/.claude/hooks/herdr-agent-state.sh`,
 `HERDR_INTEGRATION_VERSION=10` since 2026-10-07, `claude: current (v10)` on
 herdr 0.9.3; wired as a `session` hook in `settings.json`) reports only **session
 identity**, not lifecycle state: v10 exits on every event except SessionStart.
-Check with `herdr integration status`. The file is herdr-managed and is
+Check with `herdr integration status`. **On 0.9.5 it reads `claude: outdated
+(v10 < v11)`** (OBSERVED 2026-10-18; the Homebrew upgrade again did not rewrite
+the file, still dated 7 Oct). The v11 script embedded in the 0.9.5 binary,
+pulled out read-only and diffed against
+`docs/reference/herdr-agent-state.UPSTREAM.sh`, differs in ONE line: the
+version number (both 3070 bytes). Not installed here; that is a separate step. The file is herdr-managed and is
 overwritten on reinstall -- add custom hooks beside it, never edit it. To update
 it, follow "Updating the Claude hook" in [`HERDR.md`](HERDR.md): compare against
 `docs/reference/herdr-agent-state.UPSTREAM.sh` first, never install blind.
+
+**Codex status comes from the screen, with no hook, since 0.9.5.** Per the
+release notes, not measured (no Codex agent was started):
+
+- 0.9.2 (#4507, #4196): Codex is no longer reported `idle` during active
+  output, its mention popups are recognised, and remapped interrupt keys no
+  longer break detection. Before 0.9.2, `idle` on a busy Codex was a false
+  reading.
+- 0.9.4 (#4507, #4811, #4756, #5174): Codex's startup update screen shows as
+  `blocked`. So an agent started with `--kind codex` can read `blocked` before
+  its first prompt; that is the update chooser, not a question from the work.
+  The same bullet's claim that finished turns arrive through the integration
+  (with `--no-daemon`) was undone in 0.9.5, next item.
+- 0.9.5 (#5246, #5278): herdr no longer installs Codex turn hooks (they made
+  Codex start with a "clamping Interrupt hook timeout" warning), and Codex
+  status comes from screen detection again. `herdr integration install codex`
+  updates an older install.
+
+MEASURED 2026-10-18 on 0.9.5, read-only: `herdr integration status` reads
+`codex: not installed` (and `claude: outdated (v10 < v11)` in the same run),
+while `command -v codex` finds the Codex program at `~/.bun/bin/codex`. So
+herdr's Codex integration was never installed here and there is nothing to
+update; the program and the integration are separate things. Either way,
+confirm Codex output by reading the pane, not the status.
 
 ---
 
@@ -154,9 +236,11 @@ herdr agent rename <name> <newname>
 herdr agent focus <name>          # WARNING: marks the tab seen
 ```
 
-**Kinds** (OBSERVED, 21): `pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`,
-`agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`,
-`droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `maki`.
+**Kinds** (OBSERVED on 0.9.5, 24, from `herdr agent` and `agent start --help`):
+`pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`,
+`mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`,
+`hermes`, `kilo`, `qodercli`, `qwen`, `letta`, `maki`, `muse`. The earlier list
+of 21 lacked `qwen`, `letta` and `muse`.
 
 ---
 
@@ -177,11 +261,11 @@ OBSERVED immediately after `pane split`. The pane exists but the shell is still
 executing its rc file (a heavy `.zshrc` banner takes seconds). An "available
 shell pane" means at an interactive prompt with no foreground command.
 
-STILL REAL ON 0.8.2, but smaller. 0.8.2 made `agent start` wait for new pane
-shells and first-run agent prompts instead of racing them (#2410, #2537, #2773,
-# 2774). It did not remove `agent_pane_busy`: a pane mid-startup still refuses,
-and `herdr-quick-task` in this repo keeps a bounded retry loop for exactly that.
-The retry below is still the right shape. NOT re-run on 0.8.2 -- reproducing it
+STILL REAL ON 0.8.2, but smaller. 0.8.2 made `agent start` wait for new
+pane shells and first-run agent prompts instead of racing them
+(#2410, #2537, #2773, #2774). It did not remove `agent_pane_busy`: a pane
+mid-startup still refuses, and `herdr-quick-task` in this repo keeps a
+bounded retry loop for exactly that. The retry below is still the right shape. NOT re-run on 0.8.2 -- reproducing it
 means starting real agents in a live session, so this is upstream's account plus
 our own script's behaviour, not a fresh measurement.
 
@@ -197,6 +281,21 @@ for i in 1 2 3 4 5 6 7 8; do
   echo "$R" | grep -q agent_pane_busy || break
 done
 ```
+
+**THAT WAIT REGEX IS WEAK IN THIS REPO.** OBSERVED on 0.9.5 (2026-10-18), in a
+throwaway pane: `wait-output --regex "$(basename "$PWD")"` returned at once,
+because this repo's `.zshrc` banner prints `Repo: fifty-shades-of-dotfiles`
+while it is still painting. Three seconds later the banner was still going,
+and a `pane run` sent then returned exit 0 yet failed in the shell
+(`zsh: bad pattern: [200~echo`, the paste start arriving as literal text; a
+stray `esc` sent just before may have contributed, so the cause is not
+isolated). The same `pane run` at the settled prompt printed its sentinel. Two
+lessons: match something only the prompt prints, and a `pane run` exit 0
+means ADMITTED, not executed -- confirm by reading output.
+
+DOC (0.9.4, #4950): on macOS, `agent start` and `pane run` now REFUSE a
+command too long for a shell that is still starting, instead of silently
+cutting it off. Long native args after `--` can hit this. NOT re-measured.
 
 ### Trap 2 -- `interactive_ready: true` is not ready enough
 
@@ -260,7 +359,10 @@ withdrawn there: prefer `recent-unwrapped` for transcripts again, since at
   pass `--until` for that; use `--until` only for a state-specific workflow.
 - A prompt sent from a non-working state must produce an observed lifecycle
   change within 5 seconds, else herdr returns `agent_prompt_stalled` rather than
-  hanging.
+  hanging. 0.9.5's `--help` words it precisely: with `--wait`, an accepted
+  submission must reach an observed `working` or `blocked` within 5000ms, and
+  a caller `--timeout` that expires first returns `timeout` instead (re-read
+  from `--help` only).
 - The wait tracks lifecycle state, not an individual turn. If the agent was
   already working, completion of the _previous_ turn satisfies it.
 - **0.8.2: `agent prompt` now REFUSES an agent already waiting at an approval or
@@ -332,7 +434,10 @@ agents your own automation started. Never point it at a human's session.
 5. Verify effects by reading content, not by trusting a `--wait` return.
 6. Never `herdr server stop` (macOS) / `systemctl --user stop herdr.service`
    (Linux) with live sessions. (`brew services stop herdr` no longer applies:
-   Homebrew removed herdr's service definition on 2026-09-24.)
+   Homebrew removed herdr's service definition on 2026-09-24.) Since 0.9.4,
+   closing the shell that started herdr no longer stops the server on macOS
+   or Linux, and `SIGHUP` no longer does either; only `herdr server stop` or
+   `SIGTERM` (DOC, #4920).
 
 Related: [`HERDR_AGENT_SKILL.md`](HERDR_AGENT_SKILL.md),
 [`HERDR_PLUGINS.md`](HERDR_PLUGINS.md), [`HERDR.md`](HERDR.md).

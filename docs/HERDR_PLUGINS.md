@@ -3,7 +3,25 @@
 **Audience: an AI coding agent, not a human.** This replaces reading
 <https://herdr.dev/docs/plugins/>.
 
-herdr-verified: 0.9.3
+herdr-verified: 0.9.5
+
+**THE 0.9.5 RE-VERIFY (2026-10-18)**, against a running 0.9.5 server, read-only.
+The 0.9.3 to 0.9.5 delta touches plugins in three places: 0.9.4 adds `herdr
+plugin update` (section 3), and with mouse capture on, a plugin link handler
+gets first pick of a link click (section 6); 0.9.5 fixes Windows plugin panes
+whose program shares a name with a folder on `PATH` (nothing here runs on
+Windows). RE-RUN: the group listing now has twelve subcommands, `update` the
+new one, and an invented subcommand exits 2 where each real one's `--help`
+exits 0; every subcommand's `--help` read; `plugin list` still text, `--json`
+still JSON; `dotfiles.window-title-fix` still enabled, `source.kind = "local"`,
+linked to its in-repo path, the six manifest fields section 2 names echoed
+back by `plugin list --json` (`id` as `plugin_id`), and its `pane.focused` events logging
+`succeeded` under 0.9.5; `plugin action list` returns `toggle-host`;
+`herdr --help` still omits the `plugin` group. `herdr config check` says `ok`,
+but it reads `config.toml`, not plugin manifests, so it is no evidence about
+them. NOT RE-RUN: `plugin update` (it mutates; that linked plugins are left
+alone is the release note's claim, not a measurement), the click change (needs
+a human click), and the authoring, install, uninstall, link and unlink cycle.
 
 **THE 0.9.3 RE-VERIFY (2026-10-07)**, against a running 0.9.3 server. The 0.9.1
 to 0.9.3 delta touches plugins in two places, neither contradicting this
@@ -75,6 +93,13 @@ Three concrete escalation paths, all OBSERVED or structural:
 `herdr plugin link`. Never `herdr plugin install`.** `link` points at a local
 directory and skips `[[build]]` entirely, so no third-party code executes.
 
+`herdr plugin update` (0.9.4) is the same trust decision taken again: it pulls
+new code from GitHub for every installed plugin, or the ones named. Per the
+release note it leaves locally linked plugins alone, so on this box, whose one
+plugin is linked, it should have nothing to do (NOT RE-MEASURED; running it is
+the only test). Whether it re-runs `[[build]]` is not stated; assume it does.
+Running plugin panes keep the old files until their next run.
+
 ---
 
 ## 2. Anatomy
@@ -135,6 +160,11 @@ or invoked through an explicit interpreter as above.
 
 DOC: `worktree.created` is the only event name upstream documents. The full
 event vocabulary is not published; enumerate empirically before relying on one.
+OBSERVED on 0.9.5: this repo's linked plugin subscribes to `workspace.created`,
+`pane.agent_status_changed`, `pane.agent_detected` and `pane.focused`, all four
+echoed back by `plugin list --json`, and `pane.focused` entries appear in its
+log with `status: succeeded`. (Echoed back proves parsed, not fired; only
+`pane.focused` was seen firing.)
 
 ---
 
@@ -143,12 +173,13 @@ event vocabulary is not published; enumerate empirically before relying on one.
 ```bash
 herdr plugin link <dir> [--enabled|--disabled]   # local; NO build, NO remote code
 herdr plugin unlink <id>
-herdr plugin install <owner>/<repo>[/<subdir>]   # AVOID: clones + runs [[build]]
+herdr plugin install <owner>/<repo>[/<subdir>] [--ref REF] [--yes]   # AVOID: clones + runs [[build]]
+herdr plugin update [<id|owner/repo>...] [--yes] # 0.9.4; GitHub-installed only. AVOID, same reason
 herdr plugin uninstall <id-or-source>
-herdr plugin list                                # PLAIN TEXT, not JSON
+herdr plugin list [--plugin <id>] [--json]       # PLAIN TEXT unless --json
 herdr plugin enable  <id>
 herdr plugin disable <id>
-herdr plugin config-dir <id>
+herdr plugin config-dir <id>                     # prints a path for ANY id, made-up ones too
 herdr plugin action list   --plugin <id>
 herdr plugin action invoke <plugin-id>.<action-id>
 herdr plugin log list --plugin <id>              # where plugin stdout ACTUALLY goes
@@ -158,6 +189,12 @@ herdr plugin pane close <...>
 ```
 
 Action IDs are `<plugin.id>.<action.id>`, e.g. `demo.hello.hello`.
+
+OBSERVED on 0.9.5: neither `config-dir` nor `list --plugin` tells a real id from
+a made-up one by exit code. `config-dir no.such.plugin` prints
+`.../plugins/config/no.such.plugin` with exit 0, and `list --plugin
+no.such.plugin` prints `No plugins installed.` with exit 0, the same code as a
+real id. Test existence by `list --json` content, never by either exit code.
 
 ---
 
@@ -175,7 +212,10 @@ herdr plugin log list --plugin demo.hello \
 
 Log entries carry `status`, `exit_code`, `stdout`, `stderr`,
 `started_unix_ms`, `finished_unix_ms`. This is the debugging surface -- reach
-for it first when an action "does nothing".
+for it first when an action "does nothing". OBSERVED on 0.9.5: an entry from an
+`[[events]]` hook also carries `log_id`, `plugin_id`, `command` and `event`
+(e.g. `"pane.focused"`) and has no `action_id`, so the `select(.action_id==...)`
+filter above skips event runs; filter on `.event` for those.
 
 ---
 
@@ -247,6 +287,16 @@ gesture, so the log names the winner instead of relying on memory:
 Control works. Command never reaches herdr at all. With that, all four plugin
 surfaces are verified on this machine: actions, panes, injected environment, and
 link handlers.
+
+**0.9.4 CHANGED WHO GETS A LINK CLICK, AND IT IS NOT RE-MEASURED.** Release
+note: _"With mouse capture on, plugins that handle a link get first pick when
+you click it. Turn capture off to use your terminal's own link shortcuts, like
+Command-click on macOS."_ `mouse_capture` defaults to on (`herdr
+--default-config`, `[ui]`). The note does not say whether the gesture is still
+`ctrl+click` or whether a plain click now reaches a matching handler; the table
+above is a 0.7.5 measurement and nobody has clicked since. Re-run the two-URL
+experiment before relying on either. What the note does make plain: with
+capture on, a matching handler can now beat the terminal to a click.
 
 Recorded 2026-08-03 after a failed test wasted a round trip. The modifier is
 **Control on every platform, including macOS** -- upstream's reason is that
@@ -417,7 +467,8 @@ Manifest changes need a re-`link`; script body changes do not.
 
 ## 11. Gotcha summary
 
-1. `plugin list` is plain text; most other plugin commands are JSON.
+1. `plugin list` is plain text unless given `--json`; most other plugin
+   commands are JSON.
 2. Action stdout goes to `plugin log list`, not the terminal.
 3. CLI-invoked actions get the **focused** pane's context, not the caller's,
    and it cannot be pinned.
@@ -432,7 +483,11 @@ Manifest changes need a re-`link`; script body changes do not.
 6. `popup` is manifest-only, not a CLI placement.
 7. `action list` ignores enabled state; `invoke` does not.
 8. Response key is `.result.plugin_pane.pane`, not `.result.pane`.
-9. `install` executes third-party build commands; `link` does not.
+9. `install` executes third-party build commands; `link` does not. `update`
+   (0.9.4) pulls new third-party code and, per its release note, skips linked
+   plugins.
+10. `config-dir` and `list --plugin` exit 0 for a made-up id; neither is an
+    existence check.
 
 Related: [`HERDR_AGENT_SKILL.md`](HERDR_AGENT_SKILL.md),
 [`HERDR_AGENT_AUTOMATION.md`](HERDR_AGENT_AUTOMATION.md), [`HERDR.md`](HERDR.md).

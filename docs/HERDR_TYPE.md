@@ -7,7 +7,21 @@ the pieces talk, and the traps, with the measurements behind each claim. It does
 not ask you to build the optional local endpoint; it says how one must be built if
 a use case needs it.
 
-herdr-verified: 0.9.3
+herdr-verified: 0.9.5
+
+Re-checked 2026-10-18 against herdr 0.9.5 (server and CLI both 0.9.5), by a dotfiles-main
+subagent. Ran: `--selftest` 76 of 76 arms; `state` on four panes (a busy Claude, an idle
+Claude reading `prompt-empty`, two shells reading `shell`); `send --dry-run --enter` on an
+idle session, with the transcript size, the input box and the screen read before and after
+(nothing typed; the only screen change was the status line's cache clock, which a second
+pair of reads with no send showed changes anyway); the `pane.get` / `pane.read` /
+`pane.send_keys` / `pane.send_text` shapes in `herdr api schema --json`; every key name in
+section 3.1 plus `home` (still `invalid_key`) and the shell rows of section 5 in a throwaway
+shell tab it opened and closed. NOT re-run: `herdr-type-livetest` (it starts a real Claude
+session, which this check was not allowed to do), so every dialog state, every `--verify`
+landing and every number in section 6 still stand on the 0.9.3 measurements; and Linux.
+What 0.9.4/0.9.5 changed that this doc touches: section 4 (questions now reported `blocked`
+in named sessions) and section 3.1 (no new socket check on macOS).
 
 Stamped 2026-10-07 (Gavin's dotfiles-main Q39: 1). What stands behind it: written by
 engage-model against herdr 0.9.3, whose live test of the tool passed 18 of 18 in a
@@ -17,7 +31,8 @@ with the label change). NOT re-run for the stamp: the live test itself, and Linu
 The `herdr-verified:` line is read by `herdr-skill-drift-check`; move it only after
 re-checking this doc against a new herdr.
 
-Measured on **Claude Code 2.1.292** and **herdr 0.9.3**, macOS, 7 Oct 2026.
+Measured on **Claude Code 2.1.292** and **herdr 0.9.3**, macOS, 7 Oct 2026; partly
+re-checked on herdr 0.9.5, 18 Oct 2026 (the note above says which parts).
 Labels: **LIVE** = measured in a real session; **SOURCE** = read in docs, source
 code or the Claude Code binary; **ASSUMED** = inference, not checked.
 
@@ -107,8 +122,10 @@ machine can call `herdr-type` directly.
 ### 3.1 herdr socket (path A)
 
 One JSON line per connection, one JSON line back. Socket: `$HERDR_SOCKET_PATH`, else
-`~/.config/herdr/herdr.sock` (mode 0600, owner only; no per-caller check in 0.9.3,
-SOURCE). The full schema: `herdr api schema --json`.
+`~/.config/herdr/herdr.sock` (mode 0600, owner only, LIVE on 0.9.5; no per-caller check in
+0.9.3, SOURCE; the client check 0.9.4 added is for an elevated **Windows** server only,
+per its release notes). The full schema: `herdr api schema --json` (`protocol` 22,
+`schema_version` 1 on 0.9.5).
 
 | Request (`{"id":..,"method":..,"params":..}`)                                                                    | Reply `result`                                                                                          | Used for                                           |
 | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
@@ -181,6 +198,12 @@ value does not reach them.
 | `prompt-menu`                   | the draft is a bare `/word`, or ends in `@word`                                        |                                       |                                      |
 | `shell`                         | pane has no agent                                                                      |                                       | none                                 |
 | `unknown`                       | no input box and no known dialog                                                       |                                       |                                      |
+
+The `done` 4× / `blocked` 4× split is a 0.9.3 measurement. herdr 0.9.5 says "Claude Code
+questions show as blocked in named sessions" (#4573, #5192), and engage sessions are named,
+so the split may now be `blocked` every time: NOT RE-MEASURED (it needs a live box). It
+cannot change a state name: herdr's status is read only to tell `busy` (`working`) from the
+prompt states, after every dialog check has already failed (SOURCE: `classify`).
 
 ## 5. Routing (what `send` does in each state)
 
@@ -282,7 +305,8 @@ A box opening in the few milliseconds between that read and the key is still pos
 ## 7. Known limits and failure modes
 
 - Only reaches sessions running inside a herdr pane (VS Code, Desktop and web sessions: no).
-- `herdr agent_status` is wrong about question boxes half the time; never trust it alone.
+- `herdr agent_status` was wrong about question boxes half the time on 0.9.3; 0.9.5 claims
+  a fix for named sessions (section 4, not re-measured). Never trust it alone either way.
 - The transcript shows no open call for a first plan approval; the screen text is the signal.
 - Screen parsing depends on Claude Code's wording ("Enter to select", "Type something",
   "Do you want to", "Would you like to proceed?", "Tell Claude what to change"); a Claude
