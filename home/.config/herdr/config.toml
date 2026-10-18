@@ -251,7 +251,7 @@ type = "shell"
 command = "sh -c 'exec env SPEAK_SOURCE=herdr \"$HOME/.local/bin/speak-clipboard\" --stop'"
 
 [ui.toast]
-delivery = "system"
+delivery = "herdr"
 
 # The "needs attention" sound (Gavin, 17 Oct, dotfiles-main Q46): a short camera click
 # from his sound library (button_bunny/sounds/clicks/camera-digital.wav). herdr plays
