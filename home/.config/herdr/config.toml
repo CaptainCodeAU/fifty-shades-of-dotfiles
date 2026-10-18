@@ -243,10 +243,11 @@ delivery = "system"
 
 # The "needs attention" sound (Gavin, 17 Oct, dotfiles-main Q46): a short camera click
 # from his sound library (button_bunny/sounds/clicks/camera-digital.wav). herdr plays
-# only mp3 (a .wav falls back to its own sound, src/config/sound.rs), so it is converted
-# into ~/.config/herdr/sounds/request.mp3 on each Mac, NOT kept in this public repo: the
-# clip is an Epidemic Sound file. Where it is missing (codebox, a new Mac), herdr plays
-# its default sound and `herdr config check` names the missing file. Recreate it with:
+# only mp3 (a .wav falls back to its own sound, src/config/sound.rs), so it was converted
+# to mp3 and is kept in this repo at home/.config/herdr/sounds/request.mp3; stow links it
+# into ~/.config/herdr/sounds/ on every machine, codebox included (Gavin, 18 Oct: the clip's
+# licence does not matter here, so take the least resistant path). Where it is missing,
+# herdr plays its default sound and `herdr config check` names the missing file. Recreate it with:
 #   ffmpeg -i ~/CODE/CaptainCodeAU/button_bunny/sounds/clicks/camera-digital.wav \
 #     -codec:a libmp3lame -q:a 2 ~/.config/herdr/sounds/request.mp3
 [ui.sound]
