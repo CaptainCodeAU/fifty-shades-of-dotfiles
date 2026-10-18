@@ -369,9 +369,40 @@ tab_bar_right_separator = " ┃ "
 # fg here: white names on line 1, a muted warm grey line 2 (not bold) that
 # reads on the selected row's bar (contrast 6.98 against 3.22 before). No gap
 # between entries: herdr's row_gap is whole lines only, 1 was too loose.
+# The state as a word (Gavin, 18 Oct, dotfiles-main Q60: 1): herdr draws it
+# in the state's own colour. The icon's shape is fixed in herdr and takes no
+# rules; the word does. The icon is bold, keeping its state colour (Q60
+# option 3, seen live and kept: the circles read heavier than the spaces
+# section's).
+# Three lines (Gavin, 18 Oct: three lines, the project on line 1, the project
+# and session colours unchanged, the rest left to this session):
+#   1. icon, project, tab, machine: where the agent is.
+#   2. the session name: who it is. "$session" is "│ <session name>", set by
+#      the state-words plugin (herdr-plugins/state-words), because herdr has
+#      no fixed text or border; with 3 it draws a bracket under the project
+#      (Gavin, Q64: 1). A pane the plugin has not reached shows no line 2.
+#      The bar is its own token, one per state, so it takes the state's colour
+#      like the word under it; herdr's " · " then sits between bar and name
+#      (Gavin, Q65: 1). The bar colours COPY the state colours: working is
+#      theme.custom yellow below, unknown is overlay0, and done, idle and
+#      blocked are what the "terminal" theme takes from Ghostty's palette
+#      (cyan 6, green 2, bright red 9 in home/.config/ghostty/config). Change
+#      one there and its bar here must change with it.
+#      "╰ resting" (and $bar_resting) is the plugin's word for an idle or done
+#      agent whose last reply has no 👉 line, so nothing waits on Gavin
+#      (Q66 (v2): 1); grey like working, because it does not need him.
+#   3. the state word on a line of its own ("╰ your turn"): what it wants from you. Grey
+#      while it works (theme.custom yellow below), bold when it needs you, hidden while idle unless a
+#      pane's state label gives idle a word ("your turn"). herdr drops an
+#      empty line, so a row with no word stays two lines tall.
 [ui.sidebar.agents]
 row_gap = 0
-rows = [["state_icon", { token = "workspace", fg = "#ffffff" }, { token = "machine", fg = "#7fb0a8", rules = [{ equals = "Local", hide = true }] }], [{ token = "terminal_title_stripped", fg = "#b0a084", bold = false }, { token = "tab", fg = "#8186cf" }]]
+# Two lines (Gavin, 19 Oct: "two lines acceptable"): the session name beside the state word, no bar line.
+# The session name is a dimmer sand #8c8069 (Gavin, 19 Oct: "reduce their
+# brightness"), down from #b0a084; contrast 4.9 on the page, 4.1 on the navy row.
+# The two-bracket-line form is kept below, commented, to go back to.
+rows = [[{ token = "state_icon", bold = true }, { token = "workspace", fg = "#ffffff" }, { token = "tab", fg = "#8186cf" }, { token = "machine", fg = "#7fb0a8", rules = [{ equals = "Local", hide = true }] }], [{ token = "state_text", rules = [{ equals = "idle", hide = true }, { equals = "blocked", bold = true }, { equals = "╰ needs you", bold = true }, { equals = "╰ resting", fg = "#6e7a86" }, { equals = "└ your turn", fg = "#6f9f78" }] }, { token = "$session", fg = "#8c8069", bold = false }]]
+# rows = [[{ token = "state_icon", bold = true }, { token = "workspace", fg = "#ffffff" }, { token = "tab", fg = "#8186cf" }, { token = "machine", fg = "#7fb0a8", rules = [{ equals = "Local", hide = true }] }], [{ token = "$bar_working", fg = "#6e7a86" }, { token = "$bar_done", fg = "#00bbbb" }, { token = "$bar_idle", fg = "#00bb00" }, { token = "$bar_blocked", fg = "#ff5555" }, { token = "$bar_unknown", fg = "#5c4a4a" }, { token = "$bar_resting", fg = "#6e7a86" }, { token = "$session", fg = "#b0a084", bold = false }], [{ token = "state_text", rules = [{ equals = "idle", hide = true }, { equals = "blocked", bold = true }, { equals = "╰ needs you", bold = true }, { equals = "╰ resting", fg = "#6e7a86" }] }]]
 
 # Spaces section, coloured like the agents section (Gavin, 16 Oct): the space
 # name in white on line 1, the branch on line 2 in light sand #b0a084
@@ -393,10 +424,15 @@ auto_switch = false
 # selection_bg: the navigate-mode cursor row in the sidebar. active_row_bg:
 # the focused space and agent rows (the terminal theme's #555555 hid the
 # names). A dark red-brown close to the background, the cursor one step
-# lighter (Gavin, 16 Oct, variation 5).
+# lighter (Gavin, 16 Oct, variation 5), until 19 Oct.
+# Navy (Gavin, 19 Oct: "that copper color does not work at all", then "better, definitely"): a deep
+# navy, cool against the warm page background, the cursor one step lighter.
+# Contrast on #1a2233: white 15.9, sand 6.2, periwinkle 4.7, the working and
+# resting grey 3.6, cyan 6.7, green 6.1, red 5.1 (copper gave 15.4 to 3.5).
+# One setting each, shared by the spaces and agents sections.
 [theme.custom]
-selection_bg = "#432a28"
-active_row_bg = "#33201f"
+selection_bg = "#24304a"
+active_row_bg = "#1a2233"
 # Inactive pane borders and their titles (Gavin, 16 Oct). As observed on herdr
 # 0.9.3 (src/ui/panes.rs), a focused border is drawn in ui.accent and every
 # other border in overlay0; not re-read in source on 0.9.5, whose notes name no
@@ -405,3 +441,19 @@ active_row_bg = "#33201f"
 # scrollbar and the "unknown" agent state, so those change with it; there is
 # no border-only setting.
 overlay0 = "#5c4a4a"
+# The working state is a cool slate grey (Gavin, 18 Oct): only the states that
+# need him are coloured, and a busy agent should look boring. It was orange
+# for a while (Q60 option 2), because yellow sat close to the gold accent,
+# then a warm grey that read as the session name's sand #b0a084. Cool, so it
+# stays apart from that sand and from overlay0, the unknown state's grey. yellow also paints
+# codebox's connecting mark, the "update available" mark and the config
+# error banner (herdr 0.9.5 source).
+yellow = "#6e7a86"
+# "your turn" keeps the terminal theme's own teal (unseen, done) and green
+# (seen, idle). Two yellows and then orange with muted yellow were tried on
+# 18 Oct (theme.custom teal and green) and Gavin went back to these.
+# The seen "your turn" word is a muted sage #6f9f78 (Gavin, 19 Oct: the bright
+# green was "too much in the eyes"), while the idle circle keeps Ghostty's
+# green. The plugin gives the seen word a square corner ("└ your turn") so the
+# state_text rule in [ui.sidebar.agents] can colour it alone; moving theme
+# green instead also moved the circle, which Gavin wanted kept.
