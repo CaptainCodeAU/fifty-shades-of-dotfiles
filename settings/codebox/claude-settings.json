@@ -453,7 +453,7 @@
   },
   "verbose": true,
   "model": "opus",
-  "effortLevel": "xhigh",
+  "effortLevel": "high",
   "fallbackModel": [
     "claude-opus-5",
     "sonnet"
@@ -474,7 +474,7 @@
   "skipDangerousModePermissionPrompt": true,
   "modelSettings": {
     "claude-sonnet-5": {
-      "effortLevel": "xhigh"
+      "effortLevel": "high"
     },
     "claude-fable-5-1": {
       "effortLevel": "medium"
@@ -483,7 +483,7 @@
       "effortLevel": "high"
     },
     "claude-opus-5-5": {
-      "effortLevel": "xhigh"
+      "effortLevel": "high"
     }
   }
 }
