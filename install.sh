@@ -289,9 +289,13 @@ HERDR_COOLDOWN_DAYS="3"
 # v0.9.3 (2026-10-07): published 2026-09-29, 7.7 days old, past the 5-day
 # cooldown. Both hashes agree across herdr-linux-pin-check, an independent
 # Mac download, and GitHub's API digest. Not yet re-downloaded on the WSL box.
-HERDR_VERSION="v0.9.3"
-HERDR_SHA256_LINUX_X86_64="18a8dc65f1c2fa485884344356dea1cfd911c6f06cf46fa78e193f4087f4dba7"
-HERDR_SHA256_LINUX_AARCH64="4de7aa3e25678812e92960de64f7c2aaa1bca1f0f80a3c5e559837e231e1f5c0"
+#
+# v0.9.5 (2026-10-18): published 2026-10-14 16:07 UTC, 3.4 days old, past the
+# 3-day cooldown (D-20261018-A01). Both hashes agree between
+# herdr-linux-pin-check and GitHub's API digest. Not yet installed on the WSL box.
+HERDR_VERSION="v0.9.5"
+HERDR_SHA256_LINUX_X86_64="14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d"
+HERDR_SHA256_LINUX_AARCH64="17d7536f2da50859523680ef279dffcac8e4a235f4e46fe8da6c2ec44141897c"
 
 # --- Helpers ---
 info()    { echo -e "${CYAN}ℹ️  $*${RESET}"; }
