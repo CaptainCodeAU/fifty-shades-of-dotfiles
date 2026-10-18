@@ -32,8 +32,9 @@
 #                ~/.local/state/herdr/palette-auto-submit between openings
 #   a pick that is not sent ends with a space, so the next pick or what you
 #                type next does not run into it (Gavin, 19 Oct)
-#   ✎ edit (top right, or the e key) opens palette.toml in $VISUAL, $EDITOR
-#                or nvim inside the popup, and reloads it when the editor exits
+#   ✎ edit (top right, or the e key) opens palette.toml in the app the Mac
+#                associates with it (open; a text editor when none is; xdg-open
+#                on Linux); the buttons reload whenever the file is saved
 #   ✕ close (top right), Esc or q  closes; a pick does NOT close (Gavin, 19 Oct:
 #                "only closes if we press the close button")
 #   arrows/hjkl  move   Tab/Shift-Tab  change tab   Enter  type   1-9  pick
@@ -260,6 +261,7 @@ class Palette:
         self.flash_until = 0.0
         self.auto = os.path.exists(AUTO_FILE)
         self.button_rects = []     # (x, y, w, name) for the title-bar buttons
+        self.mtime = None          # palette.toml's, for reloading on save
 
     # -- drawing
     def size(self):
@@ -392,22 +394,32 @@ class Palette:
             self.sel = max(0, min(len(rects) - 1, self.sel + dx))
 
     def edit_file(self):
-        """Open the palette file in the user's editor inside this popup, then
-        reload it. A file that no longer parses keeps the old buttons."""
-        editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or (
-            shutil.which("nvim") or shutil.which("vim") or "vi")
-        fd = sys.stdin.fileno()
-        termios.tcsetattr(fd, termios.TCSADRAIN, self.cooked)
-        sys.stdout.write(f"{ESC}[?1006l{ESC}[?1003l{ESC}[?25h")
-        sys.stdout.flush()
-        try:
-            # through sh, so an EDITOR with flags ("code -w") still works; the file
-            # is passed as $1, never pasted into the command text
-            subprocess.run(["sh", "-c", editor + ' "$1"', "sh", PALETTE_FILE])
-        finally:
-            sys.stdout.write(f"{ESC}[?25l{ESC}[?1003h{ESC}[?1006h")
-            sys.stdout.flush()
-            tty.setraw(fd)
+        """Open the palette file in the app the Mac associates with it (or a
+        text editor when none is), outside this popup (Gavin, 19 Oct: not
+        "within that tiny area"). The REAL file is opened, not the stowed
+        link in ~/.config: an app that saves by replacing the file would
+        otherwise swap the link for a copy the repo never sees. The buttons
+        reload by themselves when the file is saved (see watch_file)."""
+        real = os.path.realpath(PALETTE_FILE)
+        if sys.platform == "darwin":
+            tries = [["open", real], ["open", "-t", real]]
+        else:
+            tries = [["xdg-open", real]]
+        for cmd in tries:
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            except (OSError, subprocess.TimeoutExpired) as e:
+                r = None
+                why = str(e)
+            if r is not None and r.returncode == 0:
+                self.message = "✎ opened palette.toml in its app; the buttons reload when you save it"
+                self.message_colour = PERI
+                return
+            why = (r.stderr.strip().splitlines() or [""])[-1] if r is not None else why
+        self.message = f"✗ could not open palette.toml: {why}"
+        self.message_colour = RED
+
+    def reload_file(self):
         try:
             fresh = load_groups(PALETTE_FILE)
         except (OSError, tomllib.TOMLDecodeError) as e:
@@ -415,11 +427,27 @@ class Palette:
             self.message_colour = RED
             return
         answers = [g for g in self.groups if g["name"] == "Answer"]
-        self.groups = answers + fresh if (answers + fresh) else self.groups
+        if answers + fresh:
+            self.groups = answers + fresh
         self.tab = min(self.tab, len(self.groups) - 1)
         self.sel = 0
         self.message = f"✓ reloaded {len(fresh)} groups from palette.toml"
         self.message_colour = GREEN
+
+    def watch_file(self):
+        """True (after reloading) when palette.toml changed on disk."""
+        try:
+            m = os.stat(os.path.realpath(PALETTE_FILE)).st_mtime
+        except OSError:
+            return False
+        if self.mtime is None:
+            self.mtime = m
+            return False
+        if m != self.mtime:
+            self.mtime = m
+            self.reload_file()
+            return True
+        return False
 
     def toggle_auto(self):
         self.auto = not self.auto
@@ -524,7 +552,6 @@ class Palette:
     def run(self):
         fd = sys.stdin.fileno()
         old = termios.tcgetattr(fd)
-        self.cooked = old
         sys.stdout.write(f"{ESC}[?1049h{ESC}[?25l{ESC}[?1003h{ESC}[?1006h")
         try:
             tty.setraw(fd)
@@ -532,8 +559,11 @@ class Palette:
             while not self.done:
                 ready, _, _ = select.select([fd], [], [], 0.2)
                 if not ready:
+                    redraw = self.watch_file()
                     if self.flash and time.monotonic() > self.flash_until:
                         self.flash = None
+                        redraw = True
+                    if redraw:
                         self.draw()
                     continue
                 data = os.read(fd, 4096).decode("utf-8", "replace")
