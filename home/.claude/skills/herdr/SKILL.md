@@ -81,9 +81,9 @@ Most control commands return JSON; read identifiers and state from the responses
 
 A pane exists whether or not it contains an agent. `agent start` requires an existing available shell pane and never creates, splits, or moves layout. Use pane commands for ordinary processes; use agent commands when Herdr must validate agent identity or interpret `idle`, `working`, `blocked`, `done`, and `unknown` lifecycle states.
 
-Agent commands accept a unique live agent name or the pane ID hosting that agent, not terminal IDs or bare agent-kind labels. Names match `[a-z][a-z0-9_-]{0,31}` and are unique among live agents. A name follows the current pane occupant and is cleared when that agent exits, is released, or is replaced.
+Agent commands accept a unique live agent name or the pane ID hosting that agent, not terminal IDs or bare agent-kind labels. Names match `[a-z][a-z0-9_-]{0,31}` and are unique among live agents. A name follows the current pane occupant and is cleared when that agent exits, is released, or is replaced. Suspending an agent with Ctrl+Z and running a non-agent command keeps its identity while that exact process is alive (0.9.4, #4964); another recognized agent taking over the pane still clears it. A kept identity does NOT mean the agent is in the foreground: inspect the pane before sending input.
 
-`idle` and `done` both mean ready for input. The CLI and API use the server's seen state to distinguish them: explicit focus commands mark the target seen, reads do not. Each TUI client tracks viewed completions independently, so its Done badge can differ from the CLI or another client's. (Upstream rephrased this paragraph for 0.9.x; before that it was phrased as one tab being seen in one focused UI. The clause is kept so the old reading is not silently lost.) `blocked` means Herdr recognized an approval or question UI. `unknown` means an agent is present but not confidently classified; it does not prove completion.
+`idle` and `done` normally mean ready for input, but neither proves that an unfamiliar approval dialog was recognized, or that a retained agent is in the foreground (upstream weakened "both mean" to "normally indicate" in 0.9.5). The CLI and API use the server's seen state to distinguish them: explicit focus commands mark the target seen, reads do not. Each TUI client tracks viewed completions independently, so its Done badge can differ from the CLI or another client's. (Upstream rephrased this paragraph for 0.9.x; before that it was phrased as one tab being seen in one focused UI. The clause is kept so the old reading is not silently lost.) Antigravity and Grok can read idle while their background tasks or subagents keep running (0.9.4), so a settled-state wait is not proof those jobs finished. `blocked` means Herdr recognized an approval or question UI. `unknown` means an agent is present but not confidently classified; it does not prove completion.
 
 ## Use IDs and caller context
 
@@ -292,7 +292,7 @@ herdr-pane-read <returned-pane-id> -n 120
 herdr pane read <returned-pane-id> --source recent-unwrapped --lines 120   # raw form: pass a GENEROUS --lines
 ```
 
-`pane run` atomically sends command text and Enter. `pane wait-output` searches the selected snapshot immediately, so existing output can match. `--match <text>` is a literal substring, `--regex <pattern>` a Rust regular expression. Omitting `--timeout` waits indefinitely.
+`pane run` queues command text and Enter together; success means the input was ADMITTED, not that the command ran (0.9.5 dropped the word "atomically"). On macOS, `pane run` and `agent start` refuse a command longer than the terminal's current line-input limit instead of silently cutting it off (0.9.4, #4950): wait for the interactive shell prompt before retrying. That check covers this submission only, not an earlier unfinished line or a later terminal-mode change. `pane wait-output` searches the selected snapshot immediately, so existing output can match. `--match <text>` is a literal substring, `--regex <pattern>` a Rust regular expression. Omitting `--timeout` waits indefinitely.
 
 Read sources:
 
@@ -364,7 +364,7 @@ To correct a stale title without renaming, rebuild the display value from a fres
 - Use `--no-focus` for background work unless the user asked to switch context.
 - Use `--current`, an explicit pane ID, or a unique agent name. Do not rely on another client's focused pane.
 - Parse IDs from JSON responses, not sidebar order or examples.
-- Do not close workspaces, tabs, panes, or sessions you did not create unless the user explicitly asked. `workspace close --group` closes the primary workspace AND its linked worktree workspaces; never add it merely to bypass `workspace_group_close_required`. That refusal (0.9.0, #2874) means the close would take more than you named: a finding, not an obstacle.
+- Do not close workspaces, tabs, panes, or sessions you did not create unless the user explicitly asked. A CLI or API close does NOT get the TUI's last-pane confirmation that 0.9.4 added: it closes at once. `workspace close --group` closes the primary workspace AND its linked worktree workspaces; never add it merely to bypass `workspace_group_close_required`. That refusal (0.9.0, #2874) means the close would take more than you named: a finding, not an obstacle.
 - Use `--trust-repository` only after the USER has verified the repository. It grants per-request Git trust; it is not a routine retry for a failed worktree command.
 - Client and server versions can differ after an update. Check `herdr status` before relying on new server features. A missing method is not permission to stop or upgrade a server.
 - Read panes with `herdr-pane-read`, not a hand-picked `--lines`. The 0.8.2 floor it worked around is fixed in 0.9.1; what it still adds is a positive statement of what it showed of what, a spoken exit 3 on an empty pane, a scroll warning, and agent-name targeting (Run an ordinary command).
