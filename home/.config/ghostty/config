@@ -21,66 +21,116 @@
 # adjust-cell-height below.
 # A blind test of five fonts (15 to 17 Oct) changed nothing: GeistMono, IosevkaTerm,
 # JetBrainsMono, MonoLisa and MesloLGS, shown as A to E; Gavin kept MesloLGS NF.
-font-family = MesloLGS NF
-font-family = FiraCode Nerd Font Mono
-font-size = 12
+# Reference: https://ghostty.org/docs/config/reference
+
+# font-family = MesloLGS NF
+# font-family = MesloLGS Nerd Font Mono
+# font-family = FiraCode Nerd Font Mono
+# font-family = JetBrainsMono Nerd Font Mono
+# font-family = Iosevka Term
+# font-size = 12
 
 # Text looked thin and faint beside iTerm2 (Gavin's side-by-side, 15 Oct).
 # iTerm2 draws with macOS font smoothing, which thickens every stroke a
 # little; Ghostty leaves it off unless font-thicken is set.
-font-thicken = true
+# font-thicken = true
 
 # Rows were shorter than iTerm2's with the same font (Gavin's side-by-side,
 # 15 Oct): over the same rows, about 15 px each against 16 px, while the
 # column width was identical (the banner's ==== rule measured 545 px in both).
 # The squashed rows read as narrower letters. 6% taller cells closes the gap.
-adjust-cell-height = 6%
+# adjust-cell-height = 6%
 
-# --- Colours (iTerm2 "Default (old) red") ------------------------------------
+# Setup (once)
+font-size = 12
+# Draw fonts with a thicker stroke (macOS only)
+# font-thicken = true
+# Strength of thickening when `font-thicken` is enabled
+# font-thicken-strength = 255
+# https://ghostty.org/docs/config/reference#adjust-cell-height
+adjust-cell-width = 7%
+adjust-cell-height = 6%
+# native / linear / linear-corrected (`linear` is same as gamma correction)
+alpha-blending = linear
+adjust-cursor-thickness = 0
+adjust-cursor-height = 100%
+
+
+# 1a. Baseline (Powerlevel10k build)
+# font-family = MesloLGS NF
+
+
+# window-padding-x = 8
+# window-padding-y = 0
+# window-padding-balance = true
+# confirm-close-surface = false
+# copy-on-select = clipboard
+# background-opacity = 0.85
+# background-blur-radius = 20
+
+
+# --- Colours -----------------------------------------------------------------
+# Started as iTerm2's "Default (old) red" (15 Oct). iTerm2 is no longer used
+# (18 Oct), so the palette is now tuned for this background, not for matching
+# iTerm2.
 # Colours are read as sRGB (Ghostty's default). window-colorspace =
 # display-p3 was tried on 15 Oct and dropped the same evening: it applies to
 # every colour, including the 24-bit ones programs send, so Claude Code's
-# blue came out duller than in iTerm2 (Gavin's side-by-side). iTerm2 stores
-# only this profile's background and foreground in Display P3; converted to
-# sRGB they are #170d0d and #bbbbbb, used below.
-# Bold text: iTerm2 draws bold default-colour text in its Bold Color
-# (#ffffff) and bold palette colours in their bright versions ("Use Bright
-# Bold"). A colour here does both: "this color will always be used for the
-# default bold text color. It will set the rest of the bold colors to
+# blue came out duller (Gavin's side-by-side).
+background = #170d0d
+# #cccccc and #dddddd were tried on 15 Oct; once bold text was white
+# (bold-color below), they left too little gap between plain and bold text
+# (Gavin).
+foreground = #bbbbbb
+# Bold default-colour text is white, and bold palette colours use their
+# bright versions. A colour here does both: "this color will always be used
+# for the default bold text color. It will set the rest of the bold colors to
 # bright" (Ghostty's own docs, 1.3.1).
 bold-color = #ffffff
-background = #170d0d
-# iTerm2's #bbbbbb. #cccccc and #dddddd were tried on 15 Oct; once bold text
-# was white (bold-color below), they left too little gap between plain and
-# bold text compared with iTerm2 (Gavin).
-foreground = #bbbbbb
 cursor-color = #bbbbbb
 selection-background = #b5d5ff
 selection-foreground = #000000
+
+# Palette, 18 Oct: slots that read below the contrast targets against
+# #170d0d were lightened, keeping their hue. Targets (WCAG contrast ratio):
+# 4.5 for normal colours, 6 for bright ones, about 3.5 for 8 (grey, used for
+# dim text such as shell autosuggestions). Changed slots, to go back:
+#   slot  new      ratio   old      ratio
+#    1    #e53935  4.5     #bb0000  2.8   red
+#    4    #3d74ff  4.7     #0240d2  2.4   blue
+#    5    #d23cd2  4.8     #bb00bb  3.5   magenta
+#    8    #6c6c6c  3.6     #555555  2.6   grey (bright black)
+#   12    #8484ff  6.1     #5555ff  3.8   bright blue
+# Slot 0 stays #000000 (1.1): programs mostly use it as a background, where
+# darker than the window is the intended look.
 palette = 0=#000000
-palette = 1=#bb0000
+palette = 1=#e53935
 palette = 2=#00bb00
 palette = 3=#bbbb00
-palette = 4=#0240d2
-palette = 5=#bb00bb
+palette = 4=#3d74ff
+palette = 5=#d23cd2
 palette = 6=#00bbbb
 palette = 7=#bbbbbb
-palette = 8=#555555
+palette = 8=#6c6c6c
 palette = 9=#ff5555
 palette = 10=#55ff55
 palette = 11=#ffff55
-palette = 12=#5555ff
+palette = 12=#8484ff
 palette = 13=#ff55ff
 palette = 14=#55ffff
 palette = 15=#ffffff
+
+# minimum-contrast is left at its default (1, no effect). Higher values were
+# tried and shifted colours (Gavin); the palette above lifts the low ones
+# instead.
 
 # iTerm2: transparency 0.05 with blur.
 background-opacity = 0.95
 background-blur = true
 
 # --- Window ------------------------------------------------------------------
-# 360 columns by 112 rows (Gavin, 15 Oct; iTerm2's profile is 290 by 88).
-window-width = 360
+# maximize = true
+window-width = 456
 window-height = 112
 
 # iTerm2: every new window and tab starts in ~/CODE/CaptainCodeAU ("Custom
