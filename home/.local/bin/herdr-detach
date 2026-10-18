@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  herdr-detach -- detach a Herdr screen (client) by typing, like prefix+d
+# ============================================================================
+#
+# WHY (Gavin, dotfiles-main, 18 Oct 2026): herdr 0.9.5 has no typed detach.
+# `herdr --help` lists none, `herdr session` has only list/attach/stop/delete
+# (stop ends the whole session), and `herdr api schema --json` has no detach
+# request, only an `is_detached` status field. Detach is a key (prefix+d here).
+#
+# HOW: it sends SIGTERM to the herdr CLIENT process only. Measured 18 Oct on
+# 0.9.5 with a throwaway session (`herdr --session hdtest` in a sized pty):
+# the client logged `app.shutdown ... outcome="completed"`, the session's
+# server stayed `running`, and the client's last output left full screen
+# (ESC[?1049l), turned mouse reporting off and showed the cursor again. That
+# is a detach: the server and every pane keep running.
+#
+# WHAT IT WILL NEVER SIGNAL: anything but a client. A client is a process whose
+# program is herdr and whose arguments are ONLY attach flags (--session NAME,
+# --remote TARGET, --remote-keybindings X, --handoff). `herdr server`,
+# `herdr remote-client-bridge` and every other subcommand are not clients. The
+# command line is read again right before the signal, so a pid reused in
+# between is not hit.
+#
+# WHICH CLIENT: by default the clients of the default local session. More than
+# one match is refused with a list (pid, terminal, start time); pick one with
+# --pid, or take all with --all. A herdr pane cannot tell which screen shows it,
+# so this never guesses.
+#
+# USAGE
+#   herdr-detach                    detach the default session's screen
+#   herdr-detach --session NAME     ... of a named session
+#   herdr-detach --remote           ... of a `herdr --remote` screen
+#   herdr-detach --pid N            exactly this screen (must be a client)
+#   herdr-detach --all              every screen that matches
+#   herdr-detach --list             list screens, change nothing
+#   herdr-detach --dry-run          say what would be detached, change nothing
+#   herdr-detach --selftest         prove the classifier's arms
+#
+# EXIT: 0 detached (or nothing to do with --list/--dry-run), 1 nothing matched,
+# 2 refused (several matches, bad pid, bad arguments), 3 a client did not end.
+
+set -u
+
+# classify "ARGV..." -> prints `client default`, `client session NAME`,
+# `client remote TARGET`, or `other`. ARGV excludes the program name.
+classify() {
+    local session="" remote="" a
+    while (( $# )); do
+        a="$1"; shift
+        case "$a" in
+            --session)            session="${1-}"; (( $# )) && shift ;;
+            --session=*)          session="${a#*=}" ;;
+            --remote)             remote="${1-}"; (( $# )) && shift ;;
+            --remote=*)           remote="${a#*=}" ;;
+            --remote-keybindings) (( $# )) && shift ;;
+            --remote-keybindings=*|--handoff) ;;
+            *) echo other; return ;;   # a subcommand or an unknown word: not a client
+        esac
+    done
+    if [[ -n "$remote" ]]; then echo "client remote $remote"
+    elif [[ -n "$session" && "$session" != default ]]; then echo "client session $session"
+    else echo "client default"
+    fi
+}
+
+selftest() {
+    local pass=0 fail=0 got want
+    check() { got="$(classify "${@:2}")"; want="$1"
+        if [[ "$got" == "$want" ]]; then pass=$((pass+1)); else fail=$((fail+1)); echo "  FAIL: [${*:2}] -> '$got', want '$want'"; fi; }
+    check "client default"                                  # bare `herdr`
+    check "client default"         --session default
+    check "client session hdtest"  --session hdtest
+    check "client session hdtest"  --session=hdtest
+    check "client remote codebox.lan" --remote-keybindings server --remote codebox.lan
+    check "client remote codebox.lan" --remote codebox.lan --handoff
+    check "other" server                                    # the server: never a client
+    check "other" server stop
+    check "other" remote-client-bridge --idle-timeout-v1
+    check "other" machine list
+    check "other" --machine Codebox agent list
+    check "other" status server --json
+    echo "herdr-detach selftest: $pass passed, $fail failed"
+    (( fail == 0 ))
+}
+
+want_kind="client default"; want_pid=""; all=false; dry=false; list=false
+while (( $# )); do
+    case "$1" in
+        --session|--pid)
+            # A value flag given last would leave `shift 2` nothing to shift and spin forever.
+            (( $# >= 2 )) || { echo "herdr-detach: $1 needs a value (see --help)" >&2; exit 2; }
+            [[ "$1" == --pid ]] && want_pid="$2"
+            [[ "$1" == --session ]] && want_kind="client session $2"
+            [[ "$1" == --session && "$2" == default ]] && want_kind="client default"
+            shift 2 ;;
+        --remote)   want_kind="client remote"; shift ;;
+        --all)      all=true; shift ;;
+        --dry-run)  dry=true; shift ;;
+        --list)     list=true; shift ;;
+        --selftest) selftest; exit $? ;;
+        -h|--help)  sed -n '2,/^# EXIT/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "herdr-detach: unknown argument: $1 (see --help)" >&2; exit 2 ;;
+    esac
+done
+
+# argv of one pid, without the program name; empty when the pid is gone.
+argv_of() { ps -o command= -p "$1" 2>/dev/null; }
+is_herdr() { local first; read -r first _ <<<"$1"; [[ "${first##*/}" == herdr ]]; }
+
+# Collect every herdr client: "pid|kind".
+clients=()
+while read -r pid cmd; do
+    [[ -n "$pid" ]] || continue
+    is_herdr "$cmd" || continue
+    read -r -a words <<<"$cmd"
+    kind="$(classify "${words[@]:1}")"
+    [[ "$kind" == client* ]] && clients+=("$pid|$kind")
+done < <(ps -A -o pid=,command= 2>/dev/null)
+
+describe() { printf 'pid %s  %s  terminal %s  started %s\n' "$1" "$2" \
+    "$(ps -o tty= -p "$1" 2>/dev/null | tr -d ' ')" "$(ps -o lstart= -p "$1" 2>/dev/null | sed 's/  */ /g')"; }
+
+if $list; then
+    (( ${#clients[@]} )) || { echo "herdr-detach: no Herdr screens are open"; exit 0; }
+    echo "herdr-detach: ${#clients[@]} Herdr screen(s) open:"
+    for c in "${clients[@]}"; do describe "${c%%|*}" "${c#*|}"; done
+    exit 0
+fi
+
+targets=()
+if [[ -n "$want_pid" ]]; then
+    for c in "${clients[@]}"; do [[ "${c%%|*}" == "$want_pid" ]] && targets+=("$c"); done
+    (( ${#targets[@]} )) || { echo "herdr-detach: pid $want_pid is not an open Herdr screen; nothing done (--list shows them)" >&2; exit 2; }
+else
+    for c in "${clients[@]}"; do
+        k="${c#*|}"
+        if [[ "$want_kind" == "client remote" ]]; then [[ "$k" == "client remote "* ]] && targets+=("$c")
+        else [[ "$k" == "$want_kind" ]] && targets+=("$c"); fi
+    done
+fi
+
+if (( ${#targets[@]} == 0 )); then
+    echo "herdr-detach: no open Herdr screen matches (${want_kind#client }); nothing done. --list shows every screen." >&2
+    exit 1
+fi
+if (( ${#targets[@]} > 1 )) && ! $all; then
+    echo "herdr-detach: ${#targets[@]} screens match; refusing to guess which one. Pick one with --pid, or use --all:" >&2
+    for c in "${targets[@]}"; do describe "${c%%|*}" "${c#*|}" >&2; done
+    exit 2
+fi
+
+rc=0
+for c in "${targets[@]}"; do
+    pid="${c%%|*}"; kind="${c#*|}"
+    if $dry; then echo "herdr-detach: [dry-run] would detach $(describe "$pid" "$kind")"; continue; fi
+    # Re-read right before the signal: the pid must still be the same kind of client.
+    now="$(argv_of "$pid")"
+    read -r -a words <<<"$now"
+    if [[ -z "$now" ]] || ! is_herdr "$now" || [[ "$(classify "${words[@]:1}")" != "$kind" ]]; then
+        echo "herdr-detach: pid $pid changed or ended before the signal; nothing sent" >&2; rc=3; continue
+    fi
+    kill -TERM "$pid" 2>/dev/null || { echo "herdr-detach: could not signal pid $pid" >&2; rc=3; continue; }
+    for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$pid" 2>/dev/null || break; sleep 0.5; done
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "herdr-detach: pid $pid did not end within 5 s; left running" >&2; rc=3
+    else
+        echo "herdr-detach: detached pid $pid (${kind#client }); the server and its panes keep running"
+    fi
+done
+exit $rc

@@ -985,6 +985,16 @@ Default keymap against this repo's `.tmux.conf`:
 | Zoom / close / copy | `prefix+z` / `x` / `[`  | `prefix+z` / `x` / `[`   |
 | Detach              | `prefix+q`              | `prefix+d`               |
 
+**Detaching by typing: `herdr-detach`** (`home/.local/bin`, 18 Oct 2026, Gavin's ask).
+herdr 0.9.5 has no typed detach: not in `--help`, not in `herdr session` (stop ends
+the whole session), not in the API schema. `herdr-detach` sends SIGTERM to the herdr
+CLIENT only, which measured as a detach on a throwaway session: the client logged a
+completed shutdown, the session's server stayed `running`, and the client's last
+output left full screen and turned mouse reporting off. It never signals a server
+or a helper (`--pid` on the server's pid is refused), and with more than one
+matching screen it refuses to guess and lists them (`--pid N` or `--all`).
+`--list` and `--dry-run` change nothing; `--selftest` proves its 12 classifier arms.
+
 Two remote modes, and the second has no tmux equivalent:
 
 ```bash
