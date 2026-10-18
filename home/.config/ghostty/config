@@ -159,11 +159,12 @@ keybind = super+arrow_left=previous_tab
 keybind = super+arrow_right=next_tab
 
 # cmd+option+p opens herdr's prompt palette in one press (Gavin, 19 Oct,
-# dotfiles-main Q72: 1): it types herdr's prefix, ctrl+Space (the NUL byte),
-# then p. herdr 0.9.5 fixed prefix keys sent this way by Ghostty `text:` binds
-# (#5255). cmd+shift+p was the first idea, but it is Ghostty's own command
-# palette (`ghostty +list-keybinds --default`); cmd+option+p was free there.
-keybind = super+alt+p=text:\x00p
+# dotfiles-main Q72: 1). It sends herdr's own palette key, ctrl+alt+p, as the
+# kitty keyboard protocol writes it (ESC [ 112 ; 7 u: p, with ctrl+alt as
+# modifier 7). The first try typed the prefix as a NUL byte then p
+# (text:\x00p) and did nothing when Gavin pressed it, 19 Oct. cmd+shift+p
+# is Ghostty's own command palette (`ghostty +list-keybinds --default`).
+keybind = super+alt+p=csi:112;7u
 
 # --- Clipboard and selection -------------------------------------------------
 # A plain drag inside herdr is herdr's (or Claude Code's) own selection, and

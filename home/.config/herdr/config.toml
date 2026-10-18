@@ -257,8 +257,10 @@ command = "sh -c 'exec env SPEAK_SOURCE=herdr \"$HOME/.local/bin/speak-clipboard
 # "Answer" tab is built from the session's last 👉 line. prefix+p is free here
 # because previous_tab moved to shift+left above. A popup closes when its
 # command exits, which herdr-palette does after a pick or Esc.
+# ctrl+alt+p (ctrl+option+p) opens it too, in one press with no prefix
+# (Gavin, 19 Oct, Q72): Ghostty's cmd+option+p sends that key (ghostty config).
 [[keys.command]]
-key = "prefix+p"
+key = ["prefix+p", "ctrl+alt+p"]
 type = "popup"
 command = "sh -c 'exec \"$HOME/.local/bin/herdr-palette\"'"
 width = "80%"
