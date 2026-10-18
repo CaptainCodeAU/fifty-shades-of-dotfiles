@@ -32,6 +32,8 @@
 #                chips shows the whole text of the chip under the mouse, or of
 #                the last one picked (wrapped; the mouse wheel or PgUp/PgDn
 #                scroll it when long). Arrows select, Enter or 1-9 type.
+#   ↑ from the top row of chips moves up to the tabs (Gavin, 19 Oct): there
+#                ←/→ change tab, and ↓ or Enter go back down to the chips.
 #   right-click  types it and presses Enter, whatever the tick box says
 #   ☐ auto-submit (top right, or the a key) ticks and unticks; remembered in
 #                ~/.local/state/herdr/palette-auto-submit between openings
@@ -301,6 +303,7 @@ class Palette:
         self.mtime = None          # palette.toml's, for reloading on save
         self.armed = False         # (unused since one click types again; kept False)
         self.shown = 0             # the chip whose text the preview shows
+        self.focus = "chips"       # where the arrow keys act: "chips" or "tabs"
         self.scroll = 0            # first preview line shown
         self.preview_rect = None   # (x, y, w, h) of the preview box, for the wheel
 
@@ -343,7 +346,9 @@ class Palette:
         # tabs
         self.tab_rects = layout_tabs(self.groups, 3)
         for i, (x, y, tw, label) in enumerate(self.tab_rects):
-            if i == self.tab:
+            if i == self.tab and self.focus == "tabs":
+                style = bg((255, 255, 255)) + fg(INK) + BOLD + f"{ESC}[4m"
+            elif i == self.tab:
                 style = bg(GOLD) + fg(INK) + BOLD
             elif self.hover == ("tab", i):
                 style = bg(NAVY_HI) + fg(TEXT)
@@ -357,7 +362,7 @@ class Palette:
         for i, ((x, y, cw), c) in enumerate(zip(self.chip_rects, chips)):
             if y + 2 >= h - 2:
                 break
-            hot = self.hover == ("chip", i) or i == self.sel
+            hot = self.hover == ("chip", i) or (i == self.sel and self.focus == "chips")
             if self.flash and self.flash[0] == i:
                 border, fill, ink = self.flash[1], self.flash[1], INK
             elif hot:
@@ -455,14 +460,26 @@ class Palette:
             self.flash = None
 
     def move(self, dx, dy):
+        self.hover = None              # the keys lead; the preview follows them
+        if self.focus == "tabs":
+            if dy > 0:
+                self.focus = "chips"
+            elif dx:
+                self.set_tab(self.tab + dx)
+                self.focus = "tabs"
+            return
         rects = self.chip_rects
         if not rects:
+            if dy < 0:
+                self.focus = "tabs"
             return
         x, y, _ = rects[self.sel]
         if dy:
             same = [i for i, r in enumerate(rects) if r[1] == y + 3 * dy]
             if same:
                 self.choose(min(same, key=lambda i: abs(rects[i][0] - x)))
+            elif dy < 0:
+                self.focus = "tabs"
         else:
             self.choose(max(0, min(len(rects) - 1, self.sel + dx)))
 
@@ -672,7 +689,10 @@ class Palette:
                 elif ch == "x":
                     self.clear_prompt()
                 elif ch in ("\r", "\n"):
-                    self.pick(self.sel, send=False)
+                    if self.focus == "tabs":
+                        self.focus = "chips"
+                    else:
+                        self.pick(self.sel, send=False)
                 elif ch in "hjkl":
                     self.move(*{"h": (-1, 0), "l": (1, 0), "k": (0, -1), "j": (0, 1)}[ch])
                 elif ch.isdigit() and ch != "0":
