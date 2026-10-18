@@ -57,13 +57,26 @@ also gets `SSH_TTY` (the pane's tty), unless one is already set. Claude Code cop
 the box's own clipboard tool unless it believes it is over SSH (`SSH_CONNECTION`,
 `SSH_CLIENT` or `SSH_TTY`), and a herdr pane carries none of them, so a drag-copy made
 through `herdr --remote` landed on codebox's clipboard instead of the Mac's (herdr issue
-
-# 4833). With `SSH_TTY` set it copies through the terminal (OSC 52), which herdr passes to
-
+4833). With `SSH_TTY` set it copies through the terminal (OSC 52), which herdr passes to
 the attached client. Gavin tested it by hand: paste on the Mac showed Claude's words.
 Outside a herdr pane nothing is added, because Claude counts even an empty `SSH_TTY` as
 set. Stand-in test, four arms: herdr pane with a tty gets it; no herdr pane, none; an
 existing `SSH_TTY` is kept; no tty, none.
+
+Since 2026-10-19 (dotfiles-main Q74: 1) the function also adds
+`--dangerously-skip-permissions`, so every `claude` typed on such a box starts in bypass
+permissions, as an `engage` session does on the Mac. On the Mac bypass comes from that
+flag on the launch, never from settings: the Mac's `settings.json` says
+`"defaultMode": "auto"`. The first route tried on codebox, `"defaultMode":
+"bypassPermissions"` in its `settings.json`, did not hold: Claude Code 2.1.302 rewrote the
+file to `"auto"` at startup (4:17 AM, a minute after the install wrote it) and the
+session came up in auto mode. `skipDangerousModePermissionPrompt` stays true in codebox's
+settings, so the flag starts without the one-time warning. The flag runs fine in front
+of Claude's subcommands (`--version`, `mcp --help` and `update --help` all ran with it).
+Proved live in Gavin's codebox pane after `exec zsh`: a fresh `claude` showed "bypass
+permissions on". The blind spot is the same as for the rest of this section: a Claude
+started without zsh gets none of it. codebox has none of the Mac's guards, so bypass
+there can delete for real; Network_Plan recorded the ruling as its Claude Code D-003.
 
 Blind spot: only a `claude` typed in zsh reaches the function. A launch that skips the shell
 starts bare. Claude's own settings file (`env`) would cover every start path, but whether it
