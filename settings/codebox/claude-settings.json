@@ -470,5 +470,9 @@
   },
   "plansDirectory": "Plans/",
   "askUserQuestionTimeout": "10m",
-  "awaySummaryEnabled": false
+  "awaySummaryEnabled": false,
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
+  "skipDangerousModePermissionPrompt": true
 }
