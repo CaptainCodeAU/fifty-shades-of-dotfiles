@@ -255,6 +255,15 @@ if [[ "$IS_LINUX" == "true" || "$IS_WSL" == "true" ]]; then
     )
 fi
 
+# engage's mousetrap (engage goal 04-A part 4; Gavin, dotfiles-main Q71: 1, 19 Oct
+# 2026, and e-conductor Q4: 2): engage's stand-ins for decided, open-items and the
+# pj tools go FIRST on PATH, ahead of ~/.local/bin, so each call is logged
+# (engine-room/logs/old-systems.log) before the real tool runs unchanged. A no-op
+# where the folder is missing; never added twice. Accepted risk: anything engage
+# puts in that folder takes over a same-named tool in every shell. Remove with the
+# tools (engage plan goals 13 and 14).
+[[ -d "$HOME/CODE/CaptainCodeAU/engage/trap/bin" ]] && path=("$HOME/CODE/CaptainCodeAU/engage/trap/bin" ${path:#$HOME/CODE/CaptainCodeAU/engage/trap/bin})
+
 # Second, independent source for pnpm's minimumReleaseAge/trustPolicy, on top
 # of home/.config/pnpm/config.yaml. pnpm 11.18.0 hardened self-update to read
 # these ONLY from the built-in default, global config, a PNPM_CONFIG_* env
