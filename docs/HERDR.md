@@ -496,8 +496,9 @@ rewrites it on its own. **Measured 2026-10-07, it does not:** the Claude hook
 was still `HERDR_INTEGRATION_VERSION=8`, dated 2026-09-06, after two upgrades
 (0.9.1 on 2026-09-22, 0.9.3 on 2026-10-07), and `herdr integration status`
 reported `claude: outdated (v8 < v10)`. The 0.9.5 upgrade on 2026-10-18 did the
-same: the live hook stayed v10 and `herdr integration status` reads
-`claude: outdated (v10 < v11)`. The rewrite happens only on
+same: the live hook stayed v10 and `herdr integration status` read
+`claude: outdated (v10 < v11)` until Gavin applied v11 by hand that day (step 4
+below). The rewrite happens only on
 `herdr integration install claude`, so after a bump, check `herdr integration
 status` and decide. It is executable code in real files under `~/.claude`, not
 stow symlinks, so a restow does not restore them. The section further down,
@@ -1287,7 +1288,7 @@ over it. Two facts make that matter:
 
 The reference copy is `docs/reference/herdr-agent-state.UPSTREAM.sh`: herdr's
 UNTOUCHED output for the version it names on its `HERDR_INTEGRATION_VERSION` line
-(v10, herdr 0.9.3, 2026-10-07). The steps:
+(v11, herdr 0.9.5, 2026-10-18; v10 from herdr 0.9.3 before that). The steps:
 
 1. **Local edits?** `diff docs/reference/herdr-agent-state.UPSTREAM.sh
 ~/.claude/hooks/herdr-agent-state.sh`. Empty means none; anything else is ours and
@@ -1322,9 +1323,12 @@ is still byte-identical to the reference copy. herdr's v11 hook differs from it
 in the `HERDR_INTEGRATION_VERSION` line alone. Its registration is SessionStart
 only, as before, but carries the matcher `^(startup|resume|clear|compact|fork)$`
 where ours has `*`; whether v10's registration already had that matcher was not
-recorded. Step 4 was not done: the live hook is v10, `herdr integration status`
-reads `claude: outdated (v10 < v11)`, and the reference copy here still names
-v10.
+recorded. Our registration keeps `*`: the hook exits on every event but
+SessionStart, and `*` covers every source the matcher names. Step 4 done the same
+day (Gavin, dotfiles-main Q15): the session wrote herdr's v11 output to a temp
+path, Gavin copied it over the live hook and committed `~/.claude`, and the
+reference copy here was replaced. After it, `herdr integration status` reads
+`claude: current (v11)`, and the live hook is byte-identical to the reference.
 
 ## Scope (and deliberate non-scope)
 
