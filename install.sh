@@ -129,6 +129,11 @@ SKIP_GIT_IDENTITY=false      # the user.name / user.email prompt
 # Not a skip flag: only the codebox profile sets it. Places settings/codebox/claude-settings.json
 # as ~/.claude/settings.json (a copy, never a link); see _place_codebox_claude_settings.
 PLACE_CODEBOX_SETTINGS=false
+# Not skip flags either: a profile's unattended yes to an optional install whose prompt
+# defaults to no, so a --no-questions run installs it instead of declining it. Only a
+# profile sets these; an interactive run still asks.
+YES_RUST=false               # rustup, and cargo with it
+YES_YAZI=false               # yazi
 
 # --- Node.js default version ---
 # nvm alone leaves a box with no Node at all (measured: install.sh installed nvm and
@@ -3451,7 +3456,7 @@ install_linux_prerequisites() {
     if [[ "$SKIP_RUST" == true ]]; then
         verbose "rustup skipped (--skip-rust)"
     elif ! command -v rustup &>/dev/null; then
-        if SECTION_DECISION=ask confirm "Install Rust toolchain (rustup)? Needed for cargo-binstall and other rust CLI tools."; then
+        if SECTION_DECISION=ask confirm "Install Rust toolchain (rustup)? Needed for cargo-binstall and other rust CLI tools." n "$([[ "$YES_RUST" == true ]] && echo y || echo n)"; then
             install_rust_toolchain
         fi
     fi
@@ -3460,7 +3465,7 @@ install_linux_prerequisites() {
     if [[ "$SKIP_YAZI" == true ]]; then
         verbose "yazi skipped (--skip-yazi)"
     elif ! command -v yazi &>/dev/null; then
-        if confirm "Install yazi (terminal file manager) from GitHub release?"; then
+        if confirm "Install yazi (terminal file manager) from GitHub release?" n "$([[ "$YES_YAZI" == true ]] && echo y || echo n)"; then
             install_yazi_release
         fi
     fi
@@ -5967,11 +5972,17 @@ _apply_profile() {
             # runs (Network_Plan boxes/codebox-vm-205/scripts/golden-system.sh). What
             # this profile installs as the user: uv + Python 3.13, nvm + Node
             # NODE_DEFAULT_VERSION, standalone pnpm, bun, herdr's pinned Linux release,
-            # Oh My Zsh + plugins + Powerlevel10k, lazygit. docs/INSTALL_PROFILES.md.
+            # Oh My Zsh + plugins + Powerlevel10k, lazygit, rustup (with cargo) and yazi.
+            # docs/INSTALL_PROFILES.md.
             NO_QUESTIONS=true; NO_SUDO=true
             SKIP_CLAUDE=true; SKIP_SSH=true; SKIP_SYSTEM_PACKAGES=true
-            SKIP_TMUX=true; SKIP_DOCKER=true; SKIP_RUST=true; SKIP_YAZI=true
+            SKIP_TMUX=true; SKIP_DOCKER=true
             SKIP_FONTS=true; SKIP_GIT_HOOKS=true
+            # rustup, cargo and yazi on codebox from 18 Oct 2026 (Gavin, in Network_Plan-main:
+            # "include ffmpeg, aria2c, rustp, cargo and yazi from here on"). Both install as
+            # the user (rustup into ~/.cargo, yazi into ~/.local/bin), so --no-sudo is fine;
+            # ffmpeg and aria2 need apt, so root's golden script installs those (CB D-027).
+            YES_RUST=true; YES_YAZI=true
             # Claude Code's settings on codebox come from this repo (Gavin, dotfiles-main Q4: 2,
             # 17 Oct 2026); its CLAUDE.md stays with Network_Plan. docs/INSTALL_PROFILES.md.
             PLACE_CODEBOX_SETTINGS=true
