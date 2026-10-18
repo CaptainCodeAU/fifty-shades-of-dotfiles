@@ -1005,7 +1005,11 @@ fi
 #
 # Budget = the 2026-09-22 measurement plus 15%. Raise it deliberately, with a
 # measurement, never to make a yellow row go green.
-SKILL_TOKEN_BUDGET="${PJ_SKILL_TOKEN_BUDGET:-18641}"
+# Raised 18641 -> 25000 on 2026-10-18 (Gavin, dotfiles-main Q16: "Raise the budget
+# to 25,000 tokens and measure it fresh"). Fresh count that day: 53,602 bytes,
+# 391 lines, ~21,878 tokens at 2.45 chars/token, after the 0.9.5 upstream merge and
+# the 0.9.2-0.9.5 release-gap fill. That leaves ~3,100 tokens of headroom.
+SKILL_TOKEN_BUDGET="${PJ_SKILL_TOKEN_BUDGET:-25000}"
 HERDR_SKILL="${PJ_HEALTH_SKILL:-$PJ_HOME/skills/herdr/SKILL.md}"
 if [ -r "$HERDR_SKILL" ]; then
   sb="$(wc -c <"$HERDR_SKILL" | tr -d ' ')"

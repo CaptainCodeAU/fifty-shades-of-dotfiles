@@ -231,19 +231,19 @@ chmod +x "$T/drift/old"
 # On this box the real SKILL.md is inside its budget, so PASS is the only
 # reachable state and WARN would be a branch that ships unobserved. Same
 # argument as the drift fixtures above. Sizes are chosen against the budget
-# (18641 tokens at 2.45 chars/token, so about 45,671 bytes), not against today's file.
+# (25000 tokens at 2.45 chars/token, so 61,250 bytes; 18641 until 2026-10-18), not against today's file.
 mkdir -p "$T/skill"
 # 20,000 bytes -> ~8,163 tokens, comfortably under
 UV_SKILL_UNDER="$T/skill/under.md"
 UV_SKILL_OVER="$T/skill/over.md"
 UV_SKILL_EDGE="$T/skill/edge.md"
 head -c 20000 /dev/zero | tr '\0' 'x' >"$UV_SKILL_UNDER"
-# 60,000 bytes -> ~24,489 tokens, comfortably over
-head -c 60000 /dev/zero | tr '\0' 'x' >"$UV_SKILL_OVER"
+# 70,000 bytes -> ~28,571 tokens, comfortably over
+head -c 70000 /dev/zero | tr '\0' 'x' >"$UV_SKILL_OVER"
 # exactly at the budget boundary. The row does integer maths, bytes*100/245, so
-# the smallest byte count that READS as 18641 is 45,671, not the 45,670 that
-# 18641*2.45 suggests: 4567000/245 truncates to 18640. Measured, not derived.
-head -c 45671 /dev/zero | tr '\0' 'x' >"$UV_SKILL_EDGE"
+# the smallest byte count that READS as 25000 is 61,250 (61,249 reads 24999). For the
+# old 18641 it was 45,671, not the 45,670 that 18641*2.45 suggests. Measured, not derived.
+head -c 61250 /dev/zero | tr '\0' 'x' >"$UV_SKILL_EDGE"
 
 # --- mods-api fixtures (F8b) ------------------------------------------------
 # Fake mods-api-drift reports, one per status the row maps. Fakes for the same reason
@@ -1072,18 +1072,18 @@ arm "skill-upstream back to PASS (control: the four arms above were not a broken
 # The boundary arm is the one worth having: "over budget" and "at budget" are
 # the two states an off-by-one confuses, and they must not read the same.
 arm "skill-budget PASS under budget" is skill-budget PASS
-arm "skill-budget PASS states the measured token figure" has skill-budget "~8163 of 18641 tokens"
+arm "skill-budget PASS states the measured token figure" has skill-budget "~8163 of 25000 tokens"
 arm "skill-budget PASS states bytes as well as tokens" has skill-budget "20000 bytes"
 arm "skill-budget PASS names the divisor and where it came from" has skill-budget "2.45 chars/token measured P9"
 PJ_HEALTH_SKILL_FX="$T/skill/over.md" run
 arm "skill-budget WARN when the file is over budget" is skill-budget WARN
-arm "skill-budget WARN states by how much" has skill-budget "~24489 tokens over budget 18641"
+arm "skill-budget WARN states by how much" has skill-budget "~28571 tokens over budget 25000"
 arm "skill-budget WARN says to cut narrative before a measurement" has skill-budget "never a measurement"
 arm "skill-budget WARN is NOT a FAIL (a skill body is per-use, not per-session)" [ "$(st skill-budget)" != FAIL ]
 arm "skill-budget WARN does not fail the whole run on its own" [ "$RC" -eq 0 ]
 PJ_HEALTH_SKILL_FX="$T/skill/edge.md" run
 arm "skill-budget exactly AT budget is PASS, not WARN" is skill-budget PASS
-arm "and the boundary really is the budget value" has skill-budget "~18641 of 18641 tokens"
+arm "and the boundary really is the budget value" has skill-budget "~25000 of 25000 tokens"
 PJ_HEALTH_SKILL_FX="$T/skill/no-such-file.md" run
 arm "skill-budget NOT MEASURED when the file is absent" is skill-budget "$NM"
 arm "skill-budget NOT MEASURED says nothing was weighed, rather than reading 0" has skill-budget "nothing was weighed"
