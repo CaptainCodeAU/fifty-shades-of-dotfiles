@@ -1,0 +1,75 @@
+#!/bin/sh
+# herdr-ensure-workspace -- give a headless herdr server one workspace when it has none.
+#
+# WHY (Gavin, dotfiles-main Q18 v2: 1, 18 Oct 2026): the Mac's sidebar shows a saved
+# machine only through that machine's workspaces and agents. codebox's herdr server
+# starts EMPTY after every refresh or re-golden (the golden holds no workspace), so
+# codebox vanished from the sidebar even with a working login. Measured that day: 11
+# workspaces on the Mac, 0 on codebox, with the same `workspace list` command.
+#
+# Run by herdr.service as ExecStartPost (Linux, systemd user unit). It does nothing
+# when herdr's saved session lists any workspace, because the server restores those
+# itself a moment after it starts; counting live workspaces at that moment could read
+# 0 and open a duplicate. Only with no saved workspaces does it wait for the server
+# and open one, in $HOME, not focused, with no label (a label is permanent,
+# `workspace rename` rules in the herdr skill).
+#
+# Never fails the unit: every path exits 0 and says on stderr (the journal) what it
+# did. --dry-run prints the decision and changes nothing.
+#
+#   herdr-ensure-workspace [--dry-run]
+
+dry=false
+[ "${1:-}" = "--dry-run" ] && dry=true
+
+say() { printf 'herdr-ensure-workspace: %s\n' "$*" >&2; }
+
+command -v herdr >/dev/null 2>&1 || { say "no herdr on PATH; nothing done"; exit 0; }
+command -v jq >/dev/null 2>&1 || { say "no jq on PATH; nothing done"; exit 0; }
+
+session="${HERDR_CONFIG_DIR:-$HOME/.config/herdr}/session.json"
+saved=0
+if [ -s "$session" ]; then
+    saved=$(jq '.workspaces | length' "$session" 2>/dev/null) || saved=""
+    if [ -z "$saved" ]; then
+        say "could not read $session; leaving it to herdr's own restore; nothing done"
+        exit 0
+    fi
+fi
+if [ "$saved" -gt 0 ]; then
+    say "saved session lists $saved workspace(s); herdr restores them; nothing done"
+    exit 0
+fi
+
+# No saved workspace: wait (up to 20 s) for the server to answer.
+i=0
+while [ "$i" -lt 40 ]; do
+    herdr status server --json 2>/dev/null | jq -e '.running == true' >/dev/null 2>&1 && break
+    sleep 0.5
+    i=$((i + 1))
+done
+if [ "$i" -ge 40 ]; then
+    say "server did not answer within 20 s; nothing done"
+    exit 0
+fi
+
+live=$(herdr workspace list 2>/dev/null | jq '.result.workspaces | length' 2>/dev/null)
+if [ -z "$live" ]; then
+    say "could not count live workspaces; nothing done"
+    exit 0
+fi
+if [ "$live" -gt 0 ]; then
+    say "server already has $live workspace(s); nothing done"
+    exit 0
+fi
+
+if [ "$dry" = true ]; then
+    say "[dry-run] no saved and no live workspace: would run herdr workspace create --cwd $HOME --no-focus"
+    exit 0
+fi
+if herdr workspace create --cwd "$HOME" --no-focus >/dev/null 2>&1; then
+    say "no workspace saved or live; opened one in $HOME"
+else
+    say "workspace create failed; nothing done"
+fi
+exit 0

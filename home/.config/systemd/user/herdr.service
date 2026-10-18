@@ -33,6 +33,12 @@ StartLimitBurst=5
 Type=simple
 ExecStart=%h/.local/bin/herdr server
 ExecReload=%h/.local/bin/herdr server reload-config
+# A server that starts with no saved workspace (codebox after every refresh or
+# re-golden) gets one, so a Mac that saved this box as a herdr machine can see it
+# in the sidebar (Gavin, dotfiles-main Q18 v2: 1, 18 Oct 2026). It does nothing
+# when the saved session lists workspaces, and always exits 0; the leading "-"
+# keeps even a missing script from failing the unit. Its log is in the journal.
+ExecStartPost=-%h/.local/bin/herdr-ensure-workspace
 Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=HOME=%h
 Restart=on-failure
