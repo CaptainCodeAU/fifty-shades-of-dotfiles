@@ -31,7 +31,8 @@
 #   pj-ping missing            nothing sent. Logged.
 # Missing afplay, imsg or IMSG_TO are pj-ping's to handle and log.
 #
-# STATE: ${PJ_PING_STATE_DIR:-${XDG_STATE_HOME:-~/.local/state}/pj}
+# STATE: ${PJ_PING_STATE_DIR:-${ENGAGE_ACCOUNT_ROOT:-~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear}/engine-room/pj-state}
+#   (B12a part 4, Gavin's Q83: 1, 19 Oct 2026: never ~/.local/state/pj, which retires in B12)
 #   question-ping.log     one line per decision, with the ping id (never the text)
 #   question-ping/<key>   epoch of the last ping for that session (debounce)
 #   ping.log              pj-ping's own log, keyed by the same id
@@ -44,7 +45,7 @@
 # real ones. Exit 0 = all pass.
 
 DEBOUNCE="${PJ_PING_DEBOUNCE:-20}"
-STATE_DIR="${PJ_PING_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
+STATE_DIR="${PJ_PING_STATE_DIR:-${ENGAGE_ACCOUNT_ROOT:-$HOME/CODE/CaptainCodeAU/CaptainCodeAU-isolinear}/engine-room/pj-state}"
 LOG_FILE="$STATE_DIR/question-ping.log"
 STAMP_DIR="$STATE_DIR/question-ping"
 
@@ -251,6 +252,16 @@ EOF
   elif grep -q 'pinged' "$root"/state-main/question-ping.log 2>/dev/null && grep -q 'queued' "$root"/state-main/ping.log 2>/dev/null; then
     ok "16 logs record decisions and ids, never the question text (control: 'pinged' and 'queued' found)"
   else bad "16 control: no 'pinged'/'queued' line in the main logs" "$(cat "$root"/state-main/*.log 2>/dev/null)"; fi
+
+  # 17. B12a part 4 (19 Oct 2026): with PJ_PING_STATE_DIR and XDG_STATE_HOME unset, the hook's
+  # state is engage's (<account>/engine-room/pj-state), never ~/.local/state/pj.
+  fh="$root/b12a-home"; fa="$root/b12a-account"; mkdir -p "$fh" "$fa"
+  export PJ_PING_FAKE_LOG="$root/fake-b12a.log"; : >"$PJ_PING_FAKE_LOG"
+  out="$(printf '%s' "$(payload sid-b12a Delivery "$Q")" | env -u PJ_PING_STATE_DIR -u XDG_STATE_HOME HOME="$fh" ENGAGE_ACCOUNT_ROOT="$fa" "$hook" 2>&1)"; rc=$?
+  wait_lines 8
+  [ "$rc" -eq 0 ] && [ -s "$fa/engine-room/pj-state/question-ping.log" ] && [ ! -e "$fh/.local/state/pj" ] \
+    && ok "17 no state variable set: question-ping.log lands in engage's pj-state, nothing under ~/.local/state/pj" \
+    || bad "17 default state folder" "rc=$rc engage-log=$([ -s "$fa/engine-room/pj-state/question-ping.log" ] && echo yes || echo no) old-folder=$([ -e "$fh/.local/state/pj" ] && echo EXISTS || echo absent)"
 
   printf 'pj-question-ping selftest: %d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]

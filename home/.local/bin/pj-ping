@@ -86,7 +86,9 @@ set -u
 
 ALPHABET="ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 SOUNDS_DIR="/System/Library/Sounds"
-STATE_DIR="${PJ_PING_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
+# B12a part 4 (wean-off-pj, Gavin's Q83: 1, 19 Oct 2026): the default is engage's state folder,
+# never ~/.local/state/pj, which retires in B12 once nothing writes there.
+STATE_DIR="${PJ_PING_STATE_DIR:-${ENGAGE_ACCOUNT_ROOT:-$HOME/CODE/CaptainCodeAU/CaptainCodeAU-isolinear}/engine-room/pj-state}"
 LOG_FILE="${PJ_PING_LOG:-$STATE_DIR/ping.log}"
 
 usage() { sed -n '2,/^# `pj-ping --selftest`/p' "$0" | sed 's/^# \{0,1\}//'; }

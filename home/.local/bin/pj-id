@@ -72,7 +72,10 @@ set -uo pipefail
 MACHINE_FILE="${PJ_MACHINE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/pj/machine}"
 # $HOME spelled out, no XDG_STATE_HOME: two shells that disagreed about XDG would claim in
 # two folders and the race protection would silently be gone.
-CLAIMS_DIR="${PJ_ID_CLAIMS_DIR:-$HOME/.local/state/pj/ids}"
+# B12a part 4 (wean-off-pj, Gavin's Q83: 1, 19 Oct 2026): engage's state folder, never
+# ~/.local/state/pj, which retires in B12. Safe to move: claims are per day and only ADD to the
+# scan of the stores, and none in the old folder is dated 19 Oct.
+CLAIMS_DIR="${PJ_ID_CLAIMS_DIR:-${PJ_STATE_DIR:-${ENGAGE_ACCOUNT_ROOT:-$HOME/CODE/CaptainCodeAU/CaptainCodeAU-isolinear}/engine-room/pj-state}/ids}"
 
 refuse(){ printf 'pj-id: REFUSED -- %s\n' "$1" >&2; exit 2; }
 usage(){ sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; }
@@ -369,6 +372,17 @@ selftest(){
     out="$(cat "$tmp"/race-on98-*/P.id "$tmp"/race-on98-*/Q.id 2>/dev/null | tr -d '\n' | grep -o "W-$day-A100" | wc -l | tr -d ' ')"
     [ "$out" = "$trials" ] && ok "  and every trial minted exactly one -A100 (the boundary really was crossed)" || fail "  -A100 minted $out times in $trials trials"
   fi
+
+  # B12a part 4 (19 Oct 2026): with no claim folder set, claims go to engage's state folder
+  # (PJ_STATE_DIR, else <account>/engine-room/pj-state), never ~/.local/state/pj. A real-shaped
+  # machine file inside a fixture HOME, so the fixture-machine guard is not what answers.
+  mkdir -p "$tmp/b12a-home/.config/pj" "$tmp/b12a-acct"; printf 'name: b12a-box\nletter: A\n' > "$tmp/b12a-home/.config/pj/machine"
+  out="$(env -u PJ_MACHINE_FILE -u PJ_ID_CLAIMS_DIR -u PJ_STATE_DIR -u XDG_CONFIG_HOME HOME="$tmp/b12a-home" ENGAGE_ACCOUNT_ROOT="$tmp/b12a-acct" "$0" claim W "$tmp/s" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && [ -e "$tmp/b12a-acct/engine-room/pj-state/ids/$out" ] && [ ! -e "$tmp/b12a-home/.local/state/pj" ] \
+    && ok "B12a: no claim folder set: the claim lands in <account>/engine-room/pj-state/ids, nothing under ~/.local/state/pj" \
+    || fail "B12a default claim folder: rc=$rc out='$out' old-folder=$([ -e "$tmp/b12a-home/.local/state/pj" ] && echo EXISTS || echo absent)"
+  out="$(env -u PJ_MACHINE_FILE -u PJ_ID_CLAIMS_DIR -u XDG_CONFIG_HOME HOME="$tmp/b12a-home" PJ_STATE_DIR="$tmp/b12a-state" "$0" claim W "$tmp/s" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && [ -e "$tmp/b12a-state/ids/$out" ] && ok "B12a: PJ_STATE_DIR set: the claim lands in \$PJ_STATE_DIR/ids" || fail "B12a PJ_STATE_DIR claim folder: rc=$rc out='$out'"
 
   if [ "$fails" -eq 0 ]; then echo "pj-id --selftest: all arms pass"; return 0; fi
   echo "pj-id --selftest: FAILURES above"; return 1

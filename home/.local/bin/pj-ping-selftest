@@ -327,5 +327,14 @@ else
     && ok "17 control: PJ_PING_PAIR_GAP=6 lengthens it (${g2}s), so the floor arm is not just ignoring the variable" || bad "17 pair gap lengthen" "pause=${g2}s"
 fi
 
+# 18. B12a part 4 (19 Oct 2026): with PJ_PING_STATE_DIR and XDG_STATE_HOME unset, the state
+# folder is engage's (<account>/engine-room/pj-state), never ~/.local/state/pj.
+FH="$ROOT/b12a-home"; FA="$ROOT/b12a-account"; mkdir -p "$FH" "$FA"
+export PJ_PING_FAKE_LOG="$ROOT/fake-b12a.log"; : >"$PJ_PING_FAKE_LOG"
+OUT="$(env -u PJ_PING_STATE_DIR -u XDG_STATE_HOME HOME="$FH" ENGAGE_ACCOUNT_ROOT="$FA" "$TOOL" question "B12a default folder" 2>"$ROOT/err")"; RC=$?
+[ "$RC" -eq 0 ] && [ -s "$FA/engine-room/pj-state/ping.log" ] && [ ! -e "$FH/.local/state/pj" ] \
+  && ok "18 no state variable set: ping.log lands in engage's pj-state, nothing under ~/.local/state/pj" \
+  || bad "18 default state folder" "rc=$RC engage-log=$([ -s "$FA/engine-room/pj-state/ping.log" ] && echo yes || echo no) old-folder=$([ -e "$FH/.local/state/pj" ] && echo EXISTS || echo absent)"
+
 printf 'pj-ping-selftest: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
