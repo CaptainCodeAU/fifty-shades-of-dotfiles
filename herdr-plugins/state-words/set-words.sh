@@ -75,9 +75,10 @@ DONE_WORD="👉"
 # herdr keeps U+200B: reported and read back with pane get, 19 Oct.
 IDLE_WORD=$(printf '\360\237\221\211\342\200\213')
 BLOCKED_WORD="needs you"
-RESTING_WORD="resting"
+# 20 Oct, 12:35 AM (Gavin): "resting" is the 💤 emoji instead of the word.
+RESTING_WORD="💤"
 # Every idle word this script uses or has used; a pane holding one is ours.
-OUR_IDLE_WORDS="your turn|╰ your turn|└ your turn|╰ resting|$(printf 'your turn\342\200\213')|$(printf '\360\237\253\265\342\200\213')|$IDLE_WORD|resting"
+OUR_IDLE_WORDS="your turn|╰ your turn|└ your turn|╰ resting|$(printf 'your turn\342\200\213')|$(printf '\360\237\253\265\342\200\213')|$IDLE_WORD|resting|💤"
 BAR="│"
 # resting is not a herdr state: it is idle or done with no 👉 in the last reply.
 STATES="working done idle blocked unknown resting"
