@@ -287,7 +287,15 @@ offcase "on: no" ENGAGE_PING_NTFY_CONF="$ROOT/conf/off.conf"
 offcase "no setting file" ENGAGE_PING_NTFY_CONF="$ROOT/conf/no-such-file"
 offcase "no gateway line anywhere" ENGAGE_PING_NTFY_CONF="$ROOT/conf/on-nogw.conf"
 if [ -f "$SHIPPED" ]; then
-  offcase "the shipped ntfy.conf" ENGAGE_PING_NTFY_CONF="$SHIPPED"
+  # B13 part 3 (Gavin, 20 Oct 2026): the shipped file says on: yes. Every other arm pins the
+  # gateway to a missing file, so the shipped file is tested here with and without one.
+  grep -Eqx 'on:[[:space:]]*yes' "$SHIPPED" && ok "8 the shipped ntfy.conf says on: yes" || bad "8 the shipped ntfy.conf is not on" "$(cat "$SHIPPED")"
+  arm shipped-on
+  ENGAGE_PING_NTFY_CONF="$SHIPPED" ENGAGE_PING_GATEWAY_CONF="$ROOT/conf/gateway.local" run done "d"
+  [ "$(nof curl)" -eq 1 ] && [ "$(nof imsg)" -eq 0 ] && ok "8 the shipped file with a gateway: one post, no imsg" || bad "8 shipped file with a gateway" "calls=$(calls)"
+  arm shipped-nogw
+  ENGAGE_PING_NTFY_CONF="$SHIPPED" ENGAGE_PING_GATEWAY_CONF="$ROOT/conf/no-such-file" run done "d"
+  [ "$(nof curl)" -eq 0 ] && [ "$(nof imsg)" -eq 1 ] && ok "8 the shipped file with no gateway stays off: no curl, one imsg" || bad "8 shipped file with no gateway" "calls=$(calls)"
   grep -Eq '^[[:space:]]*gateway:' "$SHIPPED" \
     && bad "8 the shipped ntfy.conf holds a gateway: line" "$(cat "$SHIPPED")" || ok "8 the shipped ntfy.conf holds no gateway: line (Q31: the address lives in dot-private)"
 else bad "8 INVALID TRIAL: the shipped ntfy.conf is missing" "$SHIPPED"; fi
