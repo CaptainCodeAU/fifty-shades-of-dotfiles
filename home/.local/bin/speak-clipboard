@@ -240,6 +240,11 @@
 #                                repeat (busy); a --stdin one never is. With no
 #                                line to join (an older speaker, or the say
 #                                fallback) it replaces the speech instead
+#   speak-clipboard --tag ID     with a press, --queue or --toggle: write a start
+#                                and an end mark for each part of this text as
+#                                it is heard (see LOGS). ID: 1-64 letters,
+#                                digits, _ and -, not starting with -; else
+#                                exit 3. Without --tag nothing is written
 #   speak-clipboard --stop       stop all speech and clear the line; never
 #                                starts speech (idle: does nothing). Waits up
 #                                to 6 s for a press still running, never busy
@@ -346,6 +351,22 @@
 # fed=0.40s": fed is when its first audio reached the player, "no" if never);
 # speak-render.log has what say2, ffplay and the line player said.
 #
+# speak-events.jsonl (#3510, button_bunny-main Q257-a): only a --tag press
+# writes it, for t33remap to follow the voice. One JSON line per part per
+# event, appended, never trimmed, never any text:
+#   {"id":"sec-1","part":2,"event":"start","t":1792473601.123}
+# part counts the parts of that press from 1 (the text is cut into parts at
+# each breath, beat and rest); t is epoch seconds. The line player writes
+# "start" when ffplay's clock passes the part's first sample (after its
+# silence) and "end" when it passes the last, or when ffplay exits at the
+# end of the line, or at a --skip. A queued press marks its own parts with
+# its own id. Each mark is one open, append and close without waiting, so a
+# reader that is stuck loses marks and never holds the voice. No marks: a
+# part never heard (it failed, or the line ended first), the say fallback
+# (no line player), and the end of the part playing at a --stop or a
+# replacing press, which kill the player at once. SPEAK_CLIPBOARD_EVENTS=PATH
+# moves the file (for a test; no tab or newline, else exit 3).
+#
 # EXIT CODES
 #    0  done: spoke, queued, stopped, skipped, printed, or a settings command
 #       worked; also "busy": another press was still running, or a --queue
@@ -360,7 +381,8 @@
 #    3  bad value: rate not 1-700, volume not 0-100 (no leading zeros),
 #       notify not on/off, a pause not none/short/sentence/500-5000,
 #       lead_in not 0-2000, no voice with that number, a --voice that is
-#       another option or over 100 characters, --queue not 0-5000, or a
+#       another option or over 100 characters, --queue not 0-5000, a
+#       --tag id that is not 1-64 letters, digits, _ and -, or a
 #       profile name that is not allowed, already taken, or the last one
 #    4  the settings file could not be read or written, or another command
 #       held it for 5 s; a file that cannot be read is never written over
@@ -443,6 +465,7 @@
 #                          and when its first audio went in ("-" until
 #                          then), for a stop to log (Q8)
 #   speak-queue.time       when the last --queue press ran (key repeat check)
+#   speak-events.jsonl     --tag's start and end marks per part (LOGS above)
 #   speak-clipboard.flock  empty; flock'd for one run of this script
 #   (speak-render.hash and a speak-clipboard.lock/ folder are pre-v4.5
 #    leftovers, no longer read or written)
@@ -522,6 +545,8 @@ cli_notify="${_SPEAK_CLIPBOARD_NOTIFY:-}"     # on/off for this command only, or
 cli_profile=""
 queue=0
 queue_delay=0
+cli_tag=""                                    # --tag ID: marks per part (#3510)
+tag_set=0
 profile_arg=""                                # NAME for --new-profile / --remove-profile
 
 # A mistake in the command is recorded here, not reported: the message is
@@ -577,6 +602,8 @@ while [ $# -gt 0 ]; do
         # is not another option; "-5" counts as a (bad) gap, not an option.
         --queue) queue=1; shift
                  case "${1:-}" in ''|--*|-h) ;; *) queue_delay="$1"; shift ;; esac ;;
+        --tag)   [ $# -ge 2 ] || { _fail 2 "--tag needs an id: letters, digits, _ and -, up to 64"; break; }
+                 cli_tag="$2"; tag_set=1; shift 2 ;;
         --profile) [ $# -ge 2 ] || { _fail 2 "--profile needs a name: speak-clipboard --profiles lists them"; break; }
                    [ -n "$2" ] || { _fail 2 "--profile needs a name: speak-clipboard --profiles lists them"; break; }
                    cli_profile="$2"; shift 2 ;;
@@ -653,6 +680,15 @@ if [ "$voice_set" = 1 ] && { case "$voice" in -*) true ;; *) ! _valid_voice "$vo
 fi
 if [ -n "$cli_profile" ] && ! _valid_profile_name "$cli_profile"; then
     _fail 3 "--profile takes a profile name (letters, digits, _ and -), not '$cli_profile'"
+fi
+# The id goes into the events file as it is, so only these characters,
+# spelled out: a range such as A-Z can match more under some locales.
+_valid_tag() {
+    case "$1" in ''|-*|*[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-]*) return 1 ;; esac
+    [ ${#1} -le 64 ]
+}
+if [ "$tag_set" = 1 ] && ! _valid_tag "$cli_tag"; then
+    _fail 3 "--tag takes an id of 1-64 letters, digits, _ and -, not starting with -, not '$cli_tag'"; cli_tag=""
 fi
 if [ "$queue" = 1 ] && ! _valid_delay "$queue_delay"; then
     _fail 3 "--queue takes a gap in whole milliseconds 0-5000, or nothing (0), not '$queue_delay'"
@@ -876,6 +912,12 @@ _fifo="$_state_dir/speak-line.fifo"
 _line_lock="$_state_dir/speak-line.flock"
 _sound_file="$_state_dir/speak-line.sound"
 _queue_time="$_state_dir/speak-queue.time"
+# --tag's marks (#3510). SPEAK_CLIPBOARD_EVENTS moves the file, for a
+# test; the path goes to the player on one line, so no tab or newline.
+_events_file="${SPEAK_CLIPBOARD_EVENTS:-$_state_dir/speak-events.jsonl}"
+case "$_events_file" in *$'\t'*|*$'\n'*)
+    [ "$tag_set" = 0 ] || _fail 3 "SPEAK_CLIPBOARD_EVENTS holds a tab or a newline: give a plain path" ;;
+esac
 _engine_cache_ttl=86400
 _max_chars=8000
 # The selftest never touches the real state (its arms get their own).
@@ -1528,11 +1570,15 @@ skip_speaker() {
 # A beat (\x07, 14 Oct, Gavin: before each list item) and a rest (\x01,
 # 14 Oct, Gavin, Q10: after a list) are the same cut with $_beat_gap_ms
 # and $_rest_gap_ms in front.
+# With --tag (#3510), an M line goes before each V line: the id, the
+# part's number in this press (from 1) and the events file. The player
+# writes that part's start and end marks there. A player from before
+# #3510 skips an M line, as it skips any line that is not a V.
 _breath_gap_ms=200
 _beat_gap_ms=350
 _rest_gap_ms=600
 _send_voice() {
-    local gap="$1" part rest="$text" mark cut
+    local gap="$1" part rest="$text" mark cut n=0
     mark="${rest:0:1}"
     case "$mark" in
         $'\x01') cut="$_rest_gap_ms" ;;
@@ -1546,6 +1592,8 @@ _send_voice() {
     fi
     while :; do
         part="${rest%%[$'\x01\x06\x07']*}"
+        n=$((n + 1))
+        [ -z "$cli_tag" ] || printf 'M\t%s\t%s\t%s\n' "$cli_tag" "$n" "$_events_file"
         printf 'V\t%s\t%s\t%s\t%s\t%s\n' "$gap" "$_engine_voice" "$rate" "$volume" "$part"
         [ "$part" != "$rest" ] || break
         mark="${rest:${#part}:1}"; rest="${rest:$((${#part} + 1))}"
@@ -2068,13 +2116,15 @@ clean_input() {
 read -r -d '' _player_pl <<'PERL' || true
 use strict; use warnings;
 use POSIX ();
-use Fcntl qw(:flock F_GETFL F_SETFL F_SETFD FD_CLOEXEC O_NONBLOCK);
+use Fcntl qw(:flock F_GETFL F_SETFL F_SETFD FD_CLOEXEC O_NONBLOCK O_WRONLY O_APPEND O_CREAT);
 use Time::HiRes qw(time);
 
 # fd 3 is the line's named pipe, opened read-write by the press that
 # started this player, so it never reads end-of-file and no press blocks
 # opening it. One message per line:
 #   V <tab> gap-ms <tab> voice <tab> rate <tab> volume <tab> text
+# and, before a V from a --tag press (#3510), its marks:
+#   M <tab> id <tab> part <tab> events file
 # Arguments: a name for ps, speak-line.flock, and how long a say2 may send
 # nothing before its voice is dropped.
 my ($lock_path, $render_timeout, $trace_path, $sound_path) = @ARGV[1 .. 4];
@@ -2131,6 +2181,8 @@ sub sound_state {
 }
 sound_state();
 
+my $mark;         # an M line's marks, for the V line after it
+
 # Returns how many voices came in. A voice's gap is silence at its front,
 # 96 bytes of zero samples per ms, exact to the sample; it goes in with
 # the voice's first audio, so a voice that renders nothing leaves no gap.
@@ -2142,10 +2194,16 @@ sub read_pipe {
         $msgs .= $b;
     }
     while ($msgs =~ s/^([^\n]*)\n//) {
-        my ($tag, $gap, $voice, $rate, $vol, $text) = split /\t/, $1, 6;
+        my $l = $1;
+        if ($l =~ /^M\t([A-Za-z0-9_-]{1,64})\t(\d+)\t([^\t]+)$/) {
+            $mark = { id => $1, part => $2, path => $3 };
+            next;
+        }
+        my ($tag, $gap, $voice, $rate, $vol, $text) = split /\t/, $l, 6;
         next unless defined $text && $tag eq 'V';
         push @v, { voice => $voice, rate => $rate, f => $vol / 100, text => $text,
-                   gap => 96 * $gap, buf => '', pos => 0, carry => '' };
+                   gap => 96 * $gap, buf => '', pos => 0, carry => '', len => 0, mark => $mark };
+        $mark = undef;
         $new++;
     }
     return $new;
@@ -2191,6 +2249,7 @@ sub read_render {
     $b = pack('s<*', map { int($_ * $x->{f}) } unpack('s<*', $b)) if $x->{f} != 1;
     if (!$x->{got}) { $x->{got} = 1; $b = ("\0" x $x->{gap}) . $b }
     $x->{buf} .= $b;
+    $x->{len} += length $b;
 }
 
 # A say2 that sends nothing for $render_timeout seconds is stopped and its
@@ -2326,6 +2385,36 @@ sub check_sound {
               . (defined $ff{clock} ? '' : ' clock=guess'));
 }
 
+# --tag's marks (#3510): one line when a part is heard (ffplay's clock
+# passes its first sample, after its gap) and one when it has played (the
+# clock passes its last). Opened, appended and closed each time, with
+# O_NONBLOCK, so a file that is a pipe nobody reads, or one that cannot
+# be opened, loses the mark and never holds the voice. No words, ever.
+sub event {
+    my ($m, $what) = @_;
+    $m->{$what} = 1;
+    sysopen(my $fh, $m->{path}, O_WRONLY | O_APPEND | O_CREAT | O_NONBLOCK, 0644) or return;
+    syswrite($fh, sprintf(qq({"id":"%s","part":%d,"event":"%s","t":%.3f}\n), $m->{id}, $m->{part}, $what, time));
+    close $fh;
+}
+# In voice order, so a part's end is never written before its start, nor
+# a later part's start before it.
+sub marks {
+    return unless $ff{pid};
+    my $played = ff_played() * $BPS;
+    for my $x (@v) {
+        my $m = $x->{mark};
+        next if !$m || $m->{end} || $x->{gone};
+        last unless defined $x->{start};
+        if (!$m->{start}) {
+            last unless $played > $x->{start} + $x->{gap};
+            event($m, 'start');
+        }
+        last unless $x->{done} && $played >= $x->{start} + $x->{len};
+        event($m, 'end');
+    }
+}
+
 # Writes the current voice into ffplay as it renders. A voice after the
 # first waits until the one before has less than $LEAD left, so the one
 # you hear is the only one in ffplay's buffer and --skip can take it alone.
@@ -2384,6 +2473,7 @@ sub audible {
 sub drop {
     my $p = shift;
     my $x = $v[$p];
+    event($x->{mark}, 'end') if $x->{mark} && $x->{mark}{start} && !$x->{mark}{end};
     if (defined $x->{start}) {
         ff_kill();
         for my $y (@v[0 .. $p - 1]) { $y->{buf} = ''; delete $y->{start} }
@@ -2472,11 +2562,22 @@ sub finish {
             my $rin = ''; vec($rin, fileno($ff{err}), 1) = 1;
             select(my $rout = $rin, undef, undef, 0.05);
             ff_read_err();
+            marks();
         }
         kill 'KILL', $ff{pid} if waitpid($ff{pid}, POSIX::WNOHANG()) == 0;
         waitpid($ff{pid}, 0);
+        # ffplay has played its input out: a part written into it and not
+        # yet marked was heard to its end.
+        for my $x (@v) {
+            my $m = $x->{mark};
+            next if !$m || $m->{end} || $x->{gone} || !defined $x->{start};
+            event($m, 'start') unless $m->{start};
+            event($m, 'end');
+        }
     } else {
         ff_kill();
+        # A failure: what was heard has stopped; what was not gets no mark.
+        for my $x (@v) { event($x->{mark}, 'end') if $x->{mark} && $x->{mark}{start} && !$x->{mark}{end} }
     }
     for my $x (@v) { kill 'KILL', $x->{pid} if $x->{pid} }
     exit $rc;
@@ -2515,6 +2616,7 @@ while (1) {
         next;
     }
     check_sound();
+    marks();
     check_restart();
     check_stall();
     free_played();
@@ -2740,7 +2842,7 @@ STANDIN
         local w
         for w in STANDIN_MS_PER_CHAR STANDIN_VOICES STANDIN_SAY2_SLOW STANDIN_SAY2_FAIL STANDIN_SAY2_HANG \
                  STANDIN_FFPLAY_QUIET STANDIN_FFPLAY_NAN STANDIN_FFPLAY_FREEZE_AT STANDIN_FFPLAY_DIE_AT STANDIN_FFPLAY_STUCK \
-                 STANDIN_OSASCRIPT_FAIL LC_ALL _SPEAK_CLIPBOARD_RENDER_TIMEOUT SPEAK_SOURCE _SPEAK_CLIPBOARD_OS; do
+                 STANDIN_OSASCRIPT_FAIL LC_ALL _SPEAK_CLIPBOARD_RENDER_TIMEOUT SPEAK_SOURCE _SPEAK_CLIPBOARD_OS SPEAK_CLIPBOARD_EVENTS; do
             if eval "[ -n \"\${$w+x}\" ]"; then eval "pe+=(\"$w=\${$w}\")"; fi
         done
         env -i HOME="$T/home" TMPDIR="$T/tmp" PATH="$bin:$T/sys" XDG_CONFIG_HOME="$A/cfg" \
@@ -3393,6 +3495,75 @@ notify=off
     _ok "a voice 6 s late plays whole: no stall from ffplay's start" eval '[ "$(_runs 1)" = "7000*$n1" ] && _lacks "$(_render_log)" "clock has not moved"'
     unset STANDIN_MS_PER_CHAR
 
+    echo "Start and end marks per part (--tag, #3510)"
+    # Six parts: cut by two breaths, two beats and a rest.
+    _txt6() { printf 'Aa.\n```\nx\n```\nBb.\n- bb.\n- cc.\nDd.\n'; }
+    local runs6="7000*$(_n 3 20) 0*9600 7000*$(_n 35 20) 0*9600 7000*$(_n 3 20) 0*16800 7000*$(_n 3 20) 0*16800 7000*$(_n 3 20) 0*28800 7000*$(_n 3 20)"
+    _ev_file() { echo "$A/state/herdr/speak-events.jsonl"; }
+    # "id:part:event" for every mark in an events file, in order.
+    _ev_seq() { perl -ne 'print "$1:$2:$3 " if /^\{"id":"([^"]*)","part":(\d+),"event":"(start|end)","t":\d+\.\d{3}\}$/' "${1:-$(_ev_file)}" 2>/dev/null; }
+    # Every line that is not exactly one mark; nothing when all are.
+    _ev_bad() { perl -ne 'print unless /^\{"id":"[A-Za-z0-9_-]{1,64}","part":\d+,"event":"(?:start|end)","t":\d+\.\d{3}\}$/' "${1:-$(_ev_file)}" 2>/dev/null; }
+    # Whole ms from mark $1 to mark $2, each "id:part:event"; fails if either is missing.
+    _ev_ms() {
+        perl -e 'my ($x, $y, $f) = @ARGV; my %t; open(my $fh, "<", $f) or exit 1;
+                 while (<$fh>) { $t{"$1:$2:$3"} = $4 if /"id":"([^"]*)","part":(\d+),"event":"(\w+)","t":([\d.]+)/ }
+                 exit 1 unless defined $t{$x} && defined $t{$y}; printf "%d\n", ($t{$y} - $t{$x}) * 1000' "$1" "$2" "$(_ev_file)"
+    }
+    _st_arm tag; _st_file "$P2"
+    _txt6 | STANDIN_MS_PER_CHAR=20 _st --stdin --tag sec-1 >/dev/null 2>&1; rc=$?; _st_idle
+    _ok "--tag: the press speaks as it did before (exit 0, the same six voices)" eval '[ "$rc" = 0 ] && [ "$(_runs 1)" = "$runs6" ]'
+    _ok "...one start and one end per part, in order, with the id (breath, beat and rest cuts)" \
+        [ "$(_ev_seq)" = "sec-1:1:start sec-1:1:end sec-1:2:start sec-1:2:end sec-1:3:start sec-1:3:end sec-1:4:start sec-1:4:end sec-1:5:start sec-1:5:end sec-1:6:start sec-1:6:end " ]
+    _ok "...every line is exactly one mark: id, part, event and t to 3 decimals" eval '[ -s "$(_ev_file)" ] && [ -z "$(_ev_bad)" ]'
+    _ok "...a start is when the part is heard: part 4 starts 250 ms or more after part 3 ends (its 350 ms beat)" \
+        eval 'v="$(_ev_ms sec-1:3:end sec-1:4:start)" && [ "$v" -ge 250 ]'
+    _ok "...an end is when the part has played: part 2 (0.7 s of sound) lasts 0.6 to 1.5 s" \
+        eval 'v="$(_ev_ms sec-1:2:start sec-1:2:end)" && [ "$v" -ge 600 ] && [ "$v" -le 1500 ]'
+    _ok "...and no word of the text is in the file (the id is, as a control)" \
+        eval 'grep -qs "sec-1" "$(_ev_file)" && ! grep -qs -e "code block" -e "Dd" -e "bb" "$(_ev_file)"'
+    _st_arm tag-none; _st_file "$P2"
+    _txt6 | STANDIN_MS_PER_CHAR=20 _st --stdin >/dev/null 2>&1; _st_idle
+    _ok "no --tag: the same six voices are spoken (control)" [ "$(_runs 1)" = "$runs6" ]
+    _ok "...and no events file is made at all"               eval '[ -d "$A/state/herdr" ] && [ ! -e "$(_ev_file)" ]'
+    _st_arm tag-seam; _st_file "$P2"
+    echo "hello world" | SPEAK_CLIPBOARD_EVENTS="$A/elsewhere.jsonl" _st --stdin --tag x >/dev/null 2>&1; _st_idle
+    _ok "SPEAK_CLIPBOARD_EVENTS moves the file: the marks are there" [ "$(_ev_seq "$A/elsewhere.jsonl")" = "x:1:start x:1:end " ]
+    _ok "...and not in the default file"                     [ ! -e "$(_ev_file)" ]
+    _st_arm tag-fifo; _st_file "$P2"; mkfifo "$A/stuck.fifo"
+    echo "hello world" | SPEAK_CLIPBOARD_EVENTS="$A/stuck.fifo" _st --stdin --tag x >/dev/null 2>&1
+    _ok "an events file nobody reads (a pipe) cannot hold the voice: the line ends by itself" _st_idle
+    _ok "...having played everything"                        [ "$(_runs 1)" = "7000*$(_n 11 20)" ]
+    _st_arm tag-bad; _st_file "$P2"
+    for i in "a b" "a/b" 'a"b' "-x" "" "$(printf '%065d' 0)" "$(printf 'caf\xc3\xa9')"; do
+        echo "ab" | _st --stdin --tag "$i" >/dev/null 2>&1; rc=$?
+        _ok "--tag '${i:0:12}' exits 3"                      [ "$rc" = 3 ]
+    done
+    echo "ab" | SPEAK_CLIPBOARD_EVENTS="$(printf '%s/a\nb' "$A")" _st --stdin --tag x >/dev/null 2>&1; rc=$?
+    _ok "an events path with a newline in it exits 3"        [ "$rc" = 3 ]
+    _ok "...and none of them spoke or wrote a mark"          eval '[ ! -e "$A/standin/say2.log" ] && [ ! -e "$(_ev_file)" ]'
+    echo "ab" | _st --stdin --tag >/dev/null 2>&1; rc=$?
+    _ok "--tag with no id exits 2"                           [ "$rc" = 2 ]
+    v="$(printf '%064d' 0)"
+    echo "ab" | _st --stdin --tag "$v" >/dev/null 2>&1; rc=$?; _st_idle
+    _ok "...an id of 64 characters is allowed (control): exit 0 and its marks" eval '[ "$rc" = 0 ] && [ "$(_ev_seq)" = "$v:1:start $v:1:end " ]'
+    _st_arm tag-queue; _st_file "$P2"; _hold
+    echo "$t1" | STANDIN_MS_PER_CHAR=100 _st --stdin --tag one >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
+    echo "$t2" | STANDIN_MS_PER_CHAR=100 _st --stdin --queue --profile simone_fast >/dev/null 2>&1
+    printf '**Next.** dd ee\n' | STANDIN_MS_PER_CHAR=100 _st --stdin --queue --tag three >/dev/null 2>&1; rc=$?
+    _ok "a --queue --tag press joins the line (exit 0, queued)" eval '[ "$rc" = 0 ] && _has "$(_log_last)" "outcome=queued"'
+    _release; _st_idle
+    _ok "...it marks its own two parts with its own id; the untagged press between marks nothing" \
+        [ "$(_ev_seq)" = "one:1:start one:1:end three:1:start three:1:end three:2:start three:2:end " ]
+    _ok "...its first part starts after the voice before it (0.5 s and a 0.2 s breath)" \
+        eval 'v="$(_ev_ms one:1:end three:1:start)" && [ "$v" -ge 550 ]'
+    _st_arm tag-skip; _st_file "$P2"
+    echo "$t1" | STANDIN_MS_PER_CHAR=100 _st --stdin --tag sk >/dev/null 2>&1
+    _wait_for 5 eval '_has "$(_ev_seq)" "sk:1:start"'; _st --skip >/dev/null 2>&1; _st_idle
+    _ok "--skip on a tagged part ends it (control: the press log says skipped)" _has "$(_log_last)" "outcome=skipped"
+    _ok "...and its end is written at the skip, well before its 1.4 s" \
+        eval '[ "$(_ev_seq)" = "sk:1:start sk:1:end " ] && v="$(_ev_ms sk:1:start sk:1:end)" && [ "$v" -lt 1000 ]'
+
     echo "Locale (d78e8de: lstart follows the locale)"
     if [ "$(LC_ALL=en_AU.UTF-8 ps -o lstart= -p $$)" = "$(LC_ALL=C ps -o lstart= -p $$)" ]; then
         _skip 2 "en_AU and C print the same start time here, so the locale arms prove nothing"
@@ -3685,7 +3856,7 @@ notify=off
     _st_cleanup
     trap - EXIT INT TERM
     echo
-    local ran=$((pass + fail)) expected=287
+    local ran=$((pass + fail)) expected=315
     if [ "$fail" -eq 0 ] && [ $((ran + skipped)) -eq "$expected" ]; then
         if [ "$skipped" -eq 0 ]; then echo "speak-clipboard --selftest: all $pass checks passed.";
         else echo "speak-clipboard --selftest: all $pass checks passed, $skipped skipped (said above why)."; fi
