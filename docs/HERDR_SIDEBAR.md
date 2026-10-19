@@ -26,6 +26,21 @@ facts behind the choices and the options not taken.
 
 ## What is set now (16 Oct, updated 19 Oct)
 
+- **Agents section since 19 Oct, 11:55 PM** (Gavin, dotfiles-main, Q88: 1). This supersedes the
+  next bullet where they differ. Line 1: the state mark, the project name, a remote machine, the
+  cache timer; no tab. The project name is **gold `#ffd75f` on the focused agent's row and white
+  on the rest**: herdr cannot style a row by selection, so `herdr-plugins/state-words/focus-name.sh`
+  (on `pane.focused` and both agent events) sets `$name_on` on the one focused agent pane and
+  `$name_off` on the others, in place of herdr's `workspace` token. An agent on another machine is
+  not in this server's pane list, so its row shows no project name. Line 2: the session name, a
+  tad dimmer (`#8c8069` became `#736955`), then the state word, with no shape before it
+  (`thinking`, `your turn`, `resting`, `needs you`). The seen `your turn` ends in a zero-width
+  space (U+200B; herdr keeps it, read back 19 Oct) so a rule can colour it alone, as the square
+  corner did before. The cache timer reads `◷ 42 m` and has six bands by the minutes shown:
+  50 or more green `#5fd75f`, 40s mint `#9ef0c8`, 30s aqua `#3fe0e8`, 20s orchid `#da70d6`, 10s
+  tangerine `#ff9a3c`, under 10 crimson `#e8264a` in bold. Gavin asked for a blink under 10:
+  `herdr config check` refuses `blink = true` exactly as it refuses an unknown key, so it is bold
+  instead. engage's own words on its worker panes (`╰ waiting on e-conductor`) are engage's.
 - **Active pane border** gold `#ffd75f` (`ui.accent`); **inactive borders** a dim
   warm grey `#5c4a4a` (`theme.custom.overlay0`).
 - **Agents section, two lines a row since 19 Oct** (Gavin: "two lines acceptable"):

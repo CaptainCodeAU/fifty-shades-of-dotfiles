@@ -15,3 +15,18 @@ command = ["./set-words.sh"]
 [[events]]
 on = "pane.agent_status_changed"
 command = ["./set-words.sh"]
+
+# The gold project name on the focused agent's row (focus-name.sh; Gavin,
+# dotfiles-main Q88: 1, 19 Oct 2026). pane.focused moves the gold; the two agent
+# events give a new agent its name at its first status change.
+[[events]]
+on = "pane.focused"
+command = ["./focus-name.sh"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["./focus-name.sh"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["./focus-name.sh"]

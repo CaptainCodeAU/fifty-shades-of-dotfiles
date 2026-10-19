@@ -1,12 +1,14 @@
 #!/bin/sh
 # Sets Gavin's state words on the agent pane an event names (Gavin, 18 Oct
-# 2026, dotfiles-main Q60 and Q61), and the session name with a bar in front
-# of it, so lines 2 and 3 of the sidebar row form a bracket hanging under the
-# project name (Q64: 1):
+# 2026, dotfiles-main Q60 and Q61), and the session name. Since 19 Oct the row
+# is two lines, and since 11:55 PM that day line 2 is the session name, then the
+# word, with no shape before it:
 #
-#    ○ engage · 2
-#      │ · engage-main        <- $bar_<state> and $session tokens, this script
-#      ╰ your turn            <- state_text, this script's state labels
+#    ○ engage
+#      engage-main · your turn   <- $session token and state_text, this script
+#
+# The $bar_<state> tokens below belonged to the three-line form, which config.toml
+# keeps commented; this script still sets them so that form can come back.
 #
 # The sidebar layout is in home/.config/herdr/config.toml, [ui.sidebar.agents].
 # herdr cannot draw a border or put fixed text in a row, and it puts " · "
@@ -60,17 +62,20 @@ set -eu
 
 LABEL_SOURCE="dotfiles-state-words"
 TOKEN_SOURCE="dotfiles-state-words-box"
-WORKING_WORD="╰ thinking"
-DONE_WORD="╰ your turn"
-# Seen "your turn" (idle) uses a square corner so config.toml can colour it on
-# its own: herdr trims labels and drops control characters, and the icon and
-# word share one state colour, so a different glyph is the only way to give
-# the seen word a softer colour than its icon (Gavin, 19 Oct).
-IDLE_WORD="└ your turn"
-BLOCKED_WORD="╰ needs you"
-RESTING_WORD="╰ resting"
+# No shape before the words since 19 Oct, 11:55 PM (Gavin: "remove and get rid of that shape
+# thingy"); the session name now comes first on line 2, so nothing hangs under the project.
+WORKING_WORD="thinking"
+DONE_WORD="your turn"
+# Seen "your turn" (idle) ends in a zero-width space (U+200B), so config.toml can colour it on
+# its own: herdr trims labels and drops control characters, and the icon and word share one
+# state colour, so an invisible difference is the only way to give the seen word a softer
+# colour than its icon (Gavin, 19 Oct). Until 11:55 PM 19 Oct a square corner did this job.
+# herdr keeps U+200B: reported and read back with pane get, 19 Oct.
+IDLE_WORD=$(printf 'your turn\342\200\213')
+BLOCKED_WORD="needs you"
+RESTING_WORD="resting"
 # Every idle word this script uses or has used; a pane holding one is ours.
-OUR_IDLE_WORDS="your turn|╰ your turn|└ your turn|╰ resting"
+OUR_IDLE_WORDS="your turn|╰ your turn|└ your turn|╰ resting|$IDLE_WORD|resting"
 BAR="│"
 # resting is not a herdr state: it is idle or done with no 👉 in the last reply.
 STATES="working done idle blocked unknown resting"
