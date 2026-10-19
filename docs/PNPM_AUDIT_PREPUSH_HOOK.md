@@ -143,6 +143,7 @@ pointing at it. When git runs any hook, the chainer runs these steps in order
 | 2b   | pre-commit         | `git-leak-scan` of the staged diff                                                            | `leakscan.skip` (prefer), `leakscan.disable` |
 | 2c   | pre-commit         | `shift-lint --staged`, opt-in                                                                 | on only with `shiftlint.enable true`         |
 | 3    | prepare-commit-msg | `C-*` session lines on commits made inside a Claude Code session                              | `trailers.disable true`                      |
+| 4    | post-checkout, post-merge | a `split/<branch>/<time>` tag where a branch is created, a `join/<name>/<time>` tag where a `git merge` lands (never a pull or a squash); Q85: 1 | `branchtags.disable true` |
 
 "Fails CLOSED" means the push is refused when the scan cannot run: `git-leak-scan`
 missing, or the remote's commit not in this repo (`git fetch` first). A repo GitHub

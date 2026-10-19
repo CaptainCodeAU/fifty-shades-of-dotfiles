@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  audit-chain-selftest -- proves step 3 of _audit-chain, the C-* commit trailers
+#  audit-chain-selftest -- proves _audit-chain: the C-* commit trailers (step 3),
+#  the pre-push leak scan (step 2d) and the split and join tags (step 4)
 # ============================================================================
 # Written 2026-09-21 alongside the CLAUDE_CODE_SESSION_ID fallback (F4,
 # W-20260921-16). Until then step 3 had no test at all, which is how it ran for
@@ -305,6 +306,56 @@ printf '#!/bin/sh\ncat > "%s/local.stdin"\n' "$ROOT" > "$PREPO/.git/hooks/pre-pu
 pp stdin-check 200 0
 want '36 the repo'"'"'s own pre-push hook still gets the ref lines on stdin' 'refs/heads/stdin-check' "$(cat "$ROOT/local.stdin" 2>/dev/null)"
 want '37 so does pnpm-audit-hook' 'refs/heads/stdin-check' "$(cat "$ROOT/pnpm.stdin" 2>/dev/null)"
+
+printf '\nSPLIT AND JOIN TAGS (step 4, Gavin dotfiles-main Q85: 1)\n'
+# Real git commands in a repo whose hooksPath holds only post-checkout and post-merge
+# links, so no other step runs. Every "no tag" arm sits beside one that makes a tag.
+mkdir -p "$ROOT/taghooks"
+ln -sf "$TOOL" "$ROOT/taghooks/post-checkout"; ln -sf "$TOOL" "$ROOT/taghooks/post-merge"
+TREPO="$ROOT/home/work/tag-repo"; mkdir -p "$TREPO"
+git -C "$TREPO" init -q -b main >/dev/null 2>&1
+git -C "$TREPO" config user.email selftest@example.invalid
+git -C "$TREPO" config user.name  selftest
+git -C "$TREPO" config core.hooksPath "$ROOT/taghooks"
+tg(){ git -C "$TREPO" "$@" >/dev/null 2>&1; }
+tags(){ git -C "$TREPO" tag -l "$@" | tr '\n' ' '; }
+ntags(){ git -C "$TREPO" tag -l "$1" | wc -l | tr -d ' '; }
+tg commit -q --allow-empty -m seed
+tg switch -q -c feat
+want   '40 git switch -c: a split tag where the new branch starts' 'split/feat/' "$(tags 'split/*' --points-at HEAD)"
+want   '41   annotated, naming the branch' 'Split: branch feat starts here' "$(git -C "$TREPO" tag -l 'split/feat/*' --format='%(contents:subject)')"
+tg checkout -q -b feat2 main
+want   '42 git checkout -b: a split tag' 'split/feat2/' "$(tags 'split/feat2/*')"
+tg worktree add -q -b feat3 "$ROOT/tag-wt" main
+want   '43 git worktree add -b: a split tag' 'split/feat3/' "$(tags 'split/feat3/*')"
+sleep 1   # a later second, so a repeat tag would get a new name rather than collide
+n=$(ntags 'split/*'); tg switch -q main; tg switch -q feat
+wanteq '44 switching to branches that already exist adds no tag' "$n" "$(ntags 'split/*')"
+tg commit -q --allow-empty -m f1; tg switch -q main; tg commit -q --allow-empty -m m1
+tg merge -q --no-edit feat
+want   '45 git merge, a merge commit: a join tag on the result' 'join/feat/' "$(tags 'join/*' --points-at HEAD)"
+want   '46   annotated, naming both branches' 'Join: feat merged into main' "$(git -C "$TREPO" tag -l 'join/feat/*' --format='%(contents:subject)')"
+tg switch -q -c ffb; tg commit -q --allow-empty -m ff1; tg switch -q main
+tg merge -q --ff-only ffb
+want   '47 a fast-forward merge: a join tag' 'join/ffb/' "$(tags 'join/*' --points-at HEAD)"
+tg switch -q -c sq; printf 'x\n' > "$TREPO/sq.txt"; tg add sq.txt; tg commit -q -m sq1; tg switch -q main
+n=$(ntags 'join/*'); tg merge -q --squash sq
+wanteq '48 a squash merge, which makes no commit, adds no tag' "$n" "$(ntags 'join/*')"
+tg commit -q -m squashed
+CLONE="$ROOT/home/work/tag-clone"
+git -c core.hooksPath="$ROOT/taghooks" clone -q "$TREPO" "$CLONE" >/dev/null 2>&1
+git -C "$CLONE" config core.hooksPath "$ROOT/taghooks"
+wanteq '49 git clone adds no split tag (the clone copies the source'"'"'s tags only)' "$(ntags 'split/*')" "$(git -C "$CLONE" tag -l 'split/*' | wc -l | tr -d ' ')"
+tg commit -q --allow-empty -m m2
+n=$(git -C "$CLONE" tag -l 'join/*' | wc -l | tr -d ' ')
+git -C "$CLONE" pull -q --no-rebase --no-tags >/dev/null 2>&1
+wanteq '50 git pull adds no join tag' "$n $(git -C "$TREPO" rev-parse HEAD)" "$(git -C "$CLONE" tag -l 'join/*' | wc -l | tr -d ' ') $(git -C "$CLONE" rev-parse HEAD)"
+git -C "$TREPO" config branchtags.disable true
+tg switch -q -c off; tg switch -q main
+git -C "$TREPO" config --unset branchtags.disable
+wanteq '51 branchtags.disable true: no split tag' "" "$(tags 'split/off/*')"
+tg switch -q -c on
+want   '52   and with the knob gone, tags again' 'split/on/' "$(tags 'split/on/*')"
 
 printf '\nfixtures: %s\n' "$ROOT"
 printf 'tool: %s\n' "$TOOL"
