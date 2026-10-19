@@ -1,0 +1,123 @@
+#!/bin/bash
+# herdr-stuck-watch -- mark an agent's row "⚠ stuck" in herdr's sidebar when its Claude session
+# has stopped answering, and clear the mark when it answers again.
+#
+#   herdr-stuck-watch              one pass (launchd runs it every 15 s)
+#   herdr-stuck-watch --selftest
+#
+# Gavin, 20 Oct 2026 (dotfiles-main Q91: 1): e-b13b sat behind Claude Code's "Background work is
+# running" exit box and its row looked like any other. The signal: every local Claude session's
+# status line reports a cache timer through herdr-cache-report on every run (engage's every
+# second, a plain claude's every 30 s), idle or not, and each report lives 2 minutes
+# (--ttl-ms 120000). A dialog that holds Claude Code stops its status line, so the timer
+# vanishes 2 minutes later. A session that HAS had a timer and now has none is stuck: this sets
+# the $stuck token to "⚠ stuck" on its pane (bold red in config.toml, line 1), and clears it once
+# a timer is back.
+#
+# Never flagged: a session with no timer yet (no API call so far, or a status line without
+# herdr-cache-report), so the session ids that have shown a timer are kept in a state file and
+# only those are judged; a pane herdr already shows as blocked (herdr's own alarm); any agent
+# but claude; an agent on another machine (not in this server's pane list).
+#
+# State: ${HERDR_STUCK_STATE:-${XDG_STATE_HOME:-~/.local/state}/dotfiles/herdr-stuck}/seen, one
+# session id per line, rewritten each pass to the ids still in herdr's list. Silent and exit 0
+# without herdr or jq. Seams (selftest): HERDR_STUCK_HERDR, HERDR_STUCK_STATE.
+set -u
+PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+
+SOURCE="dotfiles-stuck-watch"
+WORD="⚠ stuck"
+
+pass() {
+    local herdr="${HERDR_STUCK_HERDR:-$(command -v herdr)}"
+    local state="${HERDR_STUCK_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/herdr-stuck}"
+    local list rows seen new pane sid status timer mark
+    [ -n "$herdr" ] && [ -x "$herdr" ] && command -v jq >/dev/null 2>&1 || return 0
+    mkdir -p "$state" 2>/dev/null || return 0
+    seen="$state/seen"; new="$state/seen.new.$$"
+    [ -f "$seen" ] || : > "$seen"
+    list=$("$herdr" pane list 2>/dev/null) || return 0
+    rows=$(printf '%s' "$list" | jq -r '.result.panes[]? | select(.agent == "claude")
+        | [.pane_id, (.agent_session.value // "-"), (.agent_status // "unknown"),
+           (if ((.tokens // {}) | keys | map(select(startswith("cache_"))) | length) > 0 then "timer" else "none" end),
+           (if ((.tokens.stuck // "") != "") then "marked" else "clear" end)] | @tsv' 2>/dev/null) || return 0
+    : > "$new"
+    while IFS=$'\t' read -r pane sid status timer mark; do
+        [ -n "$pane" ] && [ "$sid" != "-" ] || continue
+        if [ "$timer" = timer ]; then
+            printf '%s\n' "$sid" >> "$new"
+            [ "$mark" = clear ] || "$herdr" pane report-metadata "$pane" --source "$SOURCE" --agent claude --clear-token stuck >/dev/null 2>&1
+            continue
+        fi
+        grep -qxF -- "$sid" "$seen" || continue
+        printf '%s\n' "$sid" >> "$new"
+        if [ "$status" = blocked ]; then
+            [ "$mark" = clear ] || "$herdr" pane report-metadata "$pane" --source "$SOURCE" --agent claude --clear-token stuck >/dev/null 2>&1
+        elif [ "$mark" = clear ]; then
+            "$herdr" pane report-metadata "$pane" --source "$SOURCE" --agent claude --token "stuck=$WORD" >/dev/null 2>&1
+        fi
+    done <<< "$rows"
+    sort -u "$new" > "$new.s" 2>/dev/null && command mv -f "$new.s" "$seen"
+    command mv -f "$new" "$state/seen.last" 2>/dev/null
+    return 0
+}
+
+if [ "${1:-}" = "--selftest" ]; then
+    fx=$(mktemp -d "${TMPDIR:-/tmp}/herdr-stuck-watch.XXXXXX") || exit 2
+    pass_n=0 fail_n=0
+    # A fake herdr: `pane list` prints $fx/list.json; every other call is logged, one per line.
+    printf '#!/bin/bash\nif [ "$1 $2" = "pane list" ]; then cat "%s/list.json"; else printf "%%s\\n" "$*" >> "%s/calls"; fi\n' "$fx" "$fx" > "$fx/herdr"
+    chmod +x "$fx/herdr"
+    export HERDR_STUCK_HERDR="$fx/herdr" HERDR_STUCK_STATE="$fx/state"
+    pane() { # pane <id> <sid> <status> <timer yes|no> <stuck yes|no> [agent]
+        local t='{}'
+        [ "$4" = yes ] && t='{"cache_m50":"— 55"}'
+        [ "$5" = yes ] && t=$(printf '%s' "$t" | jq -c '. + {"stuck":"⚠ stuck"}')
+        jq -cn --arg p "$1" --arg s "$2" --arg st "$3" --arg a "${6:-claude}" --argjson t "$t" \
+            '{pane_id:$p, agent:$a, agent_status:$st, agent_session:{kind:"id", value:$s}, tokens:$t}'
+    }
+    setlist() { printf '%s\n' "$@" | jq -cs '{result:{panes:.}}' > "$fx/list.json"; : > "$fx/calls"; }
+    ok() { pass_n=$((pass_n + 1)); echo "  ok   $1"; }
+    bad() { fail_n=$((fail_n + 1)); echo "  FAIL $1"; echo "       got: $(tr '\n' '|' < "$fx/calls")"; }
+    calls() { cat "$fx/calls"; }
+
+    setlist "$(pane w1:p1 s1 done yes no)" "$(pane w1:p2 s2 done no no)"
+    "$0"; c=$(calls)
+    [ -z "$c" ] && ok "1 a pane with a timer, and a never-seen one without: nothing reported" || bad "1 first pass"
+    grep -qx s1 "$fx/state/seen" && ! grep -qx s2 "$fx/state/seen" && ok "1 the session with a timer is remembered, the other is not" || bad "1 seen file"
+    setlist "$(pane w1:p1 s1 done no no)" "$(pane w1:p2 s2 done no no)"
+    "$0"; c=$(calls)
+    [ "$c" = "pane report-metadata w1:p1 --source dotfiles-stuck-watch --agent claude --token stuck=⚠ stuck" ] \
+        && ok "2 a remembered session lost its timer: marked ⚠ stuck; the never-seen one is not" || bad "2 mark"
+    setlist "$(pane w1:p1 s1 done no yes)"
+    "$0"; c=$(calls)
+    [ -z "$c" ] && ok "3 already marked: no second report" || bad "3 no repeat"
+    setlist "$(pane w1:p1 s1 idle yes yes)"
+    "$0"; c=$(calls)
+    [ "$c" = "pane report-metadata w1:p1 --source dotfiles-stuck-watch --agent claude --clear-token stuck" ] \
+        && ok "4 the timer is back: the mark is cleared" || bad "4 clear"
+    setlist "$(pane w1:p1 s1 blocked no no)"
+    "$0"; c=$(calls)
+    [ -z "$c" ] && ok "5 blocked (herdr's own alarm) with no timer: not marked" || bad "5 blocked"
+    setlist "$(pane w1:p1 s1 blocked no yes)"
+    "$0"; c=$(calls)
+    [ "$c" = "pane report-metadata w1:p1 --source dotfiles-stuck-watch --agent claude --clear-token stuck" ] \
+        && ok "5 blocked while marked: the mark is cleared" || bad "5 blocked clear"
+    setlist "$(pane w1:p1 s1 working no no)"
+    "$0"; c=$(calls)
+    [ -n "$c" ] && ok "6 working with no timer (a hang) is marked too (control for 5)" || bad "6 working hang"
+    setlist "$(pane w1:p3 s3 done yes no codex)"
+    "$0"; setlist "$(pane w1:p3 s3 done no no codex)"; "$0"; c=$(calls)
+    [ -z "$c" ] && ok "7 another agent kind is never judged" || bad "7 other agent"
+    setlist "$(pane w1:p9 s9 done yes no)"
+    "$0"
+    ! grep -qx s1 "$fx/state/seen" && grep -qx s9 "$fx/state/seen" && ok "8 the state keeps only sessions still in herdr's list" || bad "8 prune ($(tr '\n' ' ' < "$fx/state/seen"))"
+    : > "$fx/calls"
+    HERDR_STUCK_HERDR="$fx/no-such-herdr" "$0"; rc=$?
+    [ "$rc" -eq 0 ] && [ ! -s "$fx/calls" ] && ok "9 no herdr: exit 0, nothing done" || bad "9 no herdr rc=$rc"
+    echo "herdr-stuck-watch selftest: $pass_n passed, $fail_n failed"
+    [ "$fail_n" -eq 0 ]; exit
+fi
+
+pass
+exit 0

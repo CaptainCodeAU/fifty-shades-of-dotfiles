@@ -3997,6 +3997,7 @@ _snapshot_links() {
         warn "Link manifest written, but the restore script copy failed"
     fi
     _install_links_watch "$dir"
+    _install_stuck_watch
     _zshenv_links_warning
     _zshenv_colours_block
     _zshenv_optouts_block
@@ -4165,6 +4166,47 @@ PLIST
             info "dotlinks-watch running (launchd $label): a broken link is reported within seconds"
         else
             warn "dotlinks-watch NOT started: launchctl bootstrap gui/$uid $plist failed (run it by hand to see why)"
+        fi
+    fi
+}
+
+# Run herdr-stuck-watch every 15 s as a launchd agent (macOS; Gavin, dotfiles-main Q91: 1,
+# 20 Oct 2026): it marks a herdr agent row "⚠ stuck" when its Claude session's status line has
+# stopped (its cache timer gone 2 minutes), as when a dialog holds Claude Code. Runs through the
+# ~/.local/bin link, so a broken link set stops it quietly (dotlinks-watch reports that). The
+# plist is a real file; reloaded only when it changed, so a re-run is a no-op.
+_install_stuck_watch() {
+    local dir="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/herdr-stuck" label="com.captaincodeau.herdr-stuck-watch" plist tmp changed=0 uid
+    [[ "$(check_os)" == "macos" ]] || { verbose "herdr-stuck-watch: launchd agent is macOS only (skipped)"; return 0; }
+    plist="$HOME/Library/LaunchAgents/$label.plist"
+    mkdir -p "$HOME/Library/LaunchAgents" "$dir" || return 0
+    tmp="$plist.tmp.$$"
+    cat > "$tmp" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>$HOME/.local/bin/herdr-stuck-watch</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>15</integer>
+  <key>StandardErrorPath</key><string>$dir/watch.err</string>
+</dict>
+</plist>
+PLIST
+    cmp -s "$tmp" "$plist" 2>/dev/null || changed=1
+    mv -f "$tmp" "$plist"   # identical bytes when unchanged; never a delete
+    if ! _home_is_this_account; then
+        warn "herdr-stuck-watch: HOME ($HOME) is not this account's home, so the launchd agent was left alone (launchd is per account, not per HOME)."
+        return 0
+    fi
+    uid=$(id -u)
+    if (( changed )) || ! launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
+        launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+        if launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null; then
+            info "herdr-stuck-watch running (launchd $label): a stuck Claude row is marked in herdr's sidebar"
+        else
+            warn "herdr-stuck-watch NOT started: launchctl bootstrap gui/$uid $plist failed (run it by hand to see why)"
         fi
     fi
 }

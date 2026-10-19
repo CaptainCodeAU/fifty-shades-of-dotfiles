@@ -26,6 +26,17 @@ facts behind the choices and the options not taken.
 
 ## What is set now (16 Oct, updated 19 Oct)
 
+- **A stuck session is marked "⚠ stuck" in bold red** after its project name (Gavin, dotfiles-main
+  Q91: 1, 20 Oct 2026, after e-b13b sat behind Claude Code's "Background work is running" exit box
+  looking like any other row). `home/.local/bin/herdr-stuck-watch`, run every 15 s by launchd
+  (`com.captaincodeau.herdr-stuck-watch`, installed by `install.sh`), reads herdr's pane list:
+  every local Claude session's status line reports its cache timer on every run, idle or not,
+  each report living 2 minutes, and a dialog that holds Claude Code stops the status line. So a
+  Claude session that has shown a timer and now has none is marked, and cleared when the timer
+  comes back. Never marked: a session that never had a timer (it is remembered only once it does),
+  a pane herdr already shows as blocked, other agent kinds, and agents on another machine. A
+  session already stuck when the watcher first runs is not judged, because it was never seen with
+  a timer. `herdr-stuck-watch --selftest` (11 arms; four mutants of its key lines each caught).
 - **Agents section since 19 Oct, 11:55 PM** (Gavin, dotfiles-main, Q88: 1). This supersedes the
   next bullet where they differ. Line 1: the state mark, the project name, a remote machine, the
   cache timer; no tab. The project name is **gold `#ffd75f` on the focused agent's row and white
