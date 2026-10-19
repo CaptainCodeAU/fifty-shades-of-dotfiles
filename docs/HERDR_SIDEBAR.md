@@ -43,7 +43,9 @@ facts behind the choices and the options not taken.
   50 or more green `#5fd75f`, 40s mint `#9ef0c8`, 30s aqua `#3fe0e8`, 20s orchid `#da70d6`, 10s
   tangerine `#ff9a3c`, under 10 crimson `#e8264a` in bold. Gavin asked for a blink under 10:
   `herdr config check` refuses `blink = true` exactly as it refuses an unknown key, so it is bold
-  instead. engage's own words on its worker panes (`╰ waiting on e-conductor`) are engage's.
+  instead. engage's own words on its worker panes (`waiting on e-conductor`) are engage's; since
+  20 Oct, 12:52 AM a rule here colours that word grey `#6e7a86`, and the unseen `your turn` takes
+  the idle green `#00bb00` it had (Gavin).
 - **Active pane border** gold `#ffd75f` (`ui.accent`); **inactive borders** a dim
   warm grey `#5c4a4a` (`theme.custom.overlay0`).
 - **Agents section, two lines a row since 19 Oct** (Gavin: "two lines acceptable"):
