@@ -2371,7 +2371,8 @@ printf '\nEG  a project moved to engage: every write REFUSES, reads stay (W-2026
 # The check is engage's (docs/CUTOVER.md, branch w29-cutover 7d637e8): open-items asks
 # `engage-go cutover check` in the folder it was started from and reads no marker itself.
 # Exit 0 (moved) and 3 (a marker that is not valid) refuse every write with one line naming
-# engage add; exit 1, any other code, or no engage-go: as today. One fake per answer; each
+# engage-go add; exit 1 or any other code: as today; no engage-go at all refuses too (B6 1
+# grows, Q148: 1), since no answer is not "not moved". One fake per answer; each
 # records how and where it ran, prints its stdout lines, and adds stderr noise to throw away.
 mk_dotclaude
 export PJ_STATE_DIR="$D/state"   # seen and checks-run write here, never ~/.local/state
@@ -2442,7 +2443,7 @@ eg_writes(){   # eg_writes <fake> <text the one line must hold>: sets EGBAD
   for c in "${EG_WRITES[@]}"; do
     h0="$(eg_state)"; eval "egw $1 $c"; h1="$(eg_state)"
     n="$(printf '%s\n' "$OUT" | grep -c .)"
-    case "$OUT" in *"engage add"*) ;; *) EGBAD="$EGBAD [${c%% *}: no 'engage add']" ;; esac
+    case "$OUT" in *"engage-go add"*) ;; *) EGBAD="$EGBAD [${c%% *}: no 'engage-go add']" ;; esac
     case "$OUT" in *"$2"*) ;; *) EGBAD="$EGBAD [${c%% *}: no '$2']" ;; esac
     [ "$RC" -ne 0 ] || EGBAD="$EGBAD [${c%% *}: rc 0]"
     [ "$n" = 1 ] || EGBAD="$EGBAD [${c%% *}: $n lines]"
@@ -2451,10 +2452,10 @@ eg_writes(){   # eg_writes <fake> <text the one line must hold>: sets EGBAD
 }
 H0="$(eg_state)"
 eg_writes m0 "moved to engage"
-wanteq "exit 0: all ${#EG_WRITES[@]} write verbs refuse, non-zero, one line naming engage add, nothing written" "" "$EGBAD"
+wanteq "exit 0: all ${#EG_WRITES[@]} write verbs refuse, non-zero, one line naming engage-go add, nothing written" "" "$EGBAD"
 wanteq "  exit 0: engage-go was asked 'cutover check' in the folder open-items was started from" "cutover check|$ZETA" "$(cat "$EG/m0/ran" 2>/dev/null)"
 eg_writes m3 "not valid: MOVED-TO-ENGAGE is not committed"
-wanteq "exit 3: all ${#EG_WRITES[@]} write verbs refuse with the reader's reason, one line naming engage add, nothing written" "" "$EGBAD"
+wanteq "exit 3: all ${#EG_WRITES[@]} write verbs refuse with the reader's reason, one line naming engage-go add, nothing written" "" "$EGBAD"
 egw m3empty add "filed by habit" --done-when x
 wanteq "exit 3 with no stdout still refuses (rc 2)" "2" "$RC"
 egw m3multi add "filed by habit" --done-when x
@@ -2474,16 +2475,26 @@ done
 wanteq "reads in a moved project: listing, --all, --project, show, get, --where, --help, --session, --projects, routed all as unmoved" "" "$EGBAD"
 egw m0 close "$EGID" x
 wanteq "  control: a write does ask engage-go (so the reads' 'never asked' measures something)" "cutover check|$ZETA" "$(cat "$EG/m0/ran")"
-# As today: exit 1, exit 2, killed by a signal, a non-executable engage-go, no engage-go.
+# As today: exit 1, exit 2, killed by a signal, a non-executable engage-go (no engage-go: below).
 wanteq "control: the no-engage PATH really has none, the suite PATH really has one" "none one" \
   "$(PATH="$NOEG" command -v engage-go >/dev/null 2>&1 && printf some || printf none) $(command -v engage-go >/dev/null 2>&1 && printf one || printf none)"
 EGBAD=""
-for f in m1 m2 mkill mnox none; do
+for f in m1 m2 mkill mnox; do
   h0="$(eg_state)"; egw "$f" add "as today under $f" --done-when x; h1="$(eg_state)"
   [ "$RC" = 0 ] && [ "$h0" != "$h1" ] || EGBAD="$EGBAD [$f: rc $RC, state $([ "$h0" = "$h1" ] && printf unchanged || printf changed)]"
   case "$OUT" in *engage*) EGBAD="$EGBAD [$f: says engage]" ;; esac
 done
-wanteq "exit 1, exit 2, a signal, not executable, absent: add writes as today (and the state hash sees it)" "" "$EGBAD"
+wanteq "exit 1, exit 2, a signal, not executable: add writes as today (and the state hash sees it)" "" "$EGBAD"
+# B6 1 grows (Q148: 1; SWEEP-COVERAGE.md row 29): with no engage-go at all open-items cannot ask,
+# so every write REFUSES (fails closed), one line naming engage-go add, nothing written; reads stay.
+eg_writes none "engage-go is not on PATH"
+wanteq "no engage-go: all ${#EG_WRITES[@]} write verbs refuse, non-zero, one line naming engage-go add, nothing written" "" "$EGBAD"
+EGBAD=""
+for c in "" "show $EGID" "--where" "--session"; do
+  eval "egw m1 $c"; o1="$OUT"; r1="$RC"; eval "egw none $c"
+  [ "$OUT" = "$o1" ] && [ "$RC" = "$r1" ] || EGBAD="$EGBAD [${c:-the listing}: rc $r1 -> $RC]"
+done
+wanteq "  no engage-go: the listing, show, --where and --session read as unmoved" "" "$EGBAD"
 wanteq "  control: the exit-1 and the killed fakes really ran" "1 1" "$([ -e "$EG/m1/ran" ] && echo 1) $([ -e "$EG/mkill/ran" ] && echo 1)"
 egw m1 close "$EGID" "closed as today"
 wanteq "  exit 1: close moves the item as today" "1" "$([ "$RC" = 0 ] && [ -f "$ZW/items/closed/$EGID.md" ] && echo 1)"
@@ -2505,7 +2516,7 @@ for f in m0 m3; do
   egw "$f" seen --all
   wanteq "EG1 $f: seen --all goes through (rc 0)" "0" "$RC"
   want "EG1 $f:   and names what it cleared" "seen: $EGAW [alpha]" "$OUT"
-  wantnot "EG1 $f:   with no engage refusal" "engage add" "$OUT"
+  wantnot "EG1 $f:   with no engage refusal" "engage-go add" "$OUT"
   want "EG1 $f:   the seen state holds the item" "alpha $EGAW " "$(cat "$D/state/seen/zeta" 2>/dev/null)"
   wanteq "EG1 $f:   no drawer, inbox or commit changed" "$h0" "$(eg_drawers)"
   wanteq "EG1 $f:   engage-go was not asked" "reset" "$(cat "$EG/$f/ran")"
@@ -2526,7 +2537,7 @@ for f in m0 m3; do
   printf "reset\n" > "$EG/$f/ran"; h0="$(eg_drawers)"
   egw "$f" checks-run
   wanteq "EG1b $f: checks-run goes through, same output and rc as unmoved" "$r1|$o1" "$RC|$OUT"
-  wantnot "EG1b $f:   with no engage refusal" "engage add" "$OUT"
+  wantnot "EG1b $f:   with no engage refusal" "engage-go add" "$OUT"
   wanteq "EG1b $f:   the check cache is there" "yes" "$([ -d "$D/state/mandatory-cache" ] && printf yes || printf no)"
   wanteq "EG1b $f:   no drawer, inbox or commit changed" "$h0" "$(eg_drawers)"
   wanteq "EG1b $f:   engage-go was not asked" "reset" "$(cat "$EG/$f/ran")"
@@ -2535,7 +2546,7 @@ h0="$(eg_drawers)"; egw m0 add "filed by habit" --done-when x
 wanteq "EG1b control: add is still refused in a moved project (rc 2), nothing written" "2 same" "$RC $([ "$h0" = "$(eg_drawers)" ] && printf same || printf WROTE)"
 # EG2 the 3 s limit and the first line (W-20261002-A48, A49; contract engage master 48eb3d1).
 # A write's check runs under 3 s; a timeout refuses the write (fail closed), one line naming
-# the hang and engage add. The fakes are bash, and every process they leave carries a marker
+# the hang and engage-go add. The fakes are bash, and every process they leave carries a marker
 # unique to this run in its argv (exec -a), so pgrep counts only this suite's. Each fake
 # records "<pid> <pgid> <parent's pgid>".
 MK="oist$(basename "$ROOT")"
@@ -2569,8 +2580,8 @@ eg_hang(){ [ $# -ge 2 ] || { bad "EG2 eg_hang needs a fake and a PATH" "$*"; ret
   wait "$pid"; RC=$?; EGT=$(( $(lk_ms) - t )); EGL="$(eg_gone)"; OUT="$(cat "$D/eg2.out")"; EGH1="$(eg_state)"
 }
 eg_hang mhang "$EG/mhang:$NOEG" add "filed during a hang" --done-when x
-wanteq "EG2 a hang: add refuses (rc 2), one line naming the hang and engage add, nothing written" "2 1 hang engage-add same" \
-  "$RC $(printf '%s\n' "$OUT" | grep -c .) $(case "$OUT" in *"did not answer in 3 s"*) printf hang;; *) printf no-hang;; esac) $(case "$OUT" in *"engage add"*) printf engage-add;; *) printf none;; esac) $([ "$EGH0" = "$EGH1" ] && printf same || printf WROTE)"
+wanteq "EG2 a hang: add refuses (rc 2), one line naming the hang and engage-go add, nothing written" "2 1 hang engage-add same" \
+  "$RC $(printf '%s\n' "$OUT" | grep -c .) $(case "$OUT" in *"did not answer in 3 s"*) printf hang;; *) printf no-hang;; esac) $(case "$OUT" in *"engage-go add"*) printf engage-add;; *) printf none;; esac) $([ "$EGH0" = "$EGH1" ] && printf same || printf WROTE)"
 wanteq "  refused within 2.9 to 5.0 s (measured ${EGT} ms)" "1" "$([ "$EGT" -ge 2900 ] && [ "$EGT" -le 5000 ] && echo 1)"
 wanteq "  control: $EGN marked processes while it ran (parent and child), none left after" "yes 0" "$([ "$EGN" -ge 2 ] && printf yes || printf no) $EGL"
 read -r EGP1 EGP2 EGP3 < "$EG/mhang/ran"; EGME="$(ps -o pgid= -p $$ | tr -d ' ')"

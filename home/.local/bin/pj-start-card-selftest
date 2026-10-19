@@ -144,7 +144,7 @@ runp(){ local o="$PATH"; PATH="$ROOT/eg-$1:$o"; run "$2"; PATH="$o"; }   # runp 
 runp moved "$MV"
 check "MV moved: rc 0, the one line 'Items moved to engage -- see the engage pane'" '[ "$RC" -eq 0 ] && has "$OUT" "^Items moved to engage -- see the engage pane$"'
 check "MV moved: none of the frozen drawer (no Open items line, no titles, no parked line)" '! has "$OUT" "^Open items" && [ "$(ntitles "$OUT")" -eq 0 ] && ! has "$OUT" "parked:"'
-check "MV moved: the other lines stay (header, handoff, hello rule: 4 lines)" 'has "$OUT" "^pj start card: repo-moved$" && has "$OUT" "^Handoff: repo:OPENING-PROMPT.md" && [ "$(lines "$OUT")" -eq 4 ]'
+check "MV moved: the other lines stay, with no pj handoff (header, hello rule: 3 lines)" 'has "$OUT" "^pj start card: repo-moved$" && ! has "$OUT" "^Handoff:" && [ "$(lines "$OUT")" -eq 3 ]'
 check "MV moved: engage-go was asked about this repo, by --dir" '[ "$(cat "$ROOT/eg-moved/ran")" = "cutover check --dir $MV" ]'
 check "MV moved: stderr empty (the fake's noise never reaches the card)" '[ ! -s "$ROOT/stderr" ]'
 runp stay "$MV"
@@ -160,6 +160,28 @@ runp stay "$EN"
 check "MV records: engage, not moved: the no-drawer line, no engage line" 'has "$OUT" "^Open items: no drawer for this project yet" && ! has "$OUT" "moved to engage" && ! has "$OUT" "engage records"'
 runp moved "$EN"
 check "MV control: records: engage, moved: the moved line" 'has "$OUT" "^Items moved to engage -- see the engage pane$" && ! has "$OUT" "no drawer"'
+# MVH (B6 1 grows, Q148: 1; button_bunny's finding, 19 Oct): a moved project's handoff is in
+# engage, so the card names no pj handoff there, neither a drawer one nor the repo default. The
+# same move question as the items line; asked again when open-items cannot answer.
+MVH="$ROOT/repo-moved-h"; mkrepo "$MVH"; WMVH="$(mkdrawer "$MVH" 1 0)"; mkdir -p "$MVH/.claude"
+printf 'records: private\nhandoff: drawer:OPENING-PROMPT.md\n' > "$MVH/.claude/pj-homes"; printf 'drawer hand\n' > "$WMVH/OPENING-PROMPT.md"; printf 'repo hand\n' > "$MVH/OPENING-PROMPT.md"
+runp moved "$MVH"
+check "MVH moved, drawer handoff declared and present: no Handoff line" '[ "$RC" -eq 0 ] && ! has "$OUT" "^Handoff:"'
+check "MVH moved: no drawer marker anywhere on the card" '! has "$OUT" "drawer:"'
+check "MVH moved: and not the repo default either" '! has "$OUT" "OPENING-PROMPT"'
+( builtin cd "$MVH" && PATH="$ROOT/eg-moved:$PATH" "$CARD" --json </dev/null 2>/dev/null ) > "$ROOT/json-mvh"
+check "MVH moved: --json says handoff null" 'grep -q "\"handoff\":null" "$ROOT/json-mvh"'
+runp stay "$MVH"
+check "MVH control, not moved: the drawer handoff line as before" 'has "$OUT" "^Handoff: drawer:OPENING-PROMPT.md"'
+mv "$MVH/.claude/pj-homes" "$MVH/.claude/pj-homes.off"; runp moved "$MVH"
+check "MVH moved, no pj-homes (button_bunny's shape): no repo:OPENING-PROMPT.md line" '! has "$OUT" "^Handoff:"'
+runp stay "$MVH"
+check "MVH control, not moved, no pj-homes: the repo default line as before" 'has "$OUT" "^Handoff: repo:OPENING-PROMPT.md"'
+mkdir -p "$ROOT/oi-broken"; printf '#!/bin/sh\nexit 5\n' > "$ROOT/oi-broken/open-items"; chmod +x "$ROOT/oi-broken/open-items"
+( builtin cd "$MVH" && PATH="$ROOT/oi-broken:$ROOT/eg-moved:$PATH" "$CARD" </dev/null 2>"$ROOT/stderr" ) > "$ROOT/out"; RC=$?; OUT="$(cat "$ROOT/out")"
+check "MVH moved, open-items broken: still no Handoff line (asked again)" '[ "$RC" -eq 0 ] && ! has "$OUT" "^Handoff:"'
+( builtin cd "$MVH" && PATH="$ROOT/oi-broken:$ROOT/eg-stay:$PATH" "$CARD" </dev/null 2>"$ROOT/stderr" ) > "$ROOT/out"; RC=$?; OUT="$(cat "$ROOT/out")"
+check "MVH control, open-items broken, not moved: the repo default line" 'has "$OUT" "^Handoff: repo:OPENING-PROMPT.md"'
 
 # --- E: declaration absent -> default handoff repo:OPENING-PROMPT.md ---------------
 run "$A"; check "E default handoff absent -> no line" '! has "$OUT" "^Handoff:"'

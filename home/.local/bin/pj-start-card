@@ -499,13 +499,21 @@ gather(){
   [ -n "$C_N" ] || C_N=0
   b="${C_PARKED#parked: }"; case "$b" in ''|*[!0-9]*) C_NPARKED=0 ;; *) C_NPARKED="$b" ;; esac
 
-  # handoff: declared or default; a line only when the file exists
-  C_HMARK="$(decl_get "$C_DECL" handoff)"; [ -n "$C_HMARK" ] || C_HMARK="repo:OPENING-PROMPT.md"
-  if C_HPATH="$(resolve "$C_HMARK" "$C_TOP" "$C_DRAWER")" && [ -n "$C_HPATH" ] && [ -f "$C_HPATH" ]; then
-    C_HSIZE="$(file_size "$C_HPATH")"; C_HDATE="$(file_date "$C_HPATH")"
-    C_HANDOFF="Handoff: $C_HMARK ($C_HSIZE, $C_HDATE). Read on request, never print it."
+  # handoff: declared or default; a line only when the file exists. B6 1 grows (Q148: 1): a
+  # project moved to engage keeps its handoff in engage (its captain's log, which engage's own
+  # start lines name), so the card names no pj handoff there, neither a drawer one nor the
+  # repo:OPENING-PROMPT.md default (button_bunny's card, 19 Oct). The same move question as the
+  # items above, asked again here when open-items could not answer it.
+  if [ "$C_MOVED" -eq 1 ] || { [ "$wrc" -gt 1 ] && moved_to_engage "$C_TOP"; }; then
+    C_HMARK=""; C_HPATH=""
   else
-    C_HPATH=""
+    C_HMARK="$(decl_get "$C_DECL" handoff)"; [ -n "$C_HMARK" ] || C_HMARK="repo:OPENING-PROMPT.md"
+    if C_HPATH="$(resolve "$C_HMARK" "$C_TOP" "$C_DRAWER")" && [ -n "$C_HPATH" ] && [ -f "$C_HPATH" ]; then
+      C_HSIZE="$(file_size "$C_HPATH")"; C_HDATE="$(file_date "$C_HPATH")"
+      C_HANDOFF="Handoff: $C_HMARK ($C_HSIZE, $C_HDATE). Read on request, never print it."
+    else
+      C_HPATH=""
+    fi
   fi
 
   # trackers, one line each

@@ -357,7 +357,8 @@ run_search(){     # run_search <all> <mode> <query>
   fi
   printf 'decided: NO decision recorded matching: %s\n' "$q" >&2
   printf 'decided: %s -- and a miss is NOT the same as "not decided".\n' "$den" >&2
-  printf 'decided: it means nothing is written down, so decide it and add a block (decided add).\n' >&2
+  if [ "$MOVED" -eq 1 ]; then printf 'decided: this old register is history here; look in engage with engage-go view --search, and record a new ruling with engage-go add --kind decision.\n' >&2
+  else printf 'decided: it means nothing is written down, so decide it and add a block (decided add).\n' >&2; fi
   print_home_notes
   [ "$mode" = words ] && explain_miss "$all" "$q"
   return 1
@@ -388,6 +389,59 @@ show_homes(){
   for note in "${NOTES[@]}"; do printf '%s\n' "$note"; done
 }
 
+# ---------------------------------------------------------------- engage ----
+# B6 part 1 and 1 grows (Q148: 1, 18 Oct 2026; PLAN.md step B6 in the account repo's
+# wean-off-pj workbench). A project moved to engage keeps its rulings as engage records, so
+# this old register takes nothing new from it: add and withdraw refuse there before anything
+# is claimed, written or committed, and a word search says the register is history and names
+# the engage search. The question is engage's (`engage-go cutover check --dir <repo>`, exit 0 =
+# moved), the one open-items and pj-start-card ask. A write fails CLOSED, as open-items does:
+# exit 3 (a marker not valid), no answer in 3 s, or no engage-go at all refuses. A read fails
+# open and searches as before. The refusal lives here, so it holds with the sandbox off.
+engage_moved(){   # engage_moved <repo>: rc 0 moved, 1 not, 3 marker not valid, 124 no answer in 3 s, 127 no engage-go
+  local pid n=0
+  command -v engage-go >/dev/null 2>&1 || return 127
+  engage-go cutover check --dir "$1" </dev/null >/dev/null 2>&1 & pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    n=$((n + 1))
+    [ "$n" -gt 150 ] && { kill -KILL "$pid" 2>/dev/null; wait "$pid" 2>/dev/null; return 124; }
+    sleep 0.02
+  done
+  wait "$pid"
+}
+ENGAGE_WAY='record a ruling with engage-go add --kind decision --statement "<the ruling>" <title>, take one out of force with engage-go record withdraw-ruling <file> --why <words>, and find one with engage-go view --search <words>'
+write_guard(){    # write_guard <verb>: refuses a write this project's move forbids
+  local top nm
+  top="$(repo_top)" || return 0          # outside a repo there is no project to ask about
+  nm="$(basename "$top")"
+  engage_moved "$top"
+  case $? in
+    0)   die_refused "$1: $nm moved to engage, so its rulings are engage records and this old register is history; decided wrote nothing. In $(tilde "$top"), $ENGAGE_WAY" ;;
+    3)   die_refused "$1: $nm has an engage move marker that is not valid, so decided wrote nothing; run engage-go cutover check --dir $(tilde "$top") for details, and use engage-go add there once the move is sound" ;;
+    124) die_refused "$1: engage-go cutover check did not answer in 3 s, so decided cannot tell whether $nm moved to engage and wrote nothing; run engage-go cutover check --dir $(tilde "$top") to see why, and use engage-go add if it has moved" ;;
+    127) die_refused "$1: engage-go is not on PATH, so decided cannot tell whether $nm moved to engage and wrote nothing; record the ruling with engage-go add once engage-go is on PATH" ;;
+  esac
+  return 0
+}
+# --global writes only through the expected link. On this Mac ~/.claude/pj-global/decisions is
+# a link into the account repo's reference/old-rulings (on mlbox, into the relay's copy). A real
+# folder there, or none (B10 retires the link), would put a ruling into ~/.claude or make the
+# folder again with mkdir -p, against #1060; so it refuses, and makes nothing.
+global_guard(){
+  [ -L "$GLOBAL_DIR" ] && [ -d "$GLOBAL_DIR" ] && return 0
+  local what="a real folder"
+  if [ -L "$GLOBAL_DIR" ]; then what="a link to nothing"; elif [ ! -e "$GLOBAL_DIR" ]; then what="missing"; fi
+  die_refused "add --global: $(tilde "$GLOBAL_DIR") is $what, not the expected link to the old register, so decided wrote nothing and made no folder (nothing new goes into ~/.claude, #1060). Record a global ruling with engage-go add --kind decision in the account folder (~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear)"
+}
+# The read side (SWEEP-COVERAGE.md row 73): in a moved project the old register is history.
+history_note(){   # history_note: rc 0, after saying so, when this project moved to engage
+  local top
+  top="$(repo_top)" || return 1
+  engage_moved "$top" || return 1
+  MOVED=1
+  loud "$(basename "$top") moved to engage: its rulings are engage records, and this old register is history (nothing new lands here). Search them with: engage-go view --search <words>"
+}
+
 # ---------------------------------------------------------------- writes ----
 slug(){ printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//' | awk '{ s=$0; if (length(s) > 48) { s=substr(s,1,48); sub(/-[^-]*$/, "", s) } print s }'; }
 all_d_stores(){   # every place a D ID could already exist on this machine
@@ -411,6 +465,7 @@ commit_path(){    # commit_path <file> <msg> -> 0 committed | 3 not committed
 
 cmd_add(){
   local title="" topic="" holds="" body="" ruled="" status="standing" where="" home id f top stores=() s
+  write_guard add
   while [ $# -gt 0 ]; do
     case "$1" in
       --topic) [ $# -ge 2 ] || die_refused "add: --topic needs a value"; topic="$2"; shift 2 ;;
@@ -429,7 +484,7 @@ cmd_add(){
   [ -n "$holds" ] || die_refused "add: --holds-in is required (the document that carries the reasoning)"
   [ -n "$where" ] || die_refused "add: say --global (machine-wide) or --project (this project's store)"
   case "$status" in standing|deferred|superseded) ;; *) die_refused "add: --status must be standing, deferred or superseded" ;; esac
-  if [ "$where" = global ]; then home="$GLOBAL_DIR"
+  if [ "$where" = global ]; then global_guard; home="$GLOBAL_DIR"
   else
     top="$(repo_top)" || die_refused "add --project: not inside a git repo"
     project_store "$top" || die_refused "add --project: $PROJECT_NOTE"
@@ -484,6 +539,7 @@ cmd_add(){
 cmd_withdraw(){
   local id="${1:-}" reason="${2:-}" top h label kind path f tmp m
   local idre=""
+  write_guard withdraw
   case "$id" in
     D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[A-Z][0-9][0-9]) ;;
     D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[A-Z][0-9][0-9][0-9]) ;;   # past 99 in a day (W-20260924-A22)
@@ -533,7 +589,7 @@ cmd_withdraw(){
 }
 
 # ---------------------------------------------------------------- main ----
-ALL=0
+ALL=0; MOVED=0
 case "${1:-}" in
   --selftest) DECIDED="$0" exec "$(dirname "$0")/decided-selftest" ;;   # this copy, not PATH's
   --help|-h|"") usage; exit 0 ;;
@@ -561,6 +617,14 @@ case "${1:-}" in
       case "${1:-}" in
         --homes) die_refused "--status and --since filter a search or --list, not --homes" ;;
         D-[0-9]*) [ $# -eq 1 ] && die_refused "--status and --since filter a search or --list; an ID lookup is exact, drop the filter" ;;
+      esac
+    fi
+    # B6 1 grows, the read side: in a moved project a word search reads engage's rulings, not
+    # this register; an ID lookup (a citation), --list, --homes and --all still read it, as history.
+    if history_note; then
+      case "${1:-}" in
+        --list|--homes|D-[0-9]*) ;;
+        *) [ "$ALL" -eq 1 ] || die_refused "a word search in a moved project reads engage's rulings, not this register: engage-go view --search $* (to read the old register as history: decided --all $*)" ;;
       esac
     fi ;;
 esac

@@ -27,6 +27,10 @@ command -v pj-id >/dev/null || { echo "decided-selftest: pj-id not on PATH -- IN
 
 T=$(mktemp -d "${TMPDIR:-/tmp}/decided-selftest.XXXXXX") || { echo "decided-selftest: mktemp failed -- INVALID TRIAL" >&2; exit 2; }
 TODAY="$(date +%Y%m%d)"
+# Never the machine's real engage-go (B6 part 1): every arm runs as "not moved", so a moved
+# project on this machine cannot change them. The moved arms near the end put their own first.
+mkdir -p "$T/eg-not-moved"; printf '#!/bin/sh\necho "not moved: decided selftest"\nexit 1\n' > "$T/eg-not-moved/engage-go"; chmod +x "$T/eg-not-moved/engage-go"
+export PATH="$T/eg-not-moved:$PATH"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n       got: %s\n' "$1" "$(printf '%s' "$2" | head -3 | tr '\n' '|')"; }
@@ -39,7 +43,9 @@ encode_key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
 DC="$T/dot-claude"; mkdir -p "$DC"; git -C "$DC" init -q; git -C "$DC" config user.email t@t; git -C "$DC" config user.name t; git -C "$DC" config core.hooksPath "$T/nohooks"; mkdir -p "$T/nohooks"
 printf "!projects/*/memory/\n" > "$DC/.gitignore"   # as real dot-claude: re-include memory/ under the global MEMORY/ rule
 git -C "$DC" add .gitignore; git -C "$DC" commit -q -m init
-G="$DC/pj-global/decisions"; mkdir -p "$G"
+# The machine-wide home as this Mac has it: ~/.claude/pj-global/decisions is a LINK to the old
+# register's folder (B6 part 1: --global writes only through the expected link).
+mkdir -p "$DC/old-rulings" "$DC/pj-global"; ln -s ../old-rulings "$DC/pj-global/decisions"; G="$DC/pj-global/decisions"
 cat > "$G/D-19990101-01-alpha.md" <<'EOF'
 ## D-19990101-01 -- A machine-wide thing
 
@@ -191,9 +197,9 @@ run "$R1" add "No holds" --topic x --global;    wantrc "add without --holds-in r
 run "$R1" add "No home" --topic x --holds-in y; wantrc "add without --global/--project refuses" 2 "$RC"
 [ -z "$(ls "$G" | grep -c "$TODAY")" ] || [ "$(ls "$G" | grep -c "$TODAY")" = 0 ] && ok "  refusals wrote nothing" || bad "  a refusal wrote a file" "$(ls "$G")"
 run "$R1" add "Kilo ruling" --topic "kilo lima" --holds-in "docs/K.md" --global --body "The body."
-wantrc "add --global writes" 0 "$RC"; want "  prints the new ID" "D-$TODAY-A01" "$OUT"; want "  committed" "committed in dot-claude: pj-global/decisions/D-$TODAY-A01-kilo-ruling.md" "$OUT"
+wantrc "add --global writes" 0 "$RC"; want "  prints the new ID" "D-$TODAY-A01" "$OUT"; want "  committed" "committed in dot-claude: old-rulings/D-$TODAY-A01-kilo-ruling.md" "$OUT"
 want "  block shape" "topic: kilo lima" "$(cat "$G/D-$TODAY-A01-kilo-ruling.md")"; want "  body written" "The body." "$(cat "$G/D-$TODAY-A01-kilo-ruling.md")"
-want "  the commit names only that path" "pj-global/decisions/D-$TODAY-A01-kilo-ruling.md" "$(git -C "$DC" show --stat --name-only HEAD)"
+want "  the commit names only that path" "old-rulings/D-$TODAY-A01-kilo-ruling.md" "$(git -C "$DC" show --stat --name-only HEAD)"
 wanteq_n="$(git -C "$DC" show --name-only --pretty=format: HEAD | grep -c .)"; [ "$wanteq_n" = 1 ] && ok "  and nothing else (1 path)" || bad "  commit carried $wanteq_n paths" ""
 run "$R1" add "Mike ruling" --topic "mike" --holds-in "docs/M.md" --project
 wantrc "add --project writes" 0 "$RC"; [ "$RC" -eq 0 ] || printf "       %s\n" "$OUT"; want "  next ID skips the one the other home took" "D-$TODAY-A02" "$OUT"; [ -f "$W1/decisions/D-$TODAY-A02-mike-ruling.md" ] && ok "  file in the drawer store" || bad "  file missing in drawer" "$(ls "$W1/decisions")"
@@ -204,7 +210,7 @@ mkdir -p "$T/claims-locked"; chmod 500 "$T/claims-locked"
 OUT="$( (builtin cd "$R1" && PJ_ID_CLAIMS_DIR="$T/claims-locked" "$DECIDED" add "claim probe" --topic cp --holds-in d --global) 2>&1)"; RC=$?
 chmod 700 "$T/claims-locked"
 wantrc "a claim folder that refuses the create REFUSES the add" 2 "$RC"; want "  and names the claim path" "$T/claims-locked/D-$TODAY-A" "$OUT"
-[ -z "$(find "$G" -name '*claim-probe*' -print)" ] && ok "  and wrote no block" || bad "  a block was written" "$(find "$G" -name '*claim-probe*' -print)"
+[ -z "$(find "$G/" -name '*claim-probe*' -print)" ] && ok "  and wrote no block" || bad "  a block was written" "$(find "$G/" -name '*claim-probe*' -print)"
 run "$R4" add "November" --topic n --holds-in n --project; wantrc "add --project into a repo: store is written but NOT committed" 3 "$RC"; want "  says so" "NOT COMMITTED, outside dot-claude" "$OUT"; [ -f "$R4/docs/decisions/D-$TODAY-A03-november.md" ] && ok "  file is on disk" || bad "  file missing" "$(ls "$R4/docs/decisions")"
 [ -z "$(git -C "$DC" status --porcelain)" ] && ok "fixture dot-claude tree clean after adds" || bad "dot-claude dirty" "$(git -C "$DC" status --porcelain)"
 
@@ -216,9 +222,9 @@ echo "-- add into an UNWRITABLE store (W-20260921-A30)"
 # BOTH ARMS, in the same breath, because "it refused" and "it never ran" look identical:
 # the locked store must REFUSE, and the ordinary store above must still have SUCCEEDED
 # (the `next ID skips` and `file in the drawer store` arms are that positive control).
-RO="$T/readonly-decisions"; mkdir -p "$RO"; chmod 500 "$RO"
+RO="$T/readonly-decisions"; mkdir -p "$RO"; chmod 500 "$RO"; ln -s "$RO" "$T/readonly-link"   # reached as the expected link
 STARTED=$(date +%s)
-OUT="$( (builtin cd "$R1" && DECIDED_GLOBAL_DIR="$RO" "$DECIDED" add "locked store probe" --topic lock --holds-in "docs/X.md" --global) 2>&1)"; RC=$?
+OUT="$( (builtin cd "$R1" && DECIDED_GLOBAL_DIR="$T/readonly-link" "$DECIDED" add "locked store probe" --topic lock --holds-in "docs/X.md" --global) 2>&1)"; RC=$?
 ELAPSED=$(( $(date +%s) - STARTED ))
 chmod 700 "$RO"
 wantrc "an unwritable store REFUSES instead of hanging" 2 "$RC"
@@ -285,7 +291,8 @@ printf '## D-20260101-A01 -- Filter standing\n\ntopic: papa quebec\ndecided: 202
 printf '## D-20260301-A02 -- Filter withdrawn\n\ntopic: papa romeo\ndecided: 2026-03-01\nstatus: withdrawn\nwithdrawn: 2026-03-02 -- probe\n' > "$FH/D-20260301-A02-w.md"
 printf '## D-20260401-A03 -- Filter superseded\n\ntopic: papa\ndecided: 2026-04-01\nstatus: superseded (by something later, with prose)\n' > "$FH/D-20260401-A03-x.md"
 printf '## D-20260501-A04 -- Filter undated\n\ntopic: papa xray\nstatus: standing\n' > "$FH/D-20260501-A04-u.md"
-frun(){ OUT="$( (builtin cd "$T" && DECIDED_GLOBAL_DIR="$FH" "$DECIDED" "$@") 2>&1)"; RC=$?; }
+ln -s "$FH" "$T/filterhome-link"   # reached as the expected link, so its add arm below writes
+frun(){ OUT="$( (builtin cd "$T" && DECIDED_GLOBAL_DIR="$T/filterhome-link" "$DECIDED" "$@") 2>&1)"; RC=$?; }
 # CONTROL FIRST: unfiltered, the same word reaches all four. Without this, a filter arm
 # that shows one block could be a search that only ever finds one.
 frun papa;                      wantrc "control: unfiltered, papa hits" 0 "$RC"; want "  all four blocks in the pool" "4 decision(s) searched" "$OUT"; want "  including the withdrawn one" "Filter withdrawn" "$OUT"
@@ -389,6 +396,78 @@ OUT="$( (builtin cd "$R1" && PJ_ID_CLAIMS_DIR="$T/claims99" "$DECIDED" add "Past
 wantrc "add with 99 already claimed today writes" 0 "$RC"; want "  as -A100" "D-$TODAY-A100" "$OUT"
 [ -f "$G/D-$TODAY-A100-past-ninety-nine.md" ] && ok "  the block file is -A100" || bad "  no -A100 file" "$(ls "$G" | grep "$TODAY")"
 run "$R1" "D-$TODAY-A100"; wantrc "  and is found by its ID" 0 "$RC"; want "  the right block" "Past ninety-nine" "$OUT"
+
+# B6 part 1 and 1 grows (Q148: 1; PLAN.md B6 in the account repo's wean-off-pj workbench): a
+# project moved to engage takes no new block, no withdrawal, and gets no word search here; the
+# refusal names engage-go. Each fake logs its arguments. A write fails closed (exit 3, a hang,
+# no engage-go); a read fails open. The not-moved fake above is the control for every arm.
+echo "-- a project moved to engage (B6 part 1, 1 grows)"
+mk_eg(){ mkdir -p "$T/eg-$1"; printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/eg-%s/ran"\n%s\n' "$T" "$1" "$2" > "$T/eg-$1/engage-go"; chmod +x "$T/eg-$1/engage-go"; : > "$T/eg-$1/ran"; }
+mk_eg moved 'echo "moved: repo-moved (2026-10-17)"; exit 0'
+mk_eg bad 'echo "not valid: MOVED-TO-ENGAGE is not committed"; exit 3'
+mk_eg hang "exec -a dchang$$ sleep 30"
+R7="$T/repo-moved"; mkrepo "$R7"; mkdir -p "$R7/.claude"; printf 'records: private\ndecisions: drawer:decisions/\n' > "$R7/.claude/pj-homes"
+W7="$DC/projects/$(encode_key "$(cd "$R7" && pwd -P)")/memory/WORK"; mkdir -p "$W7/items/open" "$W7/decisions"
+printf '## D-19990108-A01 -- A moved project thing\n\ntopic: tango uniform\nstatus: standing\n' > "$W7/decisions/D-19990108-A01-tango.md"
+git -C "$DC" add -A >/dev/null && git -C "$DC" commit -q -m "fixture: moved"
+mvrun(){ local f="${1:-}" d="${2:-}"; [ $# -ge 2 ] || { echo "mvrun: needs a fake and a folder" >&2; exit 2; }; shift 2; OUT="$( (builtin cd "$d" && PATH="$T/eg-$f:$PATH" "$DECIDED" "$@") 2>&1)"; RC=$?; }
+mv_g="$(ls "$G/")"; mv_w="$(ls "$W7/decisions")"; mv_head="$(git -C "$DC" rev-parse HEAD)"; mv_claims="$(ls "$T/claims")"
+mvrun moved "$R7" add "Moved probe" --topic mp --holds-in d --project
+wantrc "moved: add --project REFUSES" 2 "$RC"; want "  names engage-go add" "engage-go add" "$OUT"; want "  says it moved" "moved to engage" "$OUT"
+want "  engage-go was asked about this repo, by --dir" "cutover check --dir $(cd "$R7" && pwd -P)" "$(cat "$T/eg-moved/ran")"
+mvrun moved "$R7" add "Moved probe" --topic mp --holds-in d --global
+wantrc "moved: add --global REFUSES too" 2 "$RC"; want "  names engage-go add" "engage-go add" "$OUT"
+mvrun moved "$R7" add "Moved probe"
+wantrc "moved: add refuses before its own argument checks" 2 "$RC"; want "  with the move, not a missing flag" "moved to engage" "$OUT"
+mvrun moved "$R7" withdraw D-19990108-A01 "moved probe"
+wantrc "moved: withdraw REFUSES" 2 "$RC"; want "  names engage-go" "engage-go record withdraw-ruling" "$OUT"
+wantnot "  and the block is unchanged" "status: withdrawn" "$(cat "$W7/decisions/D-19990108-A01-tango.md")"
+[ "$(ls "$G/")" = "$mv_g" ] && [ "$(ls "$W7/decisions")" = "$mv_w" ] && ok "  no block written by any refusal" || bad "  a refusal wrote a block" "$(ls "$G/" "$W7/decisions")"
+[ "$(git -C "$DC" rev-parse HEAD)" = "$mv_head" ] && ok "  no commit made" || bad "  a refusal committed" "$(git -C "$DC" log --oneline -1)"
+[ "$(ls "$T/claims")" = "$mv_claims" ] && ok "  and no ID claimed" || bad "  a refusal claimed an ID" "$(ls "$T/claims")"
+mvrun moved "$R7" tango
+wantrc "moved: a word search REFUSES" 2 "$RC"; want "  names engage-go view --search, with the words" "engage-go view --search tango" "$OUT"
+want "  says the old register is history" "history" "$OUT"; wantnot "  and searched nothing here" "[in " "$OUT"
+want "  and names the history search" "decided --all tango" "$OUT"
+mvrun moved "$R7" D-19990108-A01
+wantrc "moved: an ID lookup still answers (a citation never dangles)" 0 "$RC"; want "  the block" "A moved project thing" "$OUT"; want "  with the history line" "engage-go view --search" "$OUT"
+mvrun moved "$R7" D-19990109-A01
+wantrc "moved: an ID that is nowhere misses" 1 "$RC"; want "  and the miss names engage-go add" "engage-go add" "$OUT"; wantnot "  never decided add" "(decided add)" "$OUT"
+mvrun moved "$R7" --all tango
+wantrc "moved: --all still reads the old register as history" 0 "$RC"; want "  with the history line" "engage-go view --search" "$OUT"
+run "$R7" tango
+wantrc "control: not moved, the same word search hits" 0 "$RC"; wantnot "  with no history line" "engage-go view" "$OUT"
+mvrun bad "$R7" add "Bad probe" --topic bp --holds-in d --project
+wantrc "a move marker not valid (exit 3): add REFUSES (fails closed)" 2 "$RC"; want "  names engage-go cutover check" "engage-go cutover check" "$OUT"
+mvrun bad "$R7" tango
+wantrc "a move marker not valid: a word search reads as before (fails open)" 0 "$RC"
+mv_t0=$SECONDS; mvrun hang "$R7" add "Hang probe" --topic hp --holds-in d --project; mv_t=$((SECONDS - mv_t0))
+wantrc "engage-go hangs: add REFUSES" 2 "$RC"; want "  names engage-go" "engage-go" "$OUT"
+[ "$mv_t" -le 5 ] && ok "  within 5 s (${mv_t} s)" || bad "  took ${mv_t} s" ""
+pgrep -f "dchang$$" >/dev/null 2>&1 && bad "  the hung fake was left running" "" || ok "  and the hung fake was killed"
+# no engage-go at all: every folder holding one is replaced by links to the rest of it
+noeg_path(){ local d out="" i=0 e IFS=:
+  for d in $PATH; do
+    if [ -e "$d/engage-go" ]; then i=$((i+1)); mkdir -p "$T/noeg-$i"
+      for e in "$d"/*; do [ "${e##*/}" = engage-go ] || ln -s "$e" "$T/noeg-$i/" 2>/dev/null; done; d="$T/noeg-$i"; fi
+    out="${out:+$out:}$d"
+  done; printf '%s' "$out"; }
+NOEG="$(noeg_path)"
+OUT="$( (builtin cd "$R1" && PATH="$NOEG" "$DECIDED" add "No engage probe" --topic ne --holds-in d --project) 2>&1)"; RC=$?
+wantrc "no engage-go on PATH: add REFUSES (fails closed)" 2 "$RC"; want "  names engage-go add" "engage-go add" "$OUT"
+OUT="$( (builtin cd "$R1" && PATH="$NOEG" "$DECIDED" golf) 2>&1)"; RC=$?
+wantrc "no engage-go on PATH: a word search reads as before (fails open)" 0 "$RC"
+# --global writes only through the expected link (the control is every --global add above)
+echo "-- add --global only through the expected link (B6 part 1)"
+GR="$T/global-real"; mkdir -p "$GR"; GM="$T/global-missing"
+OUT="$( (builtin cd "$R1" && DECIDED_GLOBAL_DIR="$GR" "$DECIDED" add "Real folder probe" --topic rf --holds-in d --global) 2>&1)"; RC=$?
+wantrc "--global into a real folder REFUSES" 2 "$RC"; want "  names engage-go add" "engage-go add" "$OUT"; want "  says it is not the expected link" "not the expected link" "$OUT"
+[ -z "$(ls -A "$GR")" ] && ok "  and wrote nothing there" || bad "  a block was written" "$(ls "$GR")"
+OUT="$( (builtin cd "$R1" && DECIDED_GLOBAL_DIR="$GM" "$DECIDED" add "Missing probe" --topic mi --holds-in d --global) 2>&1)"; RC=$?
+wantrc "--global into a missing folder REFUSES" 2 "$RC"; [ ! -e "$GM" ] && ok "  and made no folder (no mkdir)" || bad "  the folder was made" "$(ls -la "$GM")"
+ln -s "$T/nowhere" "$T/global-dangling"
+OUT="$( (builtin cd "$R1" && DECIDED_GLOBAL_DIR="$T/global-dangling" "$DECIDED" add "Dangling probe" --topic dg --holds-in d --global) 2>&1)"; RC=$?
+wantrc "--global through a link to nothing REFUSES" 2 "$RC"; [ ! -e "$T/nowhere" ] && ok "  and made nothing" || bad "  something was made" ""
 
 printf '\ndecided-selftest: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
