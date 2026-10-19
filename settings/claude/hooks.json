@@ -231,22 +231,6 @@
       "class": "alarm"
     },
     {
-      "event": "SessionEnd",
-      "script": "pj-session-end",
-      "script_path": "$HOME/.local/bin/pj-session-end",
-      "targets": ["project"],
-      "entry": {
-        "type": "command",
-        "command": "h=\"$HOME/.local/bin/pj-session-end\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: pj-session-end is registered but ~/.local/bin/pj-session-end is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}'; fi",
-        "timeout": 10
-      },
-      "why": "Writes the no-wrap-up flag the start card reads when a pj session that did real work ends without /pj:wrap-up (D-20260920-03). Project target only, same as the card",
-      "class": "alarm",
-      "legacy_commands": [
-        "test -x \"$HOME/.local/bin/pj-session-end\" && \"$HOME/.local/bin/pj-session-end\" || true"
-      ]
-    },
-    {
       "event": "SessionStart",
       "script": "ccw-watch",
       "script_path": "$HOME/.local/bin/ccw-watch",
@@ -701,6 +685,22 @@
       },
       "why": "Tells the session when the 10-minute timer, not Gavin, chose a box's answer (engage item EI-5): prints additionalContext only when the watcher's marker for this tool_use_id exists, else nothing; always exits 0. Pairs with engage-question-autoanswer.sh (same marker folder). Called by path in the engage repo, never copied. Project target only: pj sessions",
       "class": "alarm"
+    },
+    {
+      "event": "SessionEnd",
+      "script": "pj-session-end",
+      "script_path": "$HOME/.local/bin/pj-session-end",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.local/bin/pj-session-end\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: pj-session-end is registered but ~/.local/bin/pj-session-end is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}'; fi",
+        "timeout": 10
+      },
+      "why": "Writes the no-wrap-up flag the start card reads when a pj session that did real work ends without /pj:wrap-up (D-20260920-03). Project target only, same as the card",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.local/bin/pj-session-end\" && \"$HOME/.local/bin/pj-session-end\" || true"
+      ]
     }
   ]
 }

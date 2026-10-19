@@ -66,8 +66,8 @@ DOTFILES_BASELINE=70000
 BUDGET_MARGIN_PCT=15
 BASELINE_MIN_TRANSCRIPTS=3
 BASELINE_WINDOW=5
-FRAMEWORK_TOOLS="pj pj-launch-check pj-prompt-file pj-start-card pj-session-end pj-id open-items decided claude-hooks-sync claude-project-settings-render ci-watch ccw-watch pj-health mods-api-drift"
-SELFTESTS="pj:--selftest pj-launch-check:--selftest pj-start-card-selftest pj-session-end-selftest pj-prompt-file:--selftest pj-id:--selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest audit-chain-selftest pj-launcher-menu:--selftest mods-api-drift:--selftest"
+FRAMEWORK_TOOLS="pj pj-launch-check pj-prompt-file pj-start-card pj-id open-items decided claude-hooks-sync claude-project-settings-render ci-watch ccw-watch pj-health mods-api-drift"
+SELFTESTS="pj:--selftest pj-launch-check:--selftest pj-start-card-selftest pj-prompt-file:--selftest pj-id:--selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest audit-chain-selftest pj-launcher-menu:--selftest mods-api-drift:--selftest"
 # enforce-uv, enforce-pnpm and pj-voice-contract retired in wean step B11 item 2 (copies in ~/RETIRED/2026-10-18-step-d/).
 HOOK_SELFTESTS="enforce-secret-probe.sh validate-bash.sh enforce-pj-workers.sh"
 PLUGIN_DIRS_EXPECTED="skills/herdr pj"   # pj-voice retired by option A, 2026-10-03; ISA unwired with LifeOS. pj stays while the pj launcher passes it; its source retired in wean B11 item 5
@@ -358,6 +358,9 @@ if [ -r "$SETTINGS_PROJECT" ]; then
     [ -z "$p" ] && continue
     real="${p/#\$HOME/$HOME}"
     [ -n "${PJ_LAUNCHER:-}" ] && real="${real/#$HOME\/.claude/$PJ_HOME}"   # fixture mode
+    # fixture mode for ~/.local/bin too (19 Oct 2026, B11 item 11: the selftest read the REAL
+    # ~/.local/bin/pj-session-end, so retiring it there failed a test about fixture settings)
+    [ -n "${PJ_LAUNCHER:-}" ] && real="${real/#$HOME\/.local\/bin/$PJ_BIN_DIR}"
     if [ ! -x "$real" ]; then
       orphans="$orphans $(basename "$p")"
       fixes="$fixes\n  jq '(.hooks.\"$ev\"[].hooks) |= map(select(.command != $(jq -Rn --arg c "$cmd" '$c')))' $(tilde "$SETTINGS_PROJECT")"
@@ -457,6 +460,9 @@ while IFS= read -r hf; do
     real="${real//\$\{HOME\}/$HOME}"; real="${real//\$HOME/$HOME}"; real="${real/#\~\//$HOME/}"
     real="${real//\$\{CLAUDE_PROJECT_DIR\}/$proot}"; real="${real//\$CLAUDE_PROJECT_DIR/$proot}"
     [ -n "${PJ_LAUNCHER:-}" ] && real="${real/#$HOME\/.claude/$PJ_HOME}"   # fixture mode
+    # fixture mode for ~/.local/bin too (19 Oct 2026, B11 item 11: the selftest read the REAL
+    # ~/.local/bin/pj-session-end, so retiring it there failed a test about fixture settings)
+    [ -n "${PJ_LAUNCHER:-}" ] && real="${real/#$HOME\/.local\/bin/$PJ_BIN_DIR}"
     case "$real" in *'$'*) hfo_unres=$((hfo_unres+1)); continue ;; esac
     base="$(basename "$real")"
     cls="$(printf '%s\n' "$HFO_CLASSES" | awk -F'\t' -v s="$base" '$1 == s { print $2; exit }')"
