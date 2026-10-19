@@ -34,7 +34,7 @@
 #   claude as an argument, and prose: quotes, heredoc bodies, commit messages.
 #
 # ONE NAMED OVERRIDE (redteam-3 H6): a proof whose control needs a plain worker
-# prefixes the herdr command with PJ_WORKERS_CONTROL=<W-YYYYMMDD-XNN>. It is
+# prefixes the herdr command with PJ_WORKERS_CONTROL=<engage record id>. It is
 # allowed, logged to hooks-security.log, and named back in the hook's reply.
 #
 # FAILS CLOSED (redteam-3 H4). When jq is missing, the payload does not parse, or
@@ -316,6 +316,9 @@ EOF
   conv_arm deny "A36 claude by path"                            '~/.local/bin/claude -p x'
   conv_arm deny "PJ_WORKERS_CONTROL with a malformed id"        'PJ_WORKERS_CONTROL=please herdr agent start w --kind claude --pane w1:p1'
   conv_arm deny "PJ_WORKERS_CONTROL on ANOTHER command only"    'PJ_WORKERS_CONTROL=W-20260924-A59 true; herdr agent start w --kind claude --pane w1:p1'
+  # engage #3401 (10a): the id is an engage record (3401 or #3401) or an old drawer id; nothing else
+  conv_arm deny "3401 PJ_WORKERS_CONTROL=abc, not a record id"   'PJ_WORKERS_CONTROL=abc command claude -p x'
+  conv_arm deny "3401 PJ_WORKERS_CONTROL=# with no number"       'PJ_WORKERS_CONTROL=# command claude -p x'
 
   echo "=== ALLOW arms: real transcript commands (source transcript named) ==="
   # e8aae7dc: the Mods probe launch redteam-3 H7 names (CLAUDE twice, clear; first)
@@ -392,6 +395,10 @@ EOF
     'PJ_WORKERS_CONTROL=W-20260924-A59 herdr pane run w1:p1 "claude"' W-20260924-A59
   control_arm "the override through env" \
     'env PJ_WORKERS_CONTROL=W-20260924-A77 herdr agent start ctl --kind claude --pane w1:p1' W-20260924-A77
+  control_arm "3401 an engage record id on a plain session (command claude -p)" \
+    'PJ_WORKERS_CONTROL=3401 command claude -p x' 'PJ_WORKERS_CONTROL=3401 '
+  control_arm "3401 an engage record id written #3401" \
+    'PJ_WORKERS_CONTROL=#3401 ENGAGE_TEST_RUN=10a command claude -p x' 'PJ_WORKERS_CONTROL=#3401 '
 
   echo "=== FAIL-CLOSED arms: the payload cannot be read (redteam-3 H4) ==="
   GOOD=$(conv_payload 'herdr agent start w --kind claude --pane w1:p1')

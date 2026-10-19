@@ -1623,8 +1623,8 @@ function reset_check(    k, j, n, b, a, w, rec, p, c, v, chain, exited, shown) {
 #   bash/sh/zsh/dash/ksh -c, eval, and ssh's remote command (all re-scanned).
 # Allowed: pj, pj-worker, herdr-quick-task (not herdr), other kinds, claude as an
 #   ARGUMENT (alias claude, which claude), prose in quotes, heredocs and commits.
-# Override: a PJ_WORKERS_CONTROL=W-YYYYMMDD-XNN assignment on the herdr command
-#   turns its deny into CONTROL: allowed, logged and named by the hook.
+# Override: a PJ_WORKERS_CONTROL=<id> assignment (an engage record, 3401 or #3401, or an old
+#   W-YYYYMMDD-XNN) on the command turns its deny into CONTROL: allowed, logged and named.
 # Output: ALLOW | DENY | CONTROL, then one message line (CONTROL: the item id,
 #   then the message).
 
@@ -1770,7 +1770,7 @@ function pj_scan(ctx, ov, where,    k, j, n, a, w, b, ovk, t, lab) {
         ovk = ov
         for (a = 1; a < j; a++) if (WR[k, a] ~ /^PJ_WORKERS_CONTROL=/) {
             w = unq(WR[k, a]); sub(/^PJ_WORKERS_CONTROL=/, "", w)
-            if (w ~ /^W-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[A-Z][0-9]+$/) ovk = w   # no {8}: mawk lacks intervals
+            if (w ~ /^W-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[A-Z][0-9]+$/ || w ~ /^#?[0-9]+$/) ovk = w   # no {8}: mawk lacks intervals
         }
         w = unq(WR[k, j]); b = base(w)
         if (ctx == "pane") {
