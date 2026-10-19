@@ -44,7 +44,8 @@
 #
 # TARGETS
 #   --target user     (default) ~/.claude/settings.json
-#   --target project            ~/.claude/settings.project.json
+#   --target project            ~/.claude/settings.project.json (pj's; install.sh stopped
+#                               writing it in wean step B8, and it retires with pj)
 #
 #   An entry is considered for a target only when its manifest `targets` array
 #   names it; omitting `targets` means ["user"], which is what every entry did
@@ -190,7 +191,7 @@ fi
 if [[ ! -f "$SETTINGS" ]]; then
     printf '%s! claude-hooks-sync: %s does not exist -- nothing to register into.%s\n' "$Y" "$SETTINGS" "$N" >&2
     printf '  %sStart Claude Code once to create it, then re-run.%s\n' "$D" "$N" >&2
-    printf '  %s(--target project expects install.sh to have rendered it first.)%s\n' "$D" "$N" >&2
+    [[ "$TARGET" == project ]] && printf '  %s(settings.project.json was pj'"'"'s; install.sh no longer writes it since wean step B8.)%s\n' "$D" "$N" >&2
     exit 2
 fi
 
