@@ -493,11 +493,11 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow 'A11v H reassigned to $(...): not known'    'H=~/.claude/hooks; H=$(mktemp -d); cp x.sh $H/a.sh'
   conv_arm allow 'A11v prefix H=... cmd is not read'         'H=~/.claude/hooks cp x.sh $H/a.sh'
   conv_arm allow 'A11v $H never set in this command'         'cp x.sh $H/a.sh'
-  # D-20260929-A14 narrowed 2026-09-29 (Gavin's box, session dotfiles-doer): the lock covers the
-  # auto-memory files at the top of memory/, not the open-items drawer in memory/WORK/.
+  # D-20260929-A14 in full again (19 Oct 2026: #3114 withdrawn, B6 parts 4c and 5a): the lock covers
+  # all of memory/, the old open-items drawer in memory/WORK/ included.
   conv_arm deny  'A35 sed -i on a top-level memory file'       "sed -i '' s/a/b/ ~/.claude/projects/-Users-x/memory/MEMORY.md"
-  conv_arm allow 'A35 cp into the drawer handoff (memory/WORK)' 'cp new.md ~/.claude/projects/-Users-x/memory/WORK/OPENING-PROMPT.md'
-  conv_arm allow 'A35 cp into a drawer topic folder'          'cp r.md ~/.claude/projects/-Users-x/memory/WORK/topic/REPORT.md'
+  conv_arm deny  'A35 cp into the drawer handoff (memory/WORK)' 'cp new.md ~/.claude/projects/-Users-x/memory/WORK/OPENING-PROMPT.md'
+  conv_arm deny  'A35 cp into a drawer topic folder'          'cp r.md ~/.claude/projects/-Users-x/memory/WORK/topic/REPORT.md'
   conv_arm allow 'A35 read a live guard'                       'cat ~/.claude/hooks/validate-bash.sh'
   conv_arm allow 'A35 git config --global --get'               'git config --global --get user.email'
   conv_arm allow 'A35 git config --global --list'              'git config --global --list'
