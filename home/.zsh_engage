@@ -116,7 +116,7 @@ claude-clean() {
 # Gavin typing a bare `claude` in a herdr pane is refused too (ruled): the guard cannot tell his
 # typing from herdr's, and the refusal names the escape.
 #
-# ESCAPES, by design: `command claude` (the human's, and pj-worker --cleanroom's route, as in
+# ESCAPES, by design: `command claude` (the human's, and engage-worker start --cleanroom's route, as in
 # claude-clean above); `sudo claude` (already `command claude`); a path such as
 # ~/.local/bin/claude. Scripts never see this function: pj and lifeos run claude from PATH.
 # It DOES reach an agent's Bash tool, through Claude Code's shell snapshot, where HERDR_ENV is

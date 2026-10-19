@@ -1,3 +1,0 @@
-#!/usr/bin/env zsh
-# pj-worker is retired (7 Oct 2026, engage #1106): engage-worker starts, verifies, prompts and counts. The old tool is in git history.
-{ print -ru2 -- "pj-worker is retired. Type engage-worker."; exit 2; }

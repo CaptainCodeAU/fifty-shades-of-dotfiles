@@ -188,7 +188,6 @@ The tools behind every Claude session's start card, wrap-up and temp folder. Sin
 | `pj-session-end`   | SessionEnd hook: flags a session that did work and ended without `/pj:wrap-up`, for the next start card     |
 | `pj-wrap`          | The helper behind `/pj:wrap-up`: `status`, `done`, `push` (see `docs/PJ_WRAP_UP.md`)                        |
 | `pj-temp`          | Gives every session its own temp folder and empties it into the Trash (see `docs/PJ_TEMP_CLEANUP.md`)       |
-| `pj-worker`        | Starts a conductor's herdr worker as a real session, proves it, and holds the session caps                  |
 | `pj-health`        | Is the session framework wired on this machine? One row per check, writes nothing (see `docs/PJ_HEALTH.md`) |
 | `pj-id`            | The one ID allocator behind `open-items add` and `decided add`                                              |
 
@@ -269,7 +268,6 @@ Each one drives its tool to pass and to fail on throwaway fixtures, and touches 
 | `pj-ping-selftest`                        | Every arm of `pj-ping`, with fake sound and message senders                                |
 | `pj-session-end-selftest`                 | Every arm of `pj-session-end`                                                              |
 | `pj-start-card-selftest`                  | Every arm of `pj-start-card`                                                               |
-| `pj-worker-selftest`                      | Every arm of `pj-worker`, with fake herdr                                                  |
 | `pj-wrap-selftest`                        | Every arm of `pj-wrap`, including push conflicts                                           |
 | `zsh-claude-paneguard-selftest`           | `.zshrc`'s `claude()` herdr pane guard                                                     |
 | `zsh-node-functions-selftest`             | `pnpm_update`'s deny list refuses                                                          |
