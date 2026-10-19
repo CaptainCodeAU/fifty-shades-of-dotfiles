@@ -64,7 +64,8 @@ LABEL_SOURCE="dotfiles-state-words"
 TOKEN_SOURCE="dotfiles-state-words-box"
 # No shape before the words since 19 Oct, 11:55 PM (Gavin: "remove and get rid of that shape
 # thingy"); the session name now comes first on line 2, so nothing hangs under the project.
-WORKING_WORD="thinking"
+# 20 Oct, 12:28 AM (Gavin): "thinking" is the 💭 emoji instead of the word.
+WORKING_WORD="💭"
 # 20 Oct, 12:20 AM (Gavin): "your turn" became the 🫵 emoji; 12:25 AM, 👉 instead.
 DONE_WORD="👉"
 # Seen "your turn" (idle) ends in a zero-width space (U+200B), so config.toml can colour it on
@@ -135,7 +136,10 @@ fi
 
 # --agent ties labels and tokens to this agent: herdr drops them when it
 # exits, so a shell left behind in the pane carries none.
-if [ "$ours" = yes ] && [ "$idle_now" != "$want_idle" ]; then
+# Reported when ANY of our four words differs, not only idle: when 💭 replaced "thinking" on
+# 20 Oct, an idle-only test would have left every pane we own on the old word.
+if [ "$ours" = yes ] && { [ "$idle_now" != "$want_idle" ] || [ "$done_now" != "$want_done" ] \
+        || [ "$working_now" != "$WORKING_WORD" ] || [ "$blocked_now" != "$BLOCKED_WORD" ]; }; then
     "$HERDR_BIN_PATH" pane report-metadata "$pane_id" \
         --source "$LABEL_SOURCE" \
         --agent "$agent" \

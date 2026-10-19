@@ -34,7 +34,7 @@ facts behind the choices and the options not taken.
   `$name_off` on the others, in place of herdr's `workspace` token. An agent on another machine is
   not in this server's pane list, so its row shows no project name. Line 2: the session name, a
   tad dimmer (`#8c8069` became `#736955`), then the state word, with no shape before it
-  (`thinking`, `👉`, `resting`, `needs you`; since 20 Oct, 12:25 AM `👉` stands where `your turn`
+  (`💭`, `👉`, `resting`, `needs you`; `💭` stands where `thinking` was since 12:28 AM; since 20 Oct, 12:25 AM `👉` stands where `your turn`
   was, Gavin's ask; 🫵 for five minutes before that). The seen `👉` ends in a zero-width
   space (U+200B; herdr keeps it, read back 19 Oct) so a rule can colour it alone, as the square
   corner did before. The cache timer reads `— 42` (since 20 Oct, 12:15 AM: an em-dash in place
