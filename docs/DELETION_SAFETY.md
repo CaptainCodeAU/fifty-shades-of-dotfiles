@@ -484,7 +484,7 @@ inside `( )`, `{ }`, `$( )`, backticks, `<( )`, `=( )`, behind `VAR=1`, `sudo`, 
 | `git checkout -- <p>`, `.`, a glob, `<ref> <path>`, a path on disk, `-f`                                                                                                                                                                                                                                                                                                                                                  | **denied** | `git stash push -u`; `git switch` for branches                                                          |
 | `git restore` without `--staged`, or with `--worktree`                                                                                                                                                                                                                                                                                                                                                                    | **denied** | `git stash push -u`, or ask Gavin                                                                       |
 | `git switch -f` / `--discard-changes`                                                                                                                                                                                                                                                                                                                                                                                     | **denied** | `git stash push -u` first                                                                               |
-| `git branch -D`, `--delete --force`, `-M`, `-C`                                                                                                                                                                                                                                                                                                                                                                           | **denied** | `git branch -d`                                                                                         |
+| `git branch -D`, `--delete --force`, `-M`, `-C`                                                                                                                                                                                                                                                                                                                                                                           | **denied** | `git branch -d`; or a delete that is proved safe (below)                                                                                         |
 | `git stash drop` / `clear`                                                                                                                                                                                                                                                                                                                                                                                                | **denied** | ask Gavin                                                                                               |
 | `git reflog expire/delete`, `git gc --prune=now/all`, `git prune`                                                                                                                                                                                                                                                                                                                                                         | **denied** | ask Gavin (they destroy the recovery trail)                                                             |
 | `/bin/rm`, `/usr/bin/rm`, any path to rm, `grm`                                                                                                                                                                                                                                                                                                                                                                           | **denied** | bare `rm`                                                                                               |
@@ -555,6 +555,48 @@ credential-named assignments redacted.
 ~/.claude/hooks/enforce-no-permanent-delete.sh --mutants    # removes each rule line; each must be caught
 ~/.claude/hooks/enforce-no-permanent-delete.sh --classify 'git clean -fdx'
 ```
+
+### Branch deletes that pass without asking
+
+Two routes let an agent delete a branch, local or on GitHub, without Gavin in the loop. Both
+are proved by the guard at the moment of the delete, never taken on trust. Everything else
+(`-M`, `-C`, a move, a copy, `-r`, a force push) stays denied.
+
+**A saved bundle** (Gavin, dotfiles-main Q84: 1, 19 Oct 2026: "If a command can be reversed,
+don't create a friction by adding me into the loop for something like this!"):
+
+```sh
+git bundle create ~/RETIRED/<name>.bundle <branch>
+GIT_BRANCH_BUNDLE=~/RETIRED/<name>.bundle git branch -D <branch>
+GIT_BRANCH_BUNDLE=~/RETIRED/<name>.bundle git push <remote> --delete <branch>
+```
+
+The bundle must pass `git bundle verify` against the repo, and each tip must be one of its heads
+or an ancestor of one. For a remote delete the tip is read from the remote with `git ls-remote`
+(15 s cap), never from a local copy that may be stale. The path may start `~/`, `$HOME/` or
+`${HOME}/`; any other `$`, a chain, a quote or a substitution is refused.
+
+**Merged and tagged** (Gavin, dotfiles-main Q85: 1, 19 Oct 2026: "if a particular branch has
+been merged, then you're free to delete that as well, assuming there are git tags there"):
+
+```sh
+git branch -D <branch>                  # merged into the default branch, a tag holds its tip
+git push <remote> --delete <branch>     # the same, read on the remote, the tag on the remote too
+```
+
+The default branch is `origin/HEAD`'s branch (the remote's `HEAD` for a push), else `main` or
+`master`, and it can never be deleted this way. A tag never moves, so every commit of the branch
+stays reachable. For a push, one `git ls-remote` reads the remote's default branch, the branch
+and the tags; the ancestry is checked in the local repo, so a remote commit it lacks fails closed
+(`git fetch` first). A denial says which check failed.
+
+The tags come from the global git hooks (`_audit-chain` step 4, same ruling): a
+`split/<branch>/<time>` tag where a branch is created, and a `join/<name>/<time>` tag where a
+`git merge` lands. A branch merged on GitHub gets no join tag on this Mac; tag it by hand
+(`git tag <name> <branch>`, then `git push <remote> <name>`) or use a bundle.
+
+Tests: the Q84 and Q85 arms of `enforce-no-permanent-delete.sh --selftest` (local) and
+`validate-bash.sh --selftest` (remote), and arms 40 to 52 of `audit-chain-selftest` (the tags).
 
 ### `find`: order, `-depth`, and the dry run
 

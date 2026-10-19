@@ -198,13 +198,48 @@ _bundle_holds() { # $1 repo dir, $2 bundle path, $3.. tips (full shas)
   BH_WHY=""; return 0
 }
 
-# Q84: 1. rc 0 when the WHOLE command is one plain remote branch delete carrying the bundle:
-#   GIT_BRANCH_BUNDLE=<file> git [-C <dir>] push <remote> --delete|-d <branch>...
-#   GIT_BRANCH_BUNDLE=<file> git [-C <dir>] push --delete|-d <remote> <branch>...
-#   GIT_BRANCH_BUNDLE=<file> git [-C <dir>] push <remote> :<branch>...
-# Each branch's tip is read from the REMOTE (git ls-remote, 15 s cap), never a local copy that may
-# be stale, and must be held by the bundle. Anything else, a chain, a quote, a substitution or a
-# failed read, returns 1 and the delete stays denied.
+# Q85: 1 (Gavin, dotfiles-main, 19 Oct 2026). rc 0 when every branch in $3.. is, ON THE REMOTE,
+# merged into the remote's default branch (its HEAD, else main or master) and held by a tag the
+# remote also has; never the default branch itself. One git ls-remote (15 s cap) reads it all;
+# the ancestry is checked in this repo, so a remote commit it lacks fails closed (git fetch).
+_remote_merged_tagged() { # $1 repo dir, $2 remote, $3.. branch names
+  local dir="${1:-}" remote="${2:-}" ls d dsha b t s ok
+  [ $# -ge 3 ] || return 1; shift 2 || set --
+  RD_WHY="could not list $remote (git ls-remote)"
+  ls=$(perl -e 'alarm 15; exec @ARGV' git -C "$dir" ls-remote --symref "$remote" 2>/dev/null) || return 1
+  d=$(printf '%s\n' "$ls" | awk '$1 == "ref:" && $3 == "HEAD" {sub("^refs/heads/", "", $2); print $2; exit}')
+  if [ -z "$d" ]; then
+    for d in main master ""; do
+      [ -n "$d" ] && printf '%s\n' "$ls" | awk -v r="refs/heads/$d" '$1 ~ /^[0-9a-f]+$/ && $2 == r {f=1} END {exit !f}' && break
+    done
+  fi
+  RD_WHY="$remote has no default branch (HEAD, main or master)"; [ -n "$d" ] || return 1
+  dsha=$(printf '%s\n' "$ls" | awk -v r="refs/heads/$d" '$1 ~ /^[0-9a-f]+$/ && $2 == r {print $1; exit}')
+  RD_WHY="this repo lacks $remote's $d (git fetch first)"
+  [ -n "$dsha" ] && git -C "$dir" cat-file -e "$dsha^{commit}" 2>/dev/null || return 1
+  for b in "$@"; do
+    RD_WHY="$b is $remote's default branch"; [ "$b" != "$d" ] || return 1
+    t=$(printf '%s\n' "$ls" | awk -v r="refs/heads/$b" '$1 ~ /^[0-9a-f]+$/ && $2 == r {print $1; exit}')
+    RD_WHY="$remote has no branch $b"; [ -n "$t" ] || return 1
+    RD_WHY="this repo lacks $remote's $b (git fetch first)"; git -C "$dir" cat-file -e "$t^{commit}" 2>/dev/null || return 1
+    RD_WHY="$b is not merged into $d on $remote"; git -C "$dir" merge-base --is-ancestor "$t" "$dsha" 2>/dev/null || return 1
+    ok=0
+    for s in $(printf '%s\n' "$ls" | awk '$1 ~ /^[0-9a-f]+$/ && $2 ~ /^refs\/tags\// {print $1}'); do
+      if git -C "$dir" cat-file -e "$s^{commit}" 2>/dev/null && git -C "$dir" merge-base --is-ancestor "$t" "$s" 2>/dev/null; then ok=1; break; fi
+    done
+    RD_WHY="no tag on $remote holds the tip of $b (git tag <name> $b, then git push $remote <name>)"; [ "$ok" -eq 1 ] || return 1
+  done
+  RD_WHY=""; return 0
+}
+
+# Q84: 1 and Q85: 1. rc 0 when the WHOLE command is one plain remote branch delete:
+#   [GIT_BRANCH_BUNDLE=<file>] git [-C <dir>] push <remote> --delete|-d <branch>...
+#   [GIT_BRANCH_BUNDLE=<file>] git [-C <dir>] push --delete|-d <remote> <branch>...
+#   [GIT_BRANCH_BUNDLE=<file>] git [-C <dir>] push <remote> :<branch>...
+# With the bundle, each branch's tip is read from the REMOTE (git ls-remote, 15 s cap), never a
+# local copy that may be stale, and must be held by the bundle. Without it, every branch must be
+# merged and tagged on the remote (_remote_merged_tagged). Anything else, a chain, a quote, a
+# substitution or a failed read, returns 1 and the delete stays denied.
 _remote_delete_bundled() { # $1 command, $2 cwd
   local cmd="$1" dir="${2:-}" bun remote="" i=0 b t
   local -a w=() br=() tips=()
@@ -216,8 +251,8 @@ _remote_delete_bundled() { # $1 command, $2 cwd
   RD_WHY="the command must be ONE plain git push delete, with no chain, quote or substitution"
   case "$cmd" in *[\;\&\|\`\$\(\)\<\>\"\'\\]*|*$'\n'*) return 1 ;; esac
   read -r -a w <<<"$cmd"
-  [[ ${w[0]:-} == GIT_BRANCH_BUNDLE=?* ]] || return 1
-  bun="${w[0]#GIT_BRANCH_BUNDLE=}"; i=1
+  bun=""; i=0
+  if [[ ${w[0]:-} == GIT_BRANCH_BUNDLE=?* ]]; then bun="${w[0]#GIT_BRANCH_BUNDLE=}"; i=1; fi
   [ "${w[$i]:-}" = git ] || return 1; i=$((i + 1))
   if [ "${w[$i]:-}" = -C ]; then
     case "${w[$((i + 1))]:-}" in /*) dir="${w[$((i + 1))]}" ;; "") return 1 ;; *) [ -n "$dir" ] || return 1; dir="$dir/${w[$((i + 1))]}" ;; esac
@@ -237,6 +272,7 @@ _remote_delete_bundled() { # $1 command, $2 cwd
     br[${#br[@]}]="$b"
   done
   [ "${#br[@]}" -gt 0 ] && [ -n "$dir" ] || return 1
+  if [ -z "$bun" ]; then _remote_merged_tagged "$dir" "$remote" "${br[@]}"; return; fi   # Q85: 1
   for b in "${br[@]}"; do
     t=$(perl -e 'alarm 15; exec @ARGV' git -C "$dir" ls-remote --exit-code "$remote" "refs/heads/$b" 2>/dev/null | awk 'NR == 1 {print $1}')
     RD_WHY="could not read refs/heads/$b on $remote (git ls-remote)"; [ -n "$t" ] || return 1
@@ -267,8 +303,11 @@ _guard() {
       case "$r" in
         "Remote delete (W-20260929-A37): git push"*)
           RD_WHY=""; _remote_delete_bundled "$1" "${2:-}" && return 0
-          case "$1" in *GIT_BRANCH_BUNDLE=*) r="$r. The bundle route did not pass: ${RD_WHY:-the command is not one of its forms}" ;; esac
-          r="$r -- or save the branch first and prove it: git bundle create <file> <branch>, then GIT_BRANCH_BUNDLE=<file> git push <remote> --delete <branch> (the bundle must verify and hold the remote tip; Q84: 1)" ;;
+          case "$1" in
+            *GIT_BRANCH_BUNDLE=*) r="$r. The bundle route did not pass: ${RD_WHY:-the command is not one of its forms}" ;;
+            *) r="$r. The merged-and-tagged route did not pass: ${RD_WHY:-the command is not one of its forms}" ;;
+          esac
+          r="$r -- or save the branch first and prove it: git bundle create <file> <branch>, then GIT_BRANCH_BUNDLE=<file> git push <remote> --delete <branch> (the bundle must verify and hold the remote tip; Q84: 1). A branch merged into the remote's default branch, whose tip a tag on the remote holds, deletes with a plain git push <remote> --delete <branch> (Q85: 1)" ;;
       esac
       echo "$r" ;;
     *) echo "validate-bash: its scanner answered '${out%%$'\n'*}'; denying rather than guessing" ;;
@@ -826,6 +865,41 @@ if [ "${1:-}" = "--selftest" ]; then
   HOME="$FX" conv_arm allow 'Q84 a bundle path written $HOME/...'   'GIT_BRANCH_BUNDLE=$HOME/rd-topic.bundle git push origin --delete topic' '' "$RDL"
   HOME="$FX" conv_arm allow 'Q84 a bundle path written ${HOME}/...' 'GIT_BRANCH_BUNDLE=${HOME}/rd-topic.bundle git push origin --delete topic' '' "$RDL"
   HOME="$FX" conv_arm deny  'Q84 any other $ in the command stays denied' 'GIT_BRANCH_BUNDLE=$HOME/rd-topic.bundle git push origin --delete $B' '' "$RDL"
+  # Q85: 1 (Gavin, 19 Oct 2026): with no bundle, a remote delete passes when the REMOTE's branch
+  # is merged into the remote's default branch and a tag the remote has holds its tip. landed:
+  # merged, tag pushed. quiet: merged, tag only local. wip: tagged, not merged. bare4: merged,
+  # no tag until one is pushed. far: a commit only the remote has. A fresh pair each run, because
+  # the arms move the remote's main and $FX is kept between runs.
+  local QX; QX=$(mktemp -d "$FX/q85.XXXXXX")
+  git init -q --bare "$QX/remote.git"; git -C "$QX/remote.git" symbolic-ref HEAD refs/heads/main
+  _vb_repo "${QX##*/}/local" main; QLR="$QX/local"; QRR="$QX/remote.git"
+  git -C "$QLR" remote add origin "$QRR"
+  _q85c() { GIT_AUTHOR_NAME=vb GIT_AUTHOR_EMAIL=vb@selftest GIT_COMMITTER_NAME=vb GIT_COMMITTER_EMAIL=vb@selftest \
+            GIT_AUTHOR_DATE="$3" GIT_COMMITTER_DATE="$3" git -C "$1" commit-tree -p "$2" -m "$4" "$(git -C "$1" mktree </dev/null)"; }
+  QL1=$(_q85c "$QLR" main 2026-02-01T00:00:00Z landed)
+  QL2=$(_q85c "$QLR" "$QL1" 2026-02-02T00:00:00Z quiet)
+  QL3=$(_q85c "$QLR" "$QL1" 2026-02-03T00:00:00Z wip)
+  QL4=$(_q85c "$QLR" "$QL2" 2026-02-04T00:00:00Z bare)
+  git -C "$QLR" tag -f q85-landed "$QL1" >/dev/null 2>&1; git -C "$QLR" tag -f q85-quiet "$QL2" >/dev/null 2>&1
+  git -C "$QLR" tag -f q85-wip "$QL3" >/dev/null 2>&1
+  git -C "$QLR" push -q origin "$QL1:refs/heads/landed" "$QL2:refs/heads/quiet" "$QL3:refs/heads/wip" \
+    "$QL4:refs/heads/bare4" "$QL4:refs/heads/main" q85-landed q85-wip >/dev/null 2>&1
+  conv_arm allow 'Q85 merged on the remote, and a tag there holds it' 'git push origin --delete landed' '' "$QLR"
+  conv_arm allow 'Q85 push <remote> :<branch>, the same branch'     'git push origin :landed' '' "$QLR"
+  conv_arm allow 'Q85 push --delete <remote>, the same branch'      'git push --delete origin landed' '' "$QLR"
+  conv_arm allow 'Q85 git -C <repo> from another folder'            "git -C $QLR push origin --delete landed" '' "$FX"
+  conv_arm deny  'Q85 merged, but the tag is only local'            'git push origin --delete quiet' '' "$QLR"
+  conv_arm deny  'Q85 control: merged, no tag at all'               'git push origin --delete bare4' '' "$QLR"
+  conv_arm deny  'Q85 tagged, but not merged'                       'git push origin --delete wip' '' "$QLR"
+  conv_arm deny  'Q85 one of two branches not merged'               'git push origin --delete landed wip' '' "$QLR"
+  conv_arm deny  'Q85 chained after the delete'                     'git push origin --delete landed; true' '' "$QLR"
+  conv_arm deny  'Q85 a branch the remote does not have'            'git push origin --delete nosuch' '' "$QLR"
+  git -C "$QLR" tag -f q85-bare "$QL4" >/dev/null 2>&1; git -C "$QLR" push -q origin q85-bare >/dev/null 2>&1
+  conv_arm allow 'Q85 bare4, once a tag on the remote holds it'     'git push origin --delete bare4' '' "$QLR"
+  conv_arm deny  'Q85 the default branch itself, even tagged'       'git push origin --delete main' '' "$QLR"
+  QF=$(_q85c "$QRR" "$QL4" 2026-02-05T00:00:00Z far)
+  git -C "$QRR" update-ref refs/heads/far "$QF"; git -C "$QRR" update-ref refs/heads/main "$QF"; git -C "$QRR" tag -f q85-far "$QF" >/dev/null 2>&1
+  conv_arm deny  'Q85 a remote commit this repo does not have'      'git push origin --delete far' '' "$QLR"
 
   echo "$((_must_n + _st_n)) arms, $((_must_n + _st_n - fails - _st_fails)) passed, $((fails + _st_fails)) failed"
   [ $((fails + _st_fails)) -eq 0 ] && { echo "ALL ARMS PASS"; exit 0; } || { echo "$((fails + _st_fails)) ARM(S) FAILED"; exit 1; }

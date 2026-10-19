@@ -413,7 +413,7 @@ _msg() { # $1 = rule id -> what it does, then the safe route
     git-checkout-discard) echo "git checkout on paths (-- <path>, ., or a file) or with -f discards uncommitted work. SAFE ROUTE: git stash push -u (recoverable), or ask Gavin; for a branch use git switch <branch>." ;;
     git-restore)    echo "git restore without --staged overwrites the working tree. SAFE ROUTE: git stash push -u (recoverable), or ask Gavin; git restore --staged <f> only unstages." ;;
     git-switch-discard) echo "git switch -f / --discard-changes throws away uncommitted work. SAFE ROUTE: git stash push -u first, or ask Gavin." ;;
-    git-branch-force) echo "git branch -D / --delete --force / -M / -C deletes or overwrites a branch even when unmerged. SAFE ROUTE: git branch -d (refuses unmerged work), or save the branch first and prove it: git bundle create <file> <branch>, then GIT_BRANCH_BUNDLE=<file> git branch -D <branch> (the bundle must verify and hold the branch's tip; Gavin, dotfiles-main Q84: 1)." ;;
+    git-branch-force) echo "git branch -D / --delete --force / -M / -C deletes or overwrites a branch even when unmerged. SAFE ROUTE: git branch -d (refuses unmerged work), or save the branch first and prove it: git bundle create <file> <branch>, then GIT_BRANCH_BUNDLE=<file> git branch -D <branch> (the bundle must verify and hold the branch's tip; Gavin, dotfiles-main Q84: 1). A branch merged into the default branch whose tip a tag holds deletes with a plain git branch -D (Q85: 1); tag it first with git tag <name> <branch>." ;;
     git-stash-drop) echo "git stash drop / clear destroys stashed work. SAFE ROUTE: ask Gavin." ;;
     git-rm-force)   echo "git rm -f removes files AND their uncommitted changes, which are in neither the Trash nor git. SAFE ROUTE: commit or stash first, git rm --cached to keep the file, or ask Gavin." ;;
     git-filter-repo) echo "git filter-repo / filter-branch rewrites history; the old commits are gone once their refs expire. SAFE ROUTE: ask Gavin." ;;
@@ -1228,6 +1228,38 @@ _bundle_holds() { # $1 repo dir, $2 bundle path, $3.. tips (full shas)
   BH_WHY=""; return 0
 }
 
+# A merged branch that a tag holds (Gavin, dotfiles-main Q85: 1, 19 Oct 2026: "if a particular
+# branch has been merged, then you're free to delete that as well, assuming there are git tags
+# there"). rc 0 only when no name in $2.. is the default branch and every one's tip is an
+# ancestor of the default branch (local, or origin's copy) and is held by a tag, which never
+# moves. The default is origin/HEAD's branch when it is set, else main or master. MT_WHY names
+# the check that failed. The tags come from _audit-chain step 4, or by hand.
+_merged_tagged() { # $1 repo dir, $2.. branch names
+  local dir="${1:-}" d b t ref ok cands=() into=()
+  [ $# -ge 2 ] && [ -n "$dir" ] || return 1; shift || set --
+  d=$(git -C "$dir" symbolic-ref -q --short refs/remotes/origin/HEAD 2>/dev/null); d="${d#origin/}"
+  if [ -n "$d" ]; then cands=("refs/heads/$d" "refs/remotes/origin/$d"); else cands=(refs/heads/main refs/heads/master); fi
+  for ref in "${cands[@]}"; do
+    git -C "$dir" rev-parse -q --verify "$ref^{commit}" >/dev/null 2>&1 && into[${#into[@]}]="$ref"
+  done
+  MT_WHY="no default branch to be merged into (origin/HEAD, main or master)"; [ ${#into[@]} -gt 0 ] || return 1
+  for b in "$@"; do
+    for ref in "${cands[@]}"; do
+      MT_WHY="$b is the default branch"; [ "refs/heads/$b" != "$ref" ] || return 1
+    done
+    MT_WHY="no branch $b"
+    t=$(git -C "$dir" rev-parse --verify --quiet "refs/heads/$b^{commit}" 2>/dev/null) || return 1
+    ok=0
+    for ref in "${into[@]}"; do
+      if git -C "$dir" merge-base --is-ancestor "$t" "$ref" 2>/dev/null; then ok=1; break; fi
+    done
+    MT_WHY="$b is not merged into ${into[0]#refs/heads/}"; [ "$ok" -eq 1 ] || return 1
+    MT_WHY="no tag holds the tip of $b (git tag <name> $b)"
+    [ -n "$(git -C "$dir" tag --contains "$t" 2>/dev/null)" ] || return 1
+  done
+  MT_WHY=""; return 0
+}
+
 _git_cmd() {
   local gdir="$CWD" w
   # global options, and the directory they point at
@@ -1300,6 +1332,13 @@ _git_cmd() {
         done
         if [ ${#tips[@]} -eq ${#args[@]} ] && _bundle_holds "$gdir" "$BRANCH_BUNDLE" "${tips[@]}"; then return 0; fi   #M: git branch -D with a proving bundle
       fi
+      # Q85: 1. The same plain delete passes, with no bundle, when every branch is merged into
+      # the default branch and a tag holds its tip.
+      local plain=0
+      if [ -z "${BRANCH_BUNDLE:-}" ] && [ ${#args[@]} -gt 0 ] && [ ${#after[@]} -eq 0 ] \
+         && ! _l M && ! _l C && ! _l m && ! _l c && ! _l r && ! _o --move && ! _o --copy && ! _o --remotes \
+         && { _l D || { { _l d || _o --delete; } && { _l f || _o --force; }; }; }; then plain=1; fi
+      if [ "$plain" -eq 1 ] && _merged_tagged "$gdir" "${args[@]}"; then return 0; fi   #M: git branch -D merged and tagged
       if _l D || _l M || _l C; then _deny git-branch-force "git branch -$letters"; return 0; fi   #M: git branch -D
       if { _l d || _o --delete || _l m || _o --move || _l c || _o --copy; } && { _l f || _o --force; }; then _deny git-branch-force "git branch --force"; fi   #M: git branch --delete --force
       ;;
@@ -1442,6 +1481,29 @@ SNAP
   _must git-branch-force    'Q84 a missing bundle'                           "GIT_BRANCH_BUNDLE=$fx/none.bundle git branch -D topic" "$br"
   _must git-branch-force    'Q84 -M is never covered'                        "GIT_BRANCH_BUNDLE=$fx/topic.bundle git branch -M topic other" "$br"
   _must git-branch-force    'Q84 a second branch the bundle lacks'           "GIT_BRANCH_BUNDLE=$fx/topic.bundle git branch -D topic side" "$br"
+  # Q85: 1 (Gavin, 19 Oct 2026): a branch merged into the default branch, whose tip a tag
+  # holds, deletes with no bundle. done: merged, a tag holds it. wip: tagged, not merged.
+  # bare: merged, no tag (a second repo, so no tag reaches it). main: the default itself.
+  local tr="$fx/trepo" ur="$fx/urepo" r tc1 tc2 tc3 tc4
+  for r in "$tr" "$ur"; do
+    git init -q "$r" && bt=$(git -C "$r" mktree </dev/null) \
+      && tc1=$(env $genv GIT_COMMITTER_DATE=2026-01-01T00:00:00Z GIT_AUTHOR_DATE=2026-01-01T00:00:00Z git -C "$r" commit-tree -m one "$bt") \
+      && tc2=$(env $genv GIT_COMMITTER_DATE=2026-01-02T00:00:00Z GIT_AUTHOR_DATE=2026-01-02T00:00:00Z git -C "$r" commit-tree -p "$tc1" -m two "$bt") \
+      && tc3=$(env $genv GIT_COMMITTER_DATE=2026-01-03T00:00:00Z GIT_AUTHOR_DATE=2026-01-03T00:00:00Z git -C "$r" commit-tree -p "$tc2" -m three "$bt") \
+      && tc4=$(env $genv GIT_COMMITTER_DATE=2026-01-04T00:00:00Z GIT_AUTHOR_DATE=2026-01-04T00:00:00Z git -C "$r" commit-tree -p "$tc1" -m four "$bt") \
+      && git -C "$r" update-ref refs/heads/main "$tc3" && git -C "$r" symbolic-ref HEAD refs/heads/main \
+      && git -C "$r" update-ref refs/heads/done "$tc2" && git -C "$r" update-ref refs/heads/wip "$tc4"
+  done
+  git -C "$tr" tag join/done/x "$tc3"; git -C "$tr" tag split/wip/x "$tc4"
+  _must -                   'Q85 git branch -D, merged and a tag holds it'   'git branch -D done' "$tr"
+  _must -                   'Q85 --delete --force, the same branch'          'git branch --delete --force done' "$tr"
+  _must -                   'Q85 git -C <repo> from another folder'          "git -C $tr branch -D done" "$fx"
+  _must git-branch-force    'Q85 control: merged, but no tag holds it'       'git branch -D done' "$ur"
+  _must git-branch-force    'Q85 tagged, but not merged'                     'git branch -D wip' "$tr"
+  _must git-branch-force    'Q85 the default branch itself'                  'git branch -D main' "$tr"
+  _must git-branch-force    'Q85 one of two branches not merged'             'git branch -D done wip' "$tr"
+  _must git-branch-force    'Q85 -M is never covered'                        'git branch -M done other' "$tr"
+  _must git-branch-force    'Q85 a branch that does not exist'               'git branch -D nosuch' "$tr"
   _must git-stash-drop      'git stash drop'                  'git stash drop'
   _must git-stash-drop      'git stash clear'                 'git stash clear'
   _must git-history-prune   'git reflog expire'               'git reflog expire --expire=now --all'
