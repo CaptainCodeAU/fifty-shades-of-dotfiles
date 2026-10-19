@@ -90,6 +90,9 @@ agent=$(printf '%s' "$event_json" | jq -r '.data.agent // empty')
 
 pane_json=$("$HERDR_BIN_PATH" pane get "$pane_id")
 idle_now=$(printf '%s' "$pane_json" | jq -r '.result.pane.state_labels.idle // empty')
+done_now=$(printf '%s' "$pane_json" | jq -r '.result.pane.state_labels.done // empty')
+working_now=$(printf '%s' "$pane_json" | jq -r '.result.pane.state_labels.working // empty')
+blocked_now=$(printf '%s' "$pane_json" | jq -r '.result.pane.state_labels.blocked // empty')
 title=$(printf '%s' "$pane_json" | jq -r '.result.pane.terminal_title_stripped // empty')
 status=$(printf '%s' "$pane_json" | jq -r '.result.pane.agent_status // "unknown"')
 session_id=$(printf '%s' "$pane_json" \
@@ -141,6 +144,20 @@ if [ "$ours" = yes ] && [ "$idle_now" != "$want_idle" ]; then
         --state-label "blocked=$BLOCKED_WORD" \
         >/dev/null
     echo "labelled $pane_id ($agent, $status, asks=$asks)"
+elif [ "$ours" = no ] && { [ "$done_now" != "$want_done" ] || [ "$working_now" != "$WORKING_WORD" ] \
+        || [ "$blocked_now" != "$BLOCKED_WORD" ]; }; then
+    # Another source owns the idle word (engage's worker panes), so ours is left out of the
+    # report, but the other three words are still ours and must not go stale: before 20 Oct,
+    # 12:05 AM this branch did not exist, and two worker panes kept "╰ your turn" and
+    # "╰ thinking" after the shapes were removed (Gavin's screenshot).
+    "$HERDR_BIN_PATH" pane report-metadata "$pane_id" \
+        --source "$LABEL_SOURCE" \
+        --agent "$agent" \
+        --state-label "working=$WORKING_WORD" \
+        --state-label "done=$want_done" \
+        --state-label "blocked=$BLOCKED_WORD" \
+        >/dev/null
+    echo "labelled $pane_id ($agent, $status, asks=$asks, idle left to its owner)"
 fi
 
 case " $STATES " in *" $status "*) ;; *) status=unknown ;; esac
