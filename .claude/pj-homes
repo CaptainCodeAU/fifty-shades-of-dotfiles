@@ -2,6 +2,4 @@
 # repo: (this repo's root), drawer: (the folder `open-items --where` names), ~/ (home).
 # Read by pj-start-card. Every key is optional; missing keys take the D-20260920-06 defaults.
 records: private
-handoff: drawer:OPENING-PROMPT.md
-decisions: drawer:decisions/
 session-alias: dotfiles

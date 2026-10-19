@@ -2,24 +2,17 @@ Read LANE.md first: `~/CODE/Scaffoldings/fifty-shades-of-dotfiles-isolinear/LANE
 
 Default branch is `master`.
 
-Open items arrive on the start card at the top of every `pj` session (count, titles, parked); do not run a listing to get them. `open-items` prints the detail, `open-items --all` every project. File one with `open-items add "title" --done-when "..."`; move one with `close`, `park`, `decline`, `reopen`; `--help` for the rest. Never hand-edit `OPEN.md`, it is generated. Where this project's handoff and records live: `.claude/pj-homes`. End a session that did real work with `/pj:wrap-up` (the pj plugin); a session that skips it leaves a warning on the next card, and `pj-wrap status` lists the transcripts.
+This project moved to engage on 17 Oct 2026. Its to-dos and rulings are engage records in the companion (`~/CODE/Scaffoldings/fifty-shades-of-dotfiles-isolinear/records/`), and its handoff is the captain's log there; engage's start lines name the handoff and the to-dos, so do not run a listing to get them. File a to-do with `engage-go add --done-when "..." "title"`; close what you finish with `engage-go item close` and its proof (`engage-go add --help` names both). End a session that did real work with `/session-end`.
 
 ## Before proposing a fix, ask whether it is already decided
 
-`decided <words>` searches the decisions register (this project's rulings plus the
-machine-wide ones; `--all` reaches every project on the machine) and prints the ruling
-plus the document that holds the reasoning. `decided --list` shows everything in scope;
-`decided --selftest` proves its arms. Record a ruling with `decided add "title" --topic
-"..." --holds-in "<doc>" --project` (or `--global`): the tool allocates the ID and commits.
-Where this project's rulings live: `.claude/pj-homes`. Design and scope rules: `docs/DECIDED.md`.
+`engage-go view --search <words>` searches this project's engage records, rulings included, and prints each match's id, title, state and path; read the record for the ruling and the document that holds its reasoning. Record a ruling with `engage-go add --kind decision --statement "<the ruling>" "title"`: it is a draft until it is approved (`engage-go record approve-ruling FILE`, at Gavin's own terminal or by e-conductor under #3286). The old register (`decided` and the drawer's `decisions/`) is history since the move: `decided` refuses to add or withdraw here and names these commands, and `decided --all <words>` or `decided <ID>` still reads the old blocks, for citations. The old tool's design: `docs/DECIDED.md`.
 
-It never answers with a bare nothing: a miss states how many decisions were searched and
-says out loud that a miss is not the same as "not decided". Same discipline as `census`,
-for the same reason -- an empty result and an unasked question look identical.
+An empty search is not the same as "not decided": check the words, and ask before deciding again. Same discipline as `census`, for the same reason -- an empty result and an unasked question look identical.
 
 **A decision recorded only in a commit message does not exist.** Commit messages are not
 greppable by topic and nobody reads them before proposing. Put the decision in a document,
-add a block to the register, and have the commit point at the document. Commit `69de6c9`
+record it as an engage ruling, and have the commit point at the document. Commit `69de6c9`
 announced a ruling no document held, and an evening was spent re-deriving it on 2026-09-17.
 
 ## Python
@@ -279,7 +272,7 @@ again:
 
 | Tool                                | What it did instead of saying "denied"                                                                                                                   |
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `decided add`                       | **hung forever**: its id-allocation loop could not tell "file exists" from "write refused" and retried the collision path                                |
+| `decided`'s add                     | **hung forever**: its id-allocation loop could not tell "file exists" from "write refused" and retried the collision path                                |
 | `decided-selftest`                  | **printed a wrong count** (78/5 vs 83/0): its `rm` teardown hit the Trash denial, the fixture stayed, later arms read it as data                         |
 | `pnpm-audit-hook` (global pre-push) | **raised a false security alarm**: `uv` died at the shebang, and `if ! scanner` reported "supply-chain findings >= high" for findings that did not exist |
 | `uv`, `pnpm dlx`                    | said so plainly — the only two that behaved                                                                                                              |
