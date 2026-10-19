@@ -19,14 +19,25 @@
 # only those are judged; a pane herdr already shows as blocked (herdr's own alarm); any agent
 # but claude; an agent on another machine (not in this server's pane list).
 #
+# Never flagged either (Q92: 1, 20 Oct): rows that ALL lose their timers in the same pass, two or
+# more of them. At 4:10 AM every row turned stuck at once while no session was frozen.
+#
 # State: ${HERDR_STUCK_STATE:-${XDG_STATE_HOME:-~/.local/state}/dotfiles/herdr-stuck}/seen, one
-# session id per line, rewritten each pass to the ids still in herdr's list. Silent and exit 0
+# session id per line, rewritten each pass to the ids still in herdr's list. watch.log there has
+# one line per mark, clear, and start and end of an outage (its last 500 lines). Silent and exit 0
 # without herdr or jq. Seams (selftest): HERDR_STUCK_HERDR, HERDR_STUCK_STATE.
 set -u
 PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 
 SOURCE="dotfiles-stuck-watch"
 WORD="⚠ stuck"
+
+# One line in watch.log per mark, clear and outage, kept to its last 500 lines.
+note() {
+    local log="$state/watch.log"
+    printf '%s %s\n' "$(date '+%FT%T%z')" "$*" >> "$log" 2>/dev/null || return 0
+    [ "$(wc -l < "$log" 2>/dev/null)" -le 500 ] || { tail -n 500 "$log" > "$log.tmp" && command mv -f "$log.tmp" "$log"; } 2>/dev/null
+}
 
 pass() {
     local herdr="${HERDR_STUCK_HERDR:-$(command -v herdr)}"
@@ -41,20 +52,36 @@ pass() {
         | [.pane_id, (.agent_session.value // "-"), (.agent_status // "unknown"),
            (if ((.tokens // {}) | keys | map(select(startswith("cache_"))) | length) > 0 then "timer" else "none" end),
            (if ((.tokens.stuck // "") != "") then "marked" else "clear" end)] | @tsv' 2>/dev/null) || return 0
+    # Q92: 1. Every remembered row losing its timer in the same pass is a shared cause (all
+    # status lines, or herdr's reports, stopped at once), not two frozen sessions: nothing is
+    # marked, and the log says so once, when it starts and when it ends. Needs 2 rows or more.
+    local timed=0 lost=0 outage=0
+    while IFS=$'\t' read -r pane sid status timer mark; do
+        [ -n "$pane" ] && [ "$sid" != "-" ] || continue
+        if [ "$timer" = timer ]; then timed=$((timed + 1))
+        elif [ "$status" != blocked ] && grep -qxF -- "$sid" "$seen"; then lost=$((lost + 1)); fi
+    done <<< "$rows"
+    if [ "$timed" -eq 0 ] && [ "$lost" -ge 2 ]; then
+        outage=1
+        [ -e "$state/outage" ] || { : > "$state/outage"; note "outage $lost rows lost their timers at once: none marked"; }
+    elif [ -e "$state/outage" ]; then
+        command mv -f "$state/outage" "$state/outage.over" 2>/dev/null; note "outage over"
+    fi
     : > "$new"
     while IFS=$'\t' read -r pane sid status timer mark; do
         [ -n "$pane" ] && [ "$sid" != "-" ] || continue
         if [ "$timer" = timer ]; then
             printf '%s\n' "$sid" >> "$new"
-            [ "$mark" = clear ] || "$herdr" pane report-metadata "$pane" --source "$SOURCE" --agent claude --clear-token stuck >/dev/null 2>&1
+            [ "$mark" = clear ] || { "$herdr" pane report-metadata "$pane" --source "$SOURCE" --agent claude --clear-token stuck >/dev/null 2>&1; note "clear $pane $sid"; }
             continue
         fi
         grep -qxF -- "$sid" "$seen" || continue
         printf '%s\n' "$sid" >> "$new"
         if [ "$status" = blocked ]; then
-            [ "$mark" = clear ] || "$herdr" pane report-metadata "$pane" --source "$SOURCE" --agent claude --clear-token stuck >/dev/null 2>&1
-        elif [ "$mark" = clear ]; then
+            [ "$mark" = clear ] || { "$herdr" pane report-metadata "$pane" --source "$SOURCE" --agent claude --clear-token stuck >/dev/null 2>&1; note "clear $pane $sid"; }
+        elif [ "$mark" = clear ] && [ "$outage" = 0 ]; then
             "$herdr" pane report-metadata "$pane" --source "$SOURCE" --agent claude --token "stuck=$WORD" >/dev/null 2>&1
+            note "mark $pane $sid"
         fi
     done <<< "$rows"
     sort -u "$new" > "$new.s" 2>/dev/null && command mv -f "$new.s" "$seen"
@@ -115,6 +142,23 @@ if [ "${1:-}" = "--selftest" ]; then
     : > "$fx/calls"
     HERDR_STUCK_HERDR="$fx/no-such-herdr" "$0"; rc=$?
     [ "$rc" -eq 0 ] && [ ! -s "$fx/calls" ] && ok "9 no herdr: exit 0, nothing done" || bad "9 no herdr rc=$rc"
+    # Q92: 1 (20 Oct, 4:10 AM every row lost its timer at once and all were marked).
+    setlist "$(pane w1:p5 s5 done yes no)" "$(pane w1:p6 s6 idle yes no)"
+    "$0"; setlist "$(pane w1:p5 s5 done no no)" "$(pane w1:p6 s6 idle no no)"
+    "$0"; c=$(calls)
+    [ -z "$c" ] && ok "10 every remembered row lost its timer in one pass: none marked (a shared cause)" || bad "10 outage"
+    grep -q " outage 2 rows" "$fx/state/watch.log" 2>/dev/null && ok "10 ...and the log says so" || bad "10 outage log"
+    "$0"
+    [ "$(grep -c " outage " "$fx/state/watch.log" 2>/dev/null)" = 1 ] && ok "10 ...once, not on every pass" || bad "10 outage logged twice"
+    setlist "$(pane w1:p5 s5 done yes no)" "$(pane w1:p6 s6 idle no no)"
+    "$0"; c=$(calls)
+    [ "$c" = "pane report-metadata w1:p6 --source dotfiles-stuck-watch --agent claude --token stuck=⚠ stuck" ] \
+        && ok "11 one row of two lost its timer: that one is marked (control for 10)" || bad "11 one of two"
+    grep -q " mark w1:p6 s6$" "$fx/state/watch.log" 2>/dev/null && grep -q " outage over" "$fx/state/watch.log" \
+        && ok "11 ...the mark and the outage's end are logged" || bad "11 mark log ($(tr '\n' '|' < "$fx/state/watch.log"))"
+    setlist "$(pane w1:p5 s5 done yes no)" "$(pane w1:p6 s6 idle yes yes)"
+    "$0"
+    grep -q " clear w1:p6 s6$" "$fx/state/watch.log" 2>/dev/null && ok "12 a cleared mark is logged" || bad "12 clear log"
     echo "herdr-stuck-watch selftest: $pass_n passed, $fail_n failed"
     [ "$fail_n" -eq 0 ]; exit
 fi
