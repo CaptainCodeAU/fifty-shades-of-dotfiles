@@ -345,12 +345,13 @@ pj_drive() {   # pj_drive <HOME> <REPO_DIR> : run _check_pj_prereqs with stubs, 
     ' _ "$INSTALL_SH" "$2" 2>&1
 }
 out_missing="$(pj_drive "$pj_scratch" /some/other/place)"
-if grep -q 'VERDICT-WARN' <<<"$out_missing"; then ok "prereq report WARNS on a bare machine"
-else bad "prereq report WARNS on a bare machine" "$(head -3 <<<"$out_missing")"; fi
-if grep -q 'pj-global/RULES.md missing' <<<"$out_missing"; then ok "  and names the missing RULES.md"
-else bad "  and names the missing RULES.md" "$(head -3 <<<"$out_missing")"; fi
-if grep -q 'OPERATIONAL_RULES.md missing' <<<"$out_missing"; then ok "  and names the missing OPERATIONAL_RULES.md"
-else bad "  and names the missing OPERATIONAL_RULES.md" "$(head -3 <<<"$out_missing")"; fi
+# B8 (wean-off-pj, Gavin's Q144, Q149, Q150; 19 Oct 2026): RULES.md, OPERATIONAL_RULES.md and
+# pj-voice are no longer required, so a machine without them is NOT a failure. Only a
+# dangling plugin symlink still is (below).
+if grep -q 'VERDICT-OK' <<<"$out_missing" && grep -q 'PJ_PREREQS_OK=1' <<<"$out_missing"; then ok "B8: a machine without RULES.md, OPERATIONAL_RULES.md or pj-voice passes (PJ_PREREQS_OK=1)"
+else bad "B8: a machine without RULES.md, OPERATIONAL_RULES.md or pj-voice passes (PJ_PREREQS_OK=1)" "$(grep -e VERDICT -e PJ_PREREQS_OK <<<"$out_missing")"; fi
+if grep -q -e 'RULES.md missing' -e 'pj-voice missing' <<<"$out_missing"; then bad "B8: no line calls RULES.md, OPERATIONAL_RULES.md or pj-voice missing" "$(grep -e 'RULES.md missing' -e 'pj-voice missing' <<<"$out_missing")"
+else ok "B8: no line calls RULES.md, OPERATIONAL_RULES.md or pj-voice missing"; fi
 # A DANGLING plugin symlink must name the one path the whole scheme depends on.
 ln -sfn /nowhere/plugin.json "$pj_scratch/.claude/pj/.claude-plugin/plugin.json"
 out_dead="$(pj_drive "$pj_scratch" /some/other/place)"
@@ -382,18 +383,19 @@ else ok "CONTROL: a complete machine gets NO warning"; fi
 # human does that first. But "installed fine" and "installed, and pj cannot
 # start" must not be the same observation -- for a human reading a terminal, or
 # for anything reading $?.
-if grep -q 'pj is not ready on this machine' <<<"$out_missing"; then ok "bare machine: the block is headed 'pj is not ready on this machine'"
-else bad "bare machine: the block is headed 'pj is not ready on this machine'" "$(head -4 <<<"$out_missing")"; fi
-if grep -q 'PJ_PREREQS_OK=0' <<<"$out_missing"; then ok "bare machine: PJ_PREREQS_OK=0"
-else bad "bare machine: PJ_PREREQS_OK=0" "$(grep PJ_PREREQS_OK <<<"$out_missing")"; fi
-if grep -q 'git clone' <<<"$out_missing"; then ok "bare machine: the block carries the clone commands"
-else bad "bare machine: the block carries the clone commands" "$(head -4 <<<"$out_missing")"; fi
+# Since B8 the block appears only for a dangling plugin symlink, so these arms read out_dead.
+if grep -q 'pj is not ready on this machine' <<<"$out_dead"; then ok "dangling link: the block is headed 'pj is not ready on this machine'"
+else bad "dangling link: the block is headed 'pj is not ready on this machine'" "$(head -4 <<<"$out_dead")"; fi
+if grep -q 'PJ_PREREQS_OK=0' <<<"$out_dead"; then ok "dangling link: PJ_PREREQS_OK=0"
+else bad "dangling link: PJ_PREREQS_OK=0" "$(grep PJ_PREREQS_OK <<<"$out_dead")"; fi
+if grep -q 'git clone' <<<"$out_dead"; then ok "dangling link: the block carries the clone commands"
+else bad "dangling link: the block carries the clone commands" "$(head -4 <<<"$out_dead")"; fi
 # LifeOS retired 16 Oct 2026 (engage #2092): OPERATIONAL_RULES.md is a pj-global file in dot-claude,
 # so the block names one private repo, never lifeos-private or a ~/.claude/LIFEOS/USER link.
-if grep -q -e 'lifeos-private' -e 'LIFEOS/USER' <<<"$out_missing"; then bad "bare machine: the block names dot-claude only, no LifeOS clone or link" "$(grep -e lifeos-private -e LIFEOS/USER <<<"$out_missing")"
-else ok "bare machine: the block names dot-claude only, no LifeOS clone or link"; fi
-if grep -q 're-run ./install.sh' <<<"$out_missing"; then ok "bare machine: it says what to do next"
-else bad "bare machine: it says what to do next" "$(head -4 <<<"$out_missing")"; fi
+if grep -q -e 'lifeos-private' -e 'LIFEOS/USER' <<<"$out_dead"; then bad "dangling link: the block names dot-claude only, no LifeOS clone or link" "$(grep -e lifeos-private -e LIFEOS/USER <<<"$out_dead")"
+else ok "dangling link: the block names dot-claude only, no LifeOS clone or link"; fi
+if grep -q 're-run ./install.sh' <<<"$out_dead"; then ok "dangling link: it says what to do next"
+else bad "dangling link: it says what to do next" "$(head -4 <<<"$out_dead")"; fi
 # CONTROL, the other half: a complete machine must NOT print the block and must
 # set the flag to 1. Without this pair, "the block appears" is equally true of a
 # function that prints it unconditionally.
@@ -416,8 +418,23 @@ else bad "CONTROL: _finish exits 0 when pj IS ready" "got $rc_ok"; fi
 # And the dispatch must actually CALL it, or none of the above reaches a user.
 if grep -qE '^\s+""\)\s+main; _finish ;;' "$INSTALL_SH"; then ok "the default action runs _finish"
 else bad "the default action runs _finish" "$(grep -n '"")' "$INSTALL_SH" | head -2)"; fi
-if grep -qE 'stow-only\).*_check_pj_prereqs; _finish ;;' "$INSTALL_SH"; then ok "--stow-only runs _finish"
+# The pj report moved inside _claude_post_stow, so the dispatch line ends in it, then _finish.
+if grep -qE 'stow-only\).*_claude_post_stow; _finish ;;' "$INSTALL_SH"; then ok "--stow-only runs _finish"
 else bad "--stow-only runs _finish" "$(grep -n 'stow-only)' "$INSTALL_SH" | head -2)"; fi
+
+# --- B8: install.sh stops rebuilding settings.project.json and registering into it ------
+# (wean-off-pj step B8, Gavin's Q144, Q149, Q150). Read from the code, comments stripped:
+# the render is called nowhere, and the hook sync has no project target. Controls: the
+# hook sync and the machine file are still called, so an arm cannot pass on an empty file.
+b8_code="$(code_of "$(cat "$INSTALL_SH")")"
+if grep -qE '_render_project_settings (install|check)' <<<"$b8_code"; then bad "B8: _render_project_settings is called nowhere" "$(grep -nE '_render_project_settings (install|check)' <<<"$b8_code" | head -2)"
+else ok "B8: _render_project_settings is called nowhere"; fi
+if grep -q 'targets+=(project)' <<<"$b8_code"; then bad "B8: the hook sync has no project target" "$(grep -n 'targets+=(project)' <<<"$b8_code")"
+else ok "B8: the hook sync has no project target"; fi
+if grep -qE '^[[:space:]]+_claude_hooks_sync install$' <<<"$b8_code"; then ok "B8 CONTROL: _claude_hooks_sync install is still called"
+else bad "B8 CONTROL: _claude_hooks_sync install is still called" "not found"; fi
+if grep -qE '^[[:space:]]+_claude_hooks_sync check \|\| parity=1$' <<<"$b8_code"; then ok "B8 CONTROL: the parity check still runs the hook sync"
+else bad "B8 CONTROL: the parity check still runs the hook sync" "not found"; fi
 
 # --- setup_pnpm_audit_hooks: ~/.gitconfig.private may spell our hooks dir with a `~/`
 # (W-20261006-A32). Our dir by any spelling is "already active"; a foreign dir still

@@ -2325,12 +2325,11 @@ check_prerequisites() {
     # A hook script that IS linked but is not registered in settings.json is just
     # as undeployed as one that was never linked -- it does nothing either way.
     # Same reporting path, for the same reason. Read-only; writes nothing.
-    # The pj settings file is in the same class: present but out of date with the
-    # repo is as undeployed as absent, and nothing else would ever say so.
+    # B8 (wean-off-pj): ~/.claude/settings.project.json, pj's settings file, is no longer
+    # rendered or checked here; it retires in B11.
     if [[ "$SKIP_CLAUDE" == true ]]; then
-        echo -e "  ${DIM}-${RESET} Claude hooks and pj settings — skipped (--skip-claude)"
+        echo -e "  ${DIM}-${RESET} Claude hooks — skipped (--skip-claude)"
     else
-        _render_project_settings check || parity=1
         _claude_hooks_sync check || parity=1
     fi
     if (( parity )); then
@@ -5270,6 +5269,8 @@ show_help() {
 #
 # NEVER FATAL, same contract as _claude_hooks_sync: a box with no jq or no
 # template is a box without pj settings, not a failed install.
+# B8 (wean-off-pj, 19 Oct 2026): called nowhere any more; ~/.claude/settings.project.json
+# retires in B11, and this function with it.
 _render_project_settings() {
     local mode="${1:-install}" rc=0
     local tool="$REPO_DIR/home/.local/bin/claude-project-settings-render"
@@ -5424,22 +5425,13 @@ _write_pj_machine_file() {
 PJ_PREREQS_OK=1
 _check_pj_prereqs() {
     local dotclaude="$HOME/.claude" ok=1 required="$HOME/CODE/Scaffoldings/fifty-shades-of-dotfiles"
-    local rules="$dotclaude/pj-global/RULES.md"
-    local oprules="$dotclaude/pj-global/OPERATIONAL_RULES.md"
     local p dead=""
 
     step "pj framework prerequisites (report only)"
 
-    if [[ -r "$rules" ]]; then echo -e "  ${GREEN}✓${RESET} pj-global/RULES.md"
-    else echo -e "  ${RED}✗${RESET} $rules missing -- pj launches without its machine-wide rules"; ok=0; fi
-    for p in decisions notes/INDEX.md; do
-        if [[ -e "$dotclaude/pj-global/$p" ]]; then echo -e "  ${GREEN}✓${RESET} pj-global/$p"
-        else echo -e "  ${YELLOW}~${RESET} $dotclaude/pj-global/$p missing"; fi
-    done
-    if [[ -r "$oprules" ]]; then echo -e "  ${GREEN}✓${RESET} pj-global/OPERATIONAL_RULES.md"
-    else echo -e "  ${RED}✗${RESET} $oprules missing -- pj launches without Gavin's operating rules"; ok=0; fi
-    if [[ -d "$dotclaude/pj-voice" ]]; then echo -e "  ${GREEN}✓${RESET} pj-voice plugin dir"
-    else echo -e "  ${RED}✗${RESET} $dotclaude/pj-voice missing -- the pj output style will not load"; ok=0; fi
+    # B8 (wean-off-pj, Gavin's Q144, Q149, Q150; 19 Oct 2026): pj-global/RULES.md,
+    # pj-global/OPERATIONAL_RULES.md and pj-voice are no longer required or reported. Sessions
+    # start through engage, which carries its own rules, so their absence is not a fault.
 
     # Profiles (F5a). NOT a ✗ and NOT part of `ok`: with no profiles dir `pj` falls back to
     # its built-in argv and launches exactly as it always did. That fallback is a supported
@@ -5494,8 +5486,8 @@ _check_pj_prereqs() {
         echo -e "${RED}${BOLD}   pj is not ready on this machine${RESET}"
         echo -e "${RED}${BOLD}  ════════════════════════════════════════════════════════════${RESET}"
         warn "Everything this installer owns is done. pj itself will NOT launch until the items marked ✗ above exist. They live in a PRIVATE repo this installer deliberately does not clone:"
-        echo -e "      ${CYAN}git clone <dot-claude>      ~/.claude${RESET}          ${DIM}(pj-global/, pj-voice/, the plugin symlinks)${RESET}"
-        echo -e "      ${DIM}Clone dot-claude BEFORE running stow. (LifeOS retired 16 Oct 2026: OPERATIONAL_RULES.md is in pj-global/.)${RESET}"
+        echo -e "      ${CYAN}git clone <dot-claude>      ~/.claude${RESET}          ${DIM}(the plugin symlinks)${RESET}"
+        echo -e "      ${DIM}Clone dot-claude BEFORE running stow.${RESET}"
         echo -e "      ${DIM}And keep this repo at ${required} -- the tracked symlinks point there.${RESET}"
         echo
         echo -e "      ${DIM}Then re-run ./install.sh. When it is present this block is replaced by${RESET}"
@@ -5523,23 +5515,14 @@ _claude_hooks_sync() {
     [[ -x "$tool" ]]     || return 0
     [[ -f "$manifest" ]] || return 0
 
-    # TWO TARGETS, ONE MANIFEST. ~/.claude/settings.json is what an ordinary
-    # launch reads; ~/.claude/settings.project.json is what `pj` reads, because
-    # pj passes --setting-sources project,local and so never loads the user
-    # source at all. An entry reaches the second file only when its manifest
-    # `targets` array names "project" -- today that is ci-watch alone.
-    #
-    # WHY THE PROJECT TARGET IS GATED ON THE FILE EXISTING. A machine that has
-    # never run pj has no settings.project.json, and the tool would correctly
-    # exit 2 ("nothing to register into") on every install. That is a true
-    # statement nobody needs to read on every run, and an installer that prints
-    # a harmless warning every time teaches you to skip its output.
-    #
-    # ORDER MATTERS IF A RENDER STEP IS EVER ADDED. Registration must run AFTER
-    # anything that writes settings.project.json wholesale, or the render
-    # silently drops the hooks this just registered.
+    # ONE TARGET since B8 (wean-off-pj, 19 Oct 2026): ~/.claude/settings.json, what an
+    # ordinary launch reads. The second target, ~/.claude/settings.project.json (pj's,
+    # which passed --setting-sources project,local), is no longer written; a manifest
+    # entry's "project" in `targets` is now ignored here. The tool's --target project
+    # still works by hand until B11 retires the file.
+    # B8 (wean-off-pj, 19 Oct 2026): the project target is gone. Sessions start through
+    # engage, whose settings engage renders itself, and settings.project.json retires in B11.
     local -a targets=(user)
-    [[ -f "$HOME/.claude/settings.project.json" ]] && targets+=(project)
 
     local t pending=0
     for t in "${targets[@]}"; do
@@ -5652,10 +5635,9 @@ _apply_npm_guard() {
     fi
 }
 
-# Everything post-stow that lives in ~/.claude: render the pj settings file, THEN
-# register hooks into it (the tool refuses to register a hook whose script is not on
-# disk, so this must follow stow_home; render first so a first-ever install ends with
-# the hook present), the pj machine letter, and the report on pj's prerequisites
+# Everything post-stow that lives in ~/.claude: register hooks (the tool refuses to register
+# a hook whose script is not on disk, so this must follow stow_home; since B8 there is no pj
+# settings render before it), the pj machine letter, and the report on pj's prerequisites
 # outside this repo (stow places the plugin symlinks it checks). --skip-claude skips
 # the lot: home/.claude was not stowed, so there is nothing to register into and no
 # pj to report on, and PJ_PREREQS_OK stays 1 so _finish exits 0.
@@ -5664,7 +5646,6 @@ _claude_post_stow() {
         info "Claude hooks, pj settings, pj machine letter and pj checks skipped (--skip-claude)."
         return 0
     fi
-    _render_project_settings install
     _claude_hooks_sync install
     _write_pj_machine_file
     _check_pj_prereqs
