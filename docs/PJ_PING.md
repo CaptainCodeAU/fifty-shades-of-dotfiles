@@ -1,5 +1,9 @@
 # `pj-ping` - the numbered attention signal
 
+**Since 19 Oct 2026, `pj-ping` is a forwarding stub of `engage-ping` (wean B13).** Every call
+goes on, unchanged, to engage-ping: one message, sent once, in five lines with no id, the sounds
+started in the background. Read `engage-ping --help`. The rest of this page is history.
+
 `pj-ping` is the one command every pj session and the `pj-question-ping.sh`
 hook use to get Gavin's attention (D-20260921-A10): four sounds, then two
 iMessages, each sent twice. Built 2026-09-23 after a real ping test in which

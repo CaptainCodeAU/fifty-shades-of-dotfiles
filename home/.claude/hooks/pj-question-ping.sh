@@ -10,14 +10,15 @@
 # once in a while, and the popup it forgets is the one that stalls a session
 # for an hour. A hook cannot forget.
 #
-# THE SIGNAL is pj-ping's, so the hook's messages look exactly like every
+# THE SIGNAL is engage-ping's, so the hook's messages look exactly like every
 # session's: this hook decides, then runs
 #   pj-ping question "<first question's header, or its text>" --detach
-# from the payload's cwd. pj-ping plays the four sounds, sends the two
-# numbered imsg messages (each twice), sanitises the text, opens both with the
-# project and short pane, and logs the id (see `pj-ping --help`). --detach makes pj-ping
-# return in well under a second and do the work in a detached process, so the
-# popup is never delayed.
+# from the payload's cwd. pj-ping is a stub that forwards to engage-ping (wean
+# B13, 19 Oct 2026): four sounds started in the background, then one message,
+# sent once, in five lines with no id, cleaned and capped; the log keys it by its
+# time (see `engage-ping --help`). --detach makes it return in well under a
+# second and do the work in a detached process, so the popup is never delayed.
+# This hook retires once no session started before B13's render is alive.
 #
 # pj-ping is found as $PJ_PING_BIN when SET (even to a missing path), else
 # ../../.local/bin/pj-ping beside this file (right in the repo and once
@@ -82,7 +83,7 @@ selftest() {
   now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
 
   # Fakes log "<hi-res epoch> <tool> <arg>" and never touch audio or Messages.
-  # The fake afplay sleeps 0.3 s per sound, so the worker takes >= 2.2 s and a
+  # The fake afplay sleeps 0.3 s per sound, so the worker takes >= 1.2 s and a
   # hook that waited for it could not return inside the 0.5 s budget.
   cat >"$fake/afplay" <<'EOF'
 #!/bin/bash
@@ -91,15 +92,28 @@ sleep 0.3
 EOF
   cat >"$fake/imsg" <<'EOF'
 #!/bin/bash
-printf '%s imsg %s\n' "$(perl -MTime::HiRes=time -e 'printf "%.3f", time')" "$1" >>"$PJ_PING_FAKE_LOG"
+printf '%s imsg %s\n' "$(perl -MTime::HiRes=time -e 'printf "%.3f", time')" "$(perl -e '$_ = shift; s/\n/\\n/g; print' "$1")" >>"$PJ_PING_FAKE_LOG"
 EOF
-  chmod +x "$fake/afplay" "$fake/imsg"
+  # B13 (wean, goal 16): a fake engage-go, so the pj-ping stub's mousetrap mark never reaches
+  # engage's real old-systems.log (B12a's table counted 66 selftest calls there).
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"%s/trap.log"\n' "$root" >"$fake/engage-go"
+  chmod +x "$fake/afplay" "$fake/imsg" "$fake/engage-go"
+  # macOS checks a newly written executable on its first run: 0.336 s, then 0.004 s, measured
+  # 19 Oct. The stub calls engage-go before it hands off, so run the fake once now, or arm 2
+  # times that check instead of the hook. (The real engage-go is an old file: 0.004 s.)
+  "$fake/engage-go" warm-up >/dev/null 2>&1
 
   # Every arm runs with the seams pinned to the fakes AND the fakes first on
   # PATH, so no path through the hook or pj-ping can reach the real binaries.
   export PATH="$fake:$PATH" PJ_PING_AFPLAY="$fake/afplay" PJ_PING_IMSG="$fake/imsg"
   export IMSG_TO="selftest@example.invalid" CLAUDE_CODE_SESSION_NAME="st-sess" PJ_PING_PAIR_GAP=2
   unset PJ_NO_PING PJ_PING_DEBOUNCE PJ_PING_LOG HERDR_PANE_ID PJ_PING_BIN PJ_LAUNCHED_BY   # PING-1: the suite may run inside a worker
+  # B13: engage-ping behind the stub reads a session file, the ntfy setting and curl. Pin all
+  # three to nothing, so no selftest call names a real session or reaches a gateway.
+  mkdir -p "$root/no-sessions"
+  export ENGAGE_TRAP_GO="$fake/engage-go" ENGAGE_PING_SESSIONS="$root/no-sessions"
+  export ENGAGE_PING_NTFY_CONF="$root/missing/ntfy.conf" ENGAGE_PING_CURL="$root/missing/curl"
+  unset PJ_SESSION_NAME CLAUDE_PID CLAUDE_CODE_SESSION_ID
   echo "pj-question-ping selftest of $hook in $root"
   echo "  pj-ping: $(f="$(dirname "$hook")/../../.local/bin/pj-ping"; [ -x "$f" ] && echo "$f" || command -v pj-ping || echo MISSING)"
 
@@ -138,8 +152,12 @@ EOF
     t1=$(perl -e "printf '%.3f', $(now) - $t0")
   }
   line() { sed -n "${1}p" "$PJ_PING_FAKE_LOG" | cut -d' ' -f3-; }
+  # imsg_text: the one message's text. engage-ping starts the sounds in the background (Q89,
+  # 19 Oct), so the imsg line can fall anywhere among the four sound lines.
+  imsg_text() { awk '$2 == "imsg" { sub(/^[^ ]+ [^ ]+ /, ""); print; exit }' "$PJ_PING_FAKE_LOG"; }
   # summary_of <msg1>: the text between "question: " and the closing " #<id>"
-  summary_of() { printf '%s' "$1" | perl -CSD -ne 'print $1 if /\x{00B7} question: (.*) #[A-Z2-9]{4}$/'; }
+  # summary_of <text>: what follows "Question: " up to the first \n the fake wrote
+  summary_of() { printf '%s' "$1" | perl -CSD -ne 'print $1 if /Question: (.*?)\\n/'; }
   DOT=$'\xc2\xb7'; PROJ=$(basename "$root")   # the payload cwd is $root, outside git
   Q='The message to cc-warehouse-6c expired undelivered. How should I get those five questions to them?'
   QI=$'\xe2\x9d\x93'
@@ -148,21 +166,18 @@ EOF
   arm main
   run "$(payload sid-main Delivery "$Q")"
   [ "$rc" -eq 0 ] && [ -z "$out" ] && ok "1 exit 0, empty stdout and stderr (no decision printed)" || bad "1 exit/stdout" "rc=$rc out=$out"
-  perl -e "exit !($t1 < 0.5)" && ok "2 hook returned in ${t1}s (< 0.5 s) while the worker takes >= 2.2 s" || bad "2 hook blocked" "${t1}s"
-  wait_lines 8
-  got=$(awk '{print $2, $3}' "$PJ_PING_FAKE_LOG" | sed "s#/System/Library/Sounds/##" | tr '\n' '|')
-  [ "$got" = "afplay Ping.aiff|afplay Glass.aiff|afplay Glass.aiff|afplay Glass.aiff|imsg $QI|imsg $QI|imsg $QI|imsg $QI|" ] \
-    && ok "3 four sounds Ping Glass Glass Glass, then four imsg (each message twice), in that order" || bad "3 order" "$got"
-  m1=$(line 5); id=$(printf '%s' "$m1" | awk '{print $NF}')
-  printf '%s' "$m1" | grep -Eqx "$QI $PROJ $DOT question: Delivery #[A-Z2-9]{4}" \
-    && ok "4 imsg 1 is pj-ping's: project, question, header, id" || bad "4 imsg 1 text" "$m1"
-  got=$(line 7)
-  [ "$got" = "$QI $PROJ $DOT answer the popup $id" ] && ok "5 imsg 2 stands alone, carries the same id ($id) and says what to do" || bad "5 imsg 2 text" "$got"
-  got=$(awk 'NR==5{a=$1} NR==6{b=$1} END{printf "%.3f", b-a}' "$PJ_PING_FAKE_LOG")
-  perl -e "exit !($got >= 1.0 && $got < 3.0)" && ok "6 gap between the messages ${got}s (>= 1 s)" || bad "6 gap" "${got}s"
-  grep -q "pinged $id" "$PJ_PING_STATE_DIR/question-ping.log" 2>/dev/null \
-    && grep -q "	${id#\#}	question	st-sess	queued" "$PJ_PING_STATE_DIR/ping.log" 2>/dev/null \
-    && ok "6 the hook's log and pj-ping's log carry the same id" || bad "6 id in logs" "$(cat "$PJ_PING_STATE_DIR"/*.log 2>/dev/null)"
+  perl -e "exit !($t1 < 0.5)" && ok "2 hook returned in ${t1}s (< 0.5 s) while the 4 fake sounds take 1.2 s" || bad "2 hook blocked" "${t1}s"
+  wait_lines 5
+  got="$(awk '$2 == "afplay" {print $2, $3}' "$PJ_PING_FAKE_LOG" | sed "s#/System/Library/Sounds/##" | tr '\n' '|')$(awk '$2 == "imsg" {print $2, $3}' "$PJ_PING_FAKE_LOG" | tr '\n' '|')"
+  [ "$got" = "afplay Ping.aiff|afplay Glass.aiff|afplay Glass.aiff|afplay Glass.aiff|imsg $QI|" ] \
+    && ok "3 four sounds Ping Glass Glass Glass in that order, and one imsg (B13: one message, once; the sounds in the background)" || bad "3 order" "$got"
+  m1=$(imsg_text)
+  case "$m1" in "$QI Question: Delivery\\n$PROJ $DOT st-sess\\nYou: answer the question box in the st-sess tab.\\n"*) ok "4 the one text is engage-ping's: the question, Where, the You line" ;; *) bad "4 the text" "$m1" ;; esac
+  case "$m1" in *'#'*) bad "4 an id reached the text" "$m1" ;; *) ok "4 no id in the text" ;; esac
+  sleep 0.3
+  tm=$(sed -n 's/.*	pinged \(.*\) (pj-ping rc=0)$/\1/p' "$PJ_PING_STATE_DIR/question-ping.log" 2>/dev/null)
+  [ -n "$tm" ] && awk -F'\t' -v t="$tm" '$2 == t && $5 == "queued"' "$PJ_PING_STATE_DIR/ping.log" 2>/dev/null | grep -q . \
+    && ok "6 the hook's 'pinged <time>' and the ping log's column 2 hold the same time ($tm)" || bad "6 time in logs" "$(cat "$PJ_PING_STATE_DIR"/*.log 2>/dev/null)"
 
   # 7. NEGATIVE: kill switch. Same harness as arm 1, which proved it can hear a call.
   arm kill
@@ -179,23 +194,23 @@ EOF
   # 9. DEBOUNCE, with both controls: a second call inside the window is
   #    skipped, another session is not, and a stale stamp pings again.
   arm deb
-  run "$(payload sid-deb Delivery "$Q")"; wait_lines 8
+  run "$(payload sid-deb Delivery "$Q")"; wait_lines 5
   run "$(payload sid-deb Delivery "$Q")"; sleep 1
   got=$(wc -l <"$PJ_PING_FAKE_LOG" | tr -d ' ')
-  [ "$got" -eq 8 ] && ok "9 same session again within 20 s -> nothing more called" || bad "9 debounce" "$got lines, want 8"
+  [ "$got" -eq 5 ] && ok "9 same session again within 20 s -> nothing more called" || bad "9 debounce" "$got lines, want 5"
   grep -q 'debounced' "$PJ_PING_STATE_DIR/question-ping.log" 2>/dev/null && ok "9 the skip is logged as debounced" || bad "9 debounce log" "$(cat "$PJ_PING_STATE_DIR/question-ping.log" 2>/dev/null)"
-  run "$(payload sid-other Delivery "$Q")"; wait_lines 16
+  run "$(payload sid-other Delivery "$Q")"; wait_lines 10
   got=$(wc -l <"$PJ_PING_FAKE_LOG" | tr -d ' ')
-  [ "$got" -eq 16 ] && ok "9 control: a different session in the same second still pings" || bad "9 control other session" "$got lines, want 16"
+  [ "$got" -eq 10 ] && ok "9 control: a different session in the same second still pings" || bad "9 control other session" "$got lines, want 10"
   echo $(($(date +%s) - 30)) >"$PJ_PING_STATE_DIR/question-ping/sid-deb"
-  run "$(payload sid-deb Delivery "$Q")"; wait_lines 24
+  run "$(payload sid-deb Delivery "$Q")"; wait_lines 15
   got=$(wc -l <"$PJ_PING_FAKE_LOG" | tr -d ' ')
-  [ "$got" -eq 24 ] && ok "9 control: a stamp 30 s old pings again" || bad "9 control stale stamp" "$got lines, want 24"
+  [ "$got" -eq 15 ] && ok "9 control: a stamp 30 s old pings again" || bad "9 control stale stamp" "$got lines, want 15"
 
   # 10. Control and bidi characters are stripped; the text around them survives.
   arm ctl
-  run "$(payload sid-ctl "$(printf 'Hi\033[31mRED\342\200\256evil\tx')" "$Q")"; wait_lines 8
-  got=$(line 5)
+  run "$(payload sid-ctl "$(printf 'Hi\033[31mRED\342\200\256evil\tx')" "$Q")"; wait_lines 5
+  got=$(imsg_text)
   if printf '%s' "$got" | perl -CSD -ne 'exit(/[\x00-\x1F\x7F-\x9F\x{202E}]/ ? 1 : 0)'; then
     ok "10 no control or bidi character reaches imsg"
   else bad "10 control chars leaked" "$(printf '%s' "$got" | od -c | head -3)"; fi
@@ -203,18 +218,18 @@ EOF
 
   # 11. No header: first 80 chars of the question text, capped.
   arm nohdr
-  run "$(payload sid-nohdr "" "$Q")"; wait_lines 8
-  got=$(summary_of "$(line 5)")
+  run "$(payload sid-nohdr "" "$Q")"; wait_lines 5
+  got=$(summary_of "$(imsg_text)")
   [ "$got" = "${Q:0:80}" ] && ok "11 empty header -> first 80 chars of the question" || bad "11 fallback text" "$got"
 
   # 12. Token shapes are redacted; a 300-char header is capped.
   arm tok
-  run "$(payload sid-tok "" "use ghp_$(printf 'A%.0s' $(seq 36)) now")"; wait_lines 8
-  got=$(line 5)
+  run "$(payload sid-tok "" "use ghp_$(printf 'A%.0s' $(seq 36)) now")"; wait_lines 5
+  got=$(imsg_text)
   case "$got" in *ghp_*) bad "12 token leaked" "$got" ;; *'[redacted]'*) ok "12 token-shaped text -> [redacted]" ;; *) bad "12 redaction" "$got" ;; esac
   arm cap
-  run "$(payload sid-cap "$(printf 'x%.0s' $(seq 300))" "$Q")"; wait_lines 8
-  got=$(summary_of "$(line 5)")
+  run "$(payload sid-cap "$(printf 'x%.0s' $(seq 300))" "$Q")"; wait_lines 5
+  got=$(summary_of "$(imsg_text)")
   [ "${#got}" -eq 80 ] && ok "12 300-char header capped (${#got} chars)" || bad "12 cap" "${#got} chars"
 
   # 13. Missing tools: pj-ping does the rest and names what was missing.
@@ -224,9 +239,9 @@ EOF
   [ "$rc" -eq 0 ] && [ -z "$out" ] && [ "$got" = "afplay afplay afplay afplay " ] && ok "13 IMSG_TO unset -> sounds only, no imsg" || bad "13 IMSG_TO unset" "rc=$rc calls=$got"
   grep -q 'IMSG_TO unset' "$PJ_PING_STATE_DIR/ping.log" 2>/dev/null && ok "13 the ping log names IMSG_TO" || bad "13 log IMSG_TO" "$(cat "$PJ_PING_STATE_DIR"/*.log 2>/dev/null)"
   arm noaf
-  out="$(payload sid-noaf Delivery "$Q" | PJ_PING_AFPLAY="$root/missing/afplay" "$hook")"; rc=$?; wait_lines 4
+  out="$(payload sid-noaf Delivery "$Q" | PJ_PING_AFPLAY="$root/missing/afplay" "$hook")"; rc=$?; wait_lines 1; sleep 0.5
   got=$(awk '{print $2}' "$PJ_PING_FAKE_LOG" | tr '\n' ' ')
-  [ "$rc" -eq 0 ] && [ -z "$out" ] && [ "$got" = "imsg imsg imsg imsg " ] && ok "13 afplay missing -> messages only, no fallback to the real afplay" || bad "13 afplay missing" "rc=$rc calls=$got"
+  [ "$rc" -eq 0 ] && [ -z "$out" ] && [ "$got" = "imsg " ] && ok "13 afplay missing -> the one message only, no fallback to the real afplay" || bad "13 afplay missing" "rc=$rc calls=$got"
   grep -q 'afplay missing' "$PJ_PING_STATE_DIR/ping.log" 2>/dev/null && ok "13 the ping log names afplay" || bad "13 log afplay" "$(cat "$PJ_PING_STATE_DIR"/*.log 2>/dev/null)"
   arm noping
   out="$(payload sid-noping Delivery "$Q" | PJ_PING_BIN="$root/missing/pj-ping" "$hook")"; rc=$?; sleep 1
@@ -237,9 +252,10 @@ EOF
   arm name
   mkdir -p "$root/fixture-repo/sub" && git -C "$root/fixture-repo" init -q 2>/dev/null
   out="$(payload sid-name Delivery "$Q" | jq -c --arg c "$root/fixture-repo/sub" '.cwd = $c' \
-    | env -u CLAUDE_CODE_SESSION_NAME "$hook")"; wait_lines 8
-  got=$(line 5)
-  printf '%s' "$got" | grep -q "^$QI fixture-repo $DOT question: Delivery #" && ok "14 the payload cwd's repo names the project, from a subdirectory too" || bad "14 project name" "$got"
+    | env -u CLAUDE_CODE_SESSION_NAME "$hook")"; wait_lines 5
+  got=$(imsg_text)
+  # Compared as a prefix: in a grep pattern \n does not match the two characters the fake writes.
+  case "$got" in "$QI Question: Delivery\\nfixture-repo\\nYou: "*) ok "14 the payload cwd's repo names the project, from a subdirectory too (no session name: the project alone)" ;; *) bad "14 project name" "$got" ;; esac
 
   # 15. Malformed stdin: exit 0, nothing called.
   arm bad
@@ -258,7 +274,7 @@ EOF
   fh="$root/b12a-home"; fa="$root/b12a-account"; mkdir -p "$fh" "$fa"
   export PJ_PING_FAKE_LOG="$root/fake-b12a.log"; : >"$PJ_PING_FAKE_LOG"
   out="$(printf '%s' "$(payload sid-b12a Delivery "$Q")" | env -u PJ_PING_STATE_DIR -u XDG_STATE_HOME HOME="$fh" ENGAGE_ACCOUNT_ROOT="$fa" "$hook" 2>&1)"; rc=$?
-  wait_lines 8
+  wait_lines 5
   [ "$rc" -eq 0 ] && [ -s "$fa/engine-room/pj-state/question-ping.log" ] && [ ! -e "$fh/.local/state/pj" ] \
     && ok "17 no state variable set: question-ping.log lands in engage's pj-state, nothing under ~/.local/state/pj" \
     || bad "17 default state folder" "rc=$rc engage-log=$([ -s "$fa/engine-room/pj-state/question-ping.log" ] && echo yes || echo no) old-folder=$([ -e "$fh/.local/state/pj" ] && echo EXISTS || echo absent)"

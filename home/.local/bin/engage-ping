@@ -1,0 +1,392 @@
+#!/usr/bin/env bash
+# engage-ping -- tell Gavin something happened: one message, sent once, five lines, no id.
+#
+#   engage-ping <question|waiting|done|alarm|test> "<what happened>" [--detail "<text>"]
+#               [--you "<what Gavin can do>"] [--ref "<Q26 or worker 16r>"] [--topic <topic>]
+#               [--decision] [--stopped] [--detach]
+#   engage-ping --help | --selftest
+#
+# WHY IT EXISTS. Wean B13 (goal 16), Gavin's plan ENGAGE-PING.html (e-conductor Q28 (v2), 19 Oct
+# 2026): pj-ping sent every message twice, in two parts, each with a four-letter id, and Gavin
+# said "I don't want the codes" (6:46 PM 19 Oct). engage-ping sends one message, once, that reads
+# on its own. pj-ping is now a stub that forwards here, kept until no older session calls it.
+#
+# THE TEXT, five lines joined by a newline:
+#   1. what happened  "<icon> <label>: <summary>"            (the ntfy title)
+#   2. where          "<project> . <session>[ . <ref>]"       (the dot is a middle dot)
+#   3. the detail     from --detail; left out when there is none
+#   4. what Gavin can do  "You: <you>"
+#   5. the time       12-hour Melbourne to the second, e.g. "9:56:56 AM 19 Oct"
+#
+#   kind                 label           You line when there is no --you
+#   question             ? Question      answer the question box in the <session> tab.
+#   waiting              ... Step for you   NONE: --you (or --action) is required
+#   waiting --decision   ? Decision      NONE: --you is required
+#   done                 ok Finished     nothing needed.
+#   alarm                orange Alarm    NONE: --you is required; --stopped makes it red, "work has stopped"
+#   test                 lab Test        tell <session> when you see it.
+#
+# WHERE EACH KIND GOES, in this order: the sounds, the iMessage, then ntfy. The sounds start in
+# the background and nothing waits for them (Gavin, 19 Oct: "it needs to be asynchronous,
+# non-blocking"; dotfiles-main Q89, e-conductor's advice): they still play, in order, while the
+# messages go out, and the log says they started, not that they finished.
+#   question, waiting, alarm  4 sounds (Ping Glass Glass Glass), iMessage, ntfy priority 4
+#                             (alarm --stopped: priority 5)
+#   done                      1 sound (Ping), no iMessage, ntfy priority 2
+#   test                      1 sound, the Test iMessage, and ntfy's robot form: title
+#                             "<robot> AGENT . engage-ping self-test", priority 1, tag robot,
+#                             body "test, ignore", the Where line and the time. No real message
+#                             carries the robot or any X-Tags.
+# A real message to ntfy: X-Title line 1, X-Priority from the table, body lines 2 to 5.
+# ntfy goes through the ntfy gateway: a POST of the body to <gateway>/<topic>, --max-time 15,
+# reading only the HTTP code. Anything but 204 is a refused send, 000 included. A refused send,
+# or ntfy switched off, goes by iMessage instead when the message has not already gone by iMessage.
+# --topic: one word of a-z, 0-9, _ or -, at most 32 characters; none means "unsorted". The
+# gateway decides which topics this device may post to. How to send, and what a failed send
+# looks like: ~/CODE/CaptainCodeAU/Network_Plan/boxes/ntfy-ct-112/GUIDE.md, sections
+# "2. How to send", "From a Mac" and "8. When a send fails: what the sender sees".
+#
+# THE SETTING. "on: yes|no" in $ENGAGE_PING_NTFY_CONF, else ~/.config/engage-ping/ntfy.conf
+# (dotfiles). "gateway: <address>" from that file, else from $ENGAGE_PING_GATEWAY_CONF, else
+# ~/.config/engage-ping/gateway.local (dot-private: e-conductor Q31 (v2): 1 keeps the LAN address
+# out of public dotfiles). ntfy is on only when on: is exactly yes and a gateway is found; with
+# it off, every message that would go by ntfy goes by iMessage instead. Turn it on with on: yes,
+# as a dotfiles commit.
+#
+# THE NAMES. <session> is the "name" in the Claude session file whose sessionId is
+# $CLAUDE_CODE_SESSION_ID: first <sessions>/$CLAUDE_PID.json, then any <sessions>/*.json, where
+# <sessions> is $ENGAGE_PING_SESSIONS, else ~/.claude/sessions. Else $CLAUDE_CODE_SESSION_NAME,
+# else $PJ_SESSION_NAME, else none (the Where line is then the project alone). <project> is the
+# main repo's session-alias: from .claude/pj-homes, else its basename (a linked worktree adds
+# /<worktree>; outside git, the folder's basename), worked out from the session file's cwd when
+# there is one, else from the current folder.
+#
+# TEXT IS UNTRUSTED. Every part (summary, detail, you, ref, project, session) has its control,
+# bidi and zero-width characters turned into a space, token shapes into [redacted], whitespace
+# squeezed, and is capped: summary 80, detail 300, you 160, ref 20, project 40, session 40. A
+# newline exists only between the five lines, so no part can add a line or an ntfy header.
+# imsg sends to $IMSG_TO only; engage-ping cannot address anyone.
+#
+# THE LOG: $PJ_PING_LOG, else $PJ_PING_STATE_DIR/ping.log, else
+# ${ENGAGE_ACCOUNT_ROOT:-~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear}/engine-room/pj-state/ping.log.
+# Tab-separated, two lines a message, never the text; both carry the message's own time:
+#   <ISO local time>  <the time as in the text>  <kind>  <session>  queued  <what was missing, or ->
+#   <ISO local time>  <the time as in the text>  <kind>  <session>  sent    sound=started|- imsg=<rc or -> ntfy=<topic>:<code>|off|- [fallback=imsg:<rc>]
+#   <ISO local time>  <the time as in the text>  <kind>  <session>  silent  launched-by=<name>
+# So "did the 9:56:56 AM message go out?" is: grep '9:56:56 AM 19 Oct' <log>
+#
+# --detach  print the time, then do the sounds and sends in a double-forked process with every
+#           descriptor on /dev/null, and return at once. The question hook uses it.
+#
+# EXIT: 0 the message reached a phone route (a fallback iMessage counts) and the sounds started
+#       1 a tool or IMSG_TO was missing, an iMessage failed, or no phone route took the message:
+#         named on stderr and in the log
+#       2 usage error: nothing sent, nothing logged
+# stdout is the message's time; nothing for PJ_NO_PING or PING-1.
+# PJ_NO_PING=1 is the kill switch: exit 0, nothing sent, nothing logged.
+# PING-1 (Gavin 2026-09-29): with PJ_LAUNCHED_BY set (a worker or a subagent), nothing is sent;
+# one silent log line names the launcher.
+#
+# SANDBOX. afplay fails inside the Bash tool's sandbox (AudioQueueStart -66680), and so does
+# every child of a sandboxed command, so from a Bash tool call run engage-ping as its own call
+# with the sandbox lifted. Hooks run outside it.
+#
+# TEST SEAMS (selftest only), each used when SET, even to a missing path: PJ_PING_AFPLAY,
+# PJ_PING_IMSG, ENGAGE_PING_CURL replace the PATH lookup; ENGAGE_PING_NTFY_CONF,
+# ENGAGE_PING_GATEWAY_CONF, ENGAGE_PING_SESSIONS replace the files; ENGAGE_PING_NOW (epoch
+# seconds) is the clock.
+#
+# `engage-ping --selftest` runs engage-ping-selftest from the same folder.
+
+set -u
+
+SOUNDS_DIR="/System/Library/Sounds"
+STATE_DIR="${PJ_PING_STATE_DIR:-${ENGAGE_ACCOUNT_ROOT:-$HOME/CODE/CaptainCodeAU/CaptainCodeAU-isolinear}/engine-room/pj-state}"
+LOG_FILE="${PJ_PING_LOG:-$STATE_DIR/ping.log}"
+DOT=$'\xc2\xb7'
+NL=$'\n'
+
+usage() { sed -n '2,/^# `engage-ping --selftest`/p' "$0" | sed 's/^# \{0,1\}//'; }
+die2() { printf 'engage-ping: %s\n' "$1" >&2; exit 2; }
+
+# clean <max-chars>: stdin -> one line, controls and bidi replaced by a space, token shapes
+# redacted, whitespace squeezed, capped. Works on characters, not bytes.
+clean() {
+  perl -CSD -e '
+    my $max = shift;
+    local $/; my $s = <STDIN>; $s = "" unless defined $s;
+    $s =~ s/[\x{00}-\x{1F}\x{7F}-\x{9F}\x{061C}\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2069}\x{FEFF}]/ /g;
+    $s =~ s/\b(?:gh[pousr]_|github_pat_|sk-ant-|sk-|xox[abprs]-|AKIA|glpat-)[A-Za-z0-9_\-]{6,}/[redacted]/g;
+    $s =~ s/\s+/ /g; $s =~ s/^ //; $s =~ s/ $//;
+    $s = substr($s, 0, $max) if length($s) > $max;
+    print $s;
+  ' "$1" 2>/dev/null
+}
+
+# clean_many [--clock] <max> <value> [<max> <value>...]: each value cleaned as clean does,
+# printed with a NUL after it; with --clock, the message's two times come first (the ISO local
+# time for the log, the text's 12-hour Melbourne time). One perl for all of it, so a --detach
+# call from the question hook starts as few processes as it can before it returns.
+clean_many() {
+  LC_ALL=C perl -CSDA -MPOSIX -e '
+    if (@ARGV && $ARGV[0] eq "--clock") {
+      shift;
+      my $e = (defined $ENV{ENGAGE_PING_NOW} && $ENV{ENGAGE_PING_NOW} =~ /^\d+$/) ? $ENV{ENGAGE_PING_NOW} : time;
+      print strftime("%Y-%m-%dT%H:%M:%S%z", localtime $e), "\0";
+      $ENV{TZ} = "Australia/Melbourne"; POSIX::tzset();
+      my @t = localtime $e;
+      printf "%d:%02d:%02d %s %d %s\0", ($t[2] % 12) || 12, $t[1], $t[0], ($t[2] < 12 ? "AM" : "PM"), $t[3], strftime("%b", @t);
+    }
+    while (@ARGV >= 2) {
+      my $max = shift; my $s = shift; $s = "" unless defined $s;
+      $s =~ s/[\x{00}-\x{1F}\x{7F}-\x{9F}\x{061C}\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2069}\x{FEFF}]/ /g;
+      $s =~ s/\b(?:gh[pousr]_|github_pat_|sk-ant-|sk-|xox[abprs]-|AKIA|glpat-)[A-Za-z0-9_\-]{6,}/[redacted]/g;
+      $s =~ s/\s+/ /g; $s =~ s/^ //; $s =~ s/ $//;
+      $s = substr($s, 0, $max) if length($s) > $max;
+      print $s, "\0";
+    }
+  ' -- "$@" 2>/dev/null   # the -- ends perl's own switches, so --clock reaches the script
+}
+
+# One log line. The braces matter: a failed append is a redirection error the shell raises
+# before any 2>/dev/null on the command applies. Returns 1 when the line could not be written.
+log() { # log <event> <detail>   (uses ISO, TTIME, KIND, LOGSESS)
+  { mkdir -p "$(dirname "$LOG_FILE")" &&
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$ISO" "$TTIME" "$KIND" "$LOGSESS" "$1" "$2" >>"$LOG_FILE"
+  } 2>/dev/null
+}
+
+# Resolve a tool: the seam variable when SET (even to a missing path), else PATH.
+resolve() { # resolve <seam-var-name> <tool>
+  if [ -n "${!1+x}" ]; then
+    [ -x "${!1}" ] && printf '%s' "${!1}"
+    return 0
+  fi
+  command -v "$2" 2>/dev/null
+  return 0
+}
+
+# conf_value <file> <key>: the first "<key>: <value>" line's value, trailing blanks cut.
+conf_value() {
+  [ -r "$1" ] || return 0
+  sed -n "s/^[[:space:]]*$2:[[:space:]]*//p" "$1" 2>/dev/null | head -n 1 | sed 's/[[:space:]]*$//'
+}
+
+# session_file: the Claude session file whose sessionId is $CLAUDE_CODE_SESSION_ID.
+session_file() {
+  local dir="${ENGAGE_PING_SESSIONS:-$HOME/.claude/sessions}" sid="${CLAUDE_CODE_SESSION_ID:-}" f
+  [ -n "$sid" ] && [ -d "$dir" ] && command -v jq >/dev/null 2>&1 || return 0
+  f="$dir/${CLAUDE_PID:-none}.json"
+  if [ -n "${CLAUDE_PID:-}" ] && [ -f "$f" ] && [ "$(jq -r '.sessionId // empty' "$f" 2>/dev/null)" = "$sid" ]; then
+    printf '%s' "$f"; return 0
+  fi
+  for f in "$dir"/*.json; do
+    [ -f "$f" ] || continue
+    if [ "$(jq -r '.sessionId // empty' "$f" 2>/dev/null)" = "$sid" ]; then printf '%s' "$f"; return 0; fi
+  done
+  return 0
+}
+
+# project_label <folder>: the name in the Where line (see THE NAMES). A linked worktree is the
+# one where --git-dir and --git-common-dir differ.
+project_label() {
+  local d="$1" common gdir main n top
+  common=$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  if [ -z "$common" ]; then
+    basename "$d"
+    return 0
+  fi
+  main=$(dirname "$common")
+  n=$(sed -n 's/^[[:space:]]*session-alias:[[:space:]]*//p' "$main/.claude/pj-homes" 2>/dev/null | head -n 1)
+  n="${n%"${n##*[![:space:]]}"}"
+  n="${n:-$(basename "$main")}"
+  gdir=$(git -C "$d" rev-parse --path-format=absolute --git-dir 2>/dev/null)
+  if [ -n "$gdir" ] && [ "$gdir" != "$common" ]; then
+    top=$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)
+    [ -n "$top" ] && n="$n/$(basename "$top")"
+  fi
+  printf '%s' "$n"
+}
+
+case "${1:-}" in
+--help | -h) usage; exit 0 ;;
+--selftest) exec "$(dirname "$0")/engage-ping-selftest" ;;
+esac
+
+# Positional first, so a summary that begins with a dash is still a summary.
+[ $# -ge 2 ] || die2 "usage: engage-ping <question|waiting|done|alarm|test> \"<what happened>\" [--detail ...] [--you ...] [--ref ...] [--topic ...] [--decision] [--stopped] [--detach]"
+KIND="$1"; RAW_SUMMARY="$2"; shift 2
+RAW_DETAIL=""; HAVE_DETAIL=0; RAW_YOU=""; HAVE_YOU=0; RAW_REF=""; HAVE_REF=0; TOPIC="unsorted"; DECISION=0; STOPPED=0; DETACH=0
+need() { [ "$2" -ge 2 ] || die2 "$1 needs a value"; }
+while [ $# -gt 0 ]; do
+  case "$1" in
+  --detail) need "$1" $#; RAW_DETAIL="$2"; HAVE_DETAIL=1; shift 2 ;;
+  --you | --action) need "$1" $#; RAW_YOU="$2"; HAVE_YOU=1; shift 2 ;;
+  --ref) need "$1" $#; RAW_REF="$2"; HAVE_REF=1; shift 2 ;;
+  --topic) need "$1" $#; TOPIC="$2"; shift 2 ;;
+  --decision) DECISION=1; shift ;;
+  --stopped) STOPPED=1; shift ;;
+  --detach) DETACH=1; shift ;;
+  *) die2 "unknown argument: $(printf '%s' "$1" | clean 40)" ;;
+  esac
+done
+
+case "$KIND" in
+question) ICON=$'\xe2\x9d\x93'; LABEL="Question"; NSOUNDS=4; HAS_IMSG=1; PRIO=4 ;;
+waiting)  ICON=$'\xe2\x8f\xb3'; LABEL="Step for you"; NSOUNDS=4; HAS_IMSG=1; PRIO=4
+          [ "$DECISION" -eq 1 ] && { ICON=$'\xe2\x9d\x93'; LABEL="Decision"; } ;;
+done)     ICON=$'\xe2\x9c\x85'; LABEL="Finished"; NSOUNDS=1; HAS_IMSG=0; PRIO=2 ;;
+alarm)    ICON=$'\xf0\x9f\x9f\xa0'; LABEL="Alarm"; NSOUNDS=4; HAS_IMSG=1; PRIO=4
+          [ "$STOPPED" -eq 1 ] && { ICON=$'\xf0\x9f\x94\xb4'; PRIO=5; } ;;
+test)     ICON=$'\xf0\x9f\xa7\xaa'; LABEL="Test"; NSOUNDS=1; HAS_IMSG=1; PRIO=1 ;;
+*) die2 "kind must be question, waiting, done, alarm or test (got: $(printf '%s' "$KIND" | clean 20))" ;;
+esac
+[ "$DECISION" -eq 0 ] || [ "$KIND" = waiting ] || die2 "--decision is for waiting only"
+[ "$STOPPED" -eq 0 ] || [ "$KIND" = alarm ] || die2 "--stopped is for alarm only"
+[[ $TOPIC =~ ^[a-z0-9_-]{1,32}$ ]] || die2 "--topic must be one word of a-z, 0-9, _ or -, at most 32 characters"
+
+{ IFS= read -r -d '' SUMMARY; IFS= read -r -d '' DETAIL; IFS= read -r -d '' REF; IFS= read -r -d '' YOU; } \
+  < <(clean_many 80 "$RAW_SUMMARY" 300 "$RAW_DETAIL" 20 "$RAW_REF" 160 "$RAW_YOU")
+[ -n "$SUMMARY" ] || die2 "the summary is empty"
+[ "$HAVE_DETAIL" -eq 0 ] || [ -n "$DETAIL" ] || die2 "--detail is empty"
+[ "$HAVE_REF" -eq 0 ] || [ -n "$REF" ] || die2 "--ref is empty"
+if [ "$HAVE_YOU" -eq 1 ]; then
+  [ -n "$YOU" ] || die2 "--you is empty"
+else
+  case "$KIND" in waiting | alarm) die2 "$KIND needs --you \"<what Gavin can do>\"" ;; esac
+  YOU=""
+fi
+
+[ "${PJ_NO_PING:-}" = "1" ] && { printf 'engage-ping: PJ_NO_PING=1, nothing sent\n' >&2; exit 0; }
+
+# The names, before any fork: the session file (one jq), the project (git), then the clock and
+# every name cleaned in one perl.
+SFILE=$(session_file)
+RAW_SESSION=""; SCWD=""
+if [ -n "$SFILE" ]; then
+  { IFS= read -r -d '' RAW_SESSION; IFS= read -r -d '' SCWD; } \
+    < <(jq -j '(.name // ""), "\u0000", (.cwd // ""), "\u0000"' "$SFILE" 2>/dev/null)
+fi
+[ -n "$RAW_SESSION" ] || RAW_SESSION="${CLAUDE_CODE_SESSION_NAME:-${PJ_SESSION_NAME:-}}"
+RAW_LOGSESS=""
+if [ -z "$RAW_SESSION" ]; then
+  top=$(git rev-parse --show-toplevel 2>/dev/null)
+  RAW_LOGSESS=$(basename "${top:-$PWD}")
+fi
+if [ -n "$SCWD" ] && [ -d "$SCWD" ]; then RAW_PROJECT=$(project_label "$SCWD"); else RAW_PROJECT=$(project_label "$PWD"); fi
+{ IFS= read -r -d '' ISO; IFS= read -r -d '' TTIME; IFS= read -r -d '' SESSION; IFS= read -r -d '' LOGSESS
+  IFS= read -r -d '' PROJECT; IFS= read -r -d '' BY; } \
+  < <(clean_many --clock 40 "$RAW_SESSION" 40 "$RAW_LOGSESS" 40 "$RAW_PROJECT" 40 "${PJ_LAUNCHED_BY:-}")
+LOGSESS="${SESSION:-$LOGSESS}"; LOGSESS="${LOGSESS:--}"
+
+# PING-1 (Gavin 2026-09-29): a session launched by another session never pings. pj-worker
+# and engage-worker set PJ_LAUNCHED_BY to the launcher's name; subagents inherit it. Its
+# conductor, or the 10-minute timer, answers instead. One log line names the launcher.
+if [ -n "${PJ_LAUNCHED_BY:-}" ]; then
+  BY="${BY:-?}"
+  log silent "launched-by=$BY"
+  printf 'engage-ping: launched by %s (PJ_LAUNCHED_BY), nothing sent (PING-1)\n' "$BY" >&2
+  exit 0
+fi
+
+PROJECT="${PROJECT:-engage}"
+if [ "$HAVE_YOU" -eq 0 ]; then
+  case "$KIND" in
+  done) YOU="nothing needed." ;;
+  question) if [ -n "$SESSION" ]; then YOU="answer the question box in the $SESSION tab."; else YOU="answer the question box."; fi ;;
+  test) if [ -n "$SESSION" ]; then YOU="tell $SESSION when you see it."; else YOU="tell the session when you see it."; fi ;;
+  esac
+fi
+
+L1="$ICON $LABEL: $SUMMARY"
+L2="$PROJECT${SESSION:+ $DOT $SESSION}${REF:+ $DOT $REF}"
+BODY="$L2${DETAIL:+$NL$DETAIL}${NL}You: $YOU${NL}$TTIME"
+TEXT="$L1$NL$BODY"
+TAGS=""
+if [ "$KIND" = test ]; then
+  TITLE=$'\xf0\x9f\xa4\x96'" AGENT $DOT engage-ping self-test"
+  NBODY="test, ignore$NL$L2$NL$TTIME"
+  TAGS="robot"
+else
+  TITLE="$L1"; NBODY="$BODY"
+fi
+
+# The ntfy setting.
+CONF="${ENGAGE_PING_NTFY_CONF:-$HOME/.config/engage-ping/ntfy.conf}"
+ON=$(conf_value "$CONF" on)
+GW=$(conf_value "$CONF" gateway)
+[ -n "$GW" ] || GW=$(conf_value "${ENGAGE_PING_GATEWAY_CONF:-$HOME/.config/engage-ping/gateway.local}" gateway)
+NTFY=0; URL=""
+if [ "$ON" = yes ] && [ -n "$GW" ]; then NTFY=1; URL="${GW%/}/$TOPIC"; fi
+
+AFPLAY=$(resolve PJ_PING_AFPLAY afplay)
+IMSG=$(resolve PJ_PING_IMSG imsg)
+CURL=""; [ "$NTFY" -eq 1 ] && CURL=$(resolve ENGAGE_PING_CURL curl)
+MISSING=""
+[ -n "$AFPLAY" ] || MISSING="$MISSING afplay missing;"
+[ -n "$IMSG" ] || MISSING="$MISSING imsg missing;"
+if [ -n "$IMSG" ] && [ -z "${IMSG_TO:-}" ]; then MISSING="$MISSING IMSG_TO unset;"; IMSG=""; fi
+[ "$NTFY" -eq 0 ] || [ -n "$CURL" ] || MISSING="$MISSING curl missing;"
+MISSING="${MISSING# }"
+RC=0
+if ! log queued "${MISSING:--}"; then
+  printf 'engage-ping: %s could not write the log %s, so this message is not recorded\n' "$TTIME" "$LOG_FILE" >&2
+  RC=1
+fi
+if [ -n "$MISSING" ]; then
+  printf 'engage-ping: %s partial: %s\n' "$TTIME" "$MISSING" >&2
+  RC=1
+fi
+printf '%s\n' "$TTIME"
+
+# The send: the sounds start, then the iMessage when the kind has one, then ntfy; a refused or
+# switched-off ntfy send goes by iMessage instead when the message has not gone by iMessage
+# already. The sounds play one after another in a background process on /dev/null, so neither
+# this call nor a caller reading its output waits for them (Q89).
+send() {
+  local s r a="-" m="-" n f="" bad=0 phone=0 code refused=0
+  if [ -n "$AFPLAY" ]; then
+    if [ "$NSOUNDS" -eq 4 ]; then set -- Ping Glass Glass Glass; else set -- Ping; fi
+    ( for s in "$@"; do "$AFPLAY" "$SOUNDS_DIR/$s.aiff"; done ) </dev/null >/dev/null 2>&1 &
+    a="started"
+  fi
+  if [ "$HAS_IMSG" -eq 1 ] && [ -n "$IMSG" ]; then
+    "$IMSG" "$TEXT" </dev/null >/dev/null 2>&1; r=$?; m="$r"
+    if [ "$r" -eq 0 ]; then phone=1; else bad=1; fi
+  fi
+  if [ "$NTFY" -eq 0 ]; then
+    n="ntfy=off"; refused=1
+  elif [ -z "$CURL" ]; then
+    n="ntfy=-"; refused=1
+  else
+    if [ -n "$TAGS" ]; then
+      code=$(printf '%s' "$NBODY" | "$CURL" -s -o /dev/null -w '%{http_code}' --max-time 15 \
+        -H "X-Title: $TITLE" -H "X-Priority: $PRIO" -H "X-Tags: $TAGS" --data-binary @- "$URL" 2>/dev/null)
+    else
+      code=$(printf '%s' "$NBODY" | "$CURL" -s -o /dev/null -w '%{http_code}' --max-time 15 \
+        -H "X-Title: $TITLE" -H "X-Priority: $PRIO" --data-binary @- "$URL" 2>/dev/null)
+    fi
+    code="${code:-000}"
+    n="ntfy=$TOPIC:$code"
+    if [ "$code" = 204 ]; then phone=1; else refused=1; fi
+  fi
+  if [ "$refused" -eq 1 ] && [ "$HAS_IMSG" -eq 0 ] && [ -n "$IMSG" ]; then
+    "$IMSG" "$TEXT" </dev/null >/dev/null 2>&1; r=$?; f=" fallback=imsg:$r"
+    if [ "$r" -eq 0 ]; then phone=1; else bad=1; fi
+  fi
+  [ "$phone" -eq 1 ] || bad=1
+  log sent "sound=$a imsg=$m $n$f" || bad=1
+  return "$bad"
+}
+
+if [ "$DETACH" -eq 1 ]; then
+  # Double fork with every descriptor off the caller's pipes: engage-ping returns now and the
+  # worker is reparented, so nothing the caller holds waits on it.
+  ( ( trap '' HUP; send ) </dev/null >/dev/null 2>&1 & ) </dev/null >/dev/null 2>&1
+  exit "$RC"
+fi
+send || {
+  printf 'engage-ping: %s a send failed, or no phone route took it; see %s\n' "$TTIME" "$LOG_FILE" >&2
+  RC=1
+}
+exit "$RC"

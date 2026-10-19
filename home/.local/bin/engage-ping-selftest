@@ -1,0 +1,478 @@
+#!/usr/bin/env bash
+# engage-ping-selftest -- proves every arm of engage-ping with FAKE afplay, imsg, curl and
+# engage-go. It never calls the real ones: every arm pins PJ_PING_AFPLAY, PJ_PING_IMSG,
+# ENGAGE_PING_CURL and ENGAGE_TRAP_GO to fakes (or to a missing path), the fakes are also
+# first on PATH, and the session files, the ntfy setting and the clock are fixtures. So no
+# arm sends a message, plays a sound, reaches a gateway or writes engage's mousetrap log.
+#
+# THE CLAIM UNDER TEST (wean B13, goal 16; Gavin's plan ENGAGE-PING.html, e-conductor Q28 (v2)):
+# one message, sent once, in five lines (what happened, where, the detail, what Gavin can do,
+# the time), with no id; each kind on its own routes (sounds, iMessage, ntfy), the sounds started
+# in the background so nothing waits for them (Q89); a refused or
+# switched-off ntfy send goes by iMessage instead; the log holds the time, never the text.
+# And that the pj-ping and pj-ping-selftest stubs forward every call, unchanged, to engage-ping
+# and engage-ping-selftest, marking each call in engage's mousetrap first.
+#
+# Every "nothing happened" arm is twinned with an arm in the same harness that hears a call.
+#
+# PJ_PING_TOOL=<path> tests another copy (an absolute path: the suite changes folder).
+# ENGAGE_PING_STUB / ENGAGE_PING_SELFTEST_STUB=<path> test other stub copies; the defaults
+# are pj-ping and pj-ping-selftest in the tool's own folder.
+# Exit: 0 all passed | 1 a case failed | 2 could not run (invalid trial).
+
+# Read this whole file before running any of it, so an edit saved mid-run cannot change
+# the run (W-20260923-A57). A crash under it exits 127 (unbound var) or 1 (bash 3.2 syntax
+# error); `selftest-whole-read --help` has the map. Do not move or reword these lines.
+[ -n "${SELFTEST_WHOLE_READ-}" ] || SELFTEST_WHOLE_READ=1 exec "$BASH" -c 'shopt -u sourcepath; . "$0"' "$0" "$@"
+unset SELFTEST_WHOLE_READ
+
+set -uo pipefail
+
+TOOL="${PJ_PING_TOOL:-$(dirname "$0")/engage-ping}"
+[ -x "$TOOL" ] || { printf 'selftest: cannot find engage-ping at %s\n' "$TOOL" >&2; exit 2; }
+TOOL="$(builtin cd "$(dirname "$TOOL")" && pwd -P)/$(basename "$TOOL")"
+TOOLDIR="$(dirname "$TOOL")"
+STUB="${ENGAGE_PING_STUB:-$TOOLDIR/pj-ping}"
+STSTUB="${ENGAGE_PING_SELFTEST_STUB:-$TOOLDIR/pj-ping-selftest}"
+# The shipped setting: home/.config/engage-ping/ntfy.conf, two folders up from home/.local/bin.
+SHIPPED="$(dirname "$0")/../../.config/engage-ping/ntfy.conf"
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/engage-ping-selftest.XXXXXX")" || {
+  printf 'selftest: mktemp failed -- INVALID TRIAL, not a pass\n' >&2; exit 2; }
+ROOT="$(builtin cd "$ROOT" && pwd -P)"
+FAKE="$ROOT/bin"; mkdir -p "$FAKE" "$ROOT/conf" "$ROOT/sessions" "$ROOT/elsewhere"
+# The session file's folder is a fixture repo, st-proj; the calls run from $ROOT/elsewhere,
+# a plain folder, so a text that says st-proj proves the project came from the session file.
+mkdir -p "$ROOT/st-proj" "$ROOT/other-proj" && git -C "$ROOT/st-proj" init -q 2>/dev/null \
+  && git -C "$ROOT/other-proj" init -q 2>/dev/null && builtin cd "$ROOT/elsewhere" || {
+  printf 'selftest: could not set up the fixture repos -- INVALID TRIAL, not a pass\n' >&2; exit 2; }
+printf 'engage-ping-selftest -- testing %s in %s\n' "$TOOL" "$ROOT"
+
+PASS=0; FAIL=0
+ok() { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
+bad() { FAIL=$((FAIL + 1)); printf '  FAIL %s\n       got: %s\n' "$1" "$(printf '%s' "$2" | tr '\n' '|' | cut -c1-700)"; }
+now() { perl -MTime::HiRes=time -e 'printf "%.3f", time'; }
+
+# Fakes write one line per call: "<hi-res epoch> <tool> <payload>", newlines shown as \n.
+# afplay sleeps $ENGAGE_PING_FAKE_SLEEP (default 0); imsg exits $PJ_PING_FAKE_IMSG_RC;
+# curl prints $ENGAGE_PING_FAKE_HTTP (default 204) as the HTTP code and logs the URL, each
+# -H header and the body; engage-go writes its arguments to $ENGAGE_PING_FAKE_TRAP.
+cat >"$FAKE/afplay" <<'EOF'
+#!/bin/bash
+printf '%s afplay %s\n' "$(perl -MTime::HiRes=time -e 'printf "%.3f", time')" "${1##*/}" >>"$PJ_PING_FAKE_LOG"
+sleep "${ENGAGE_PING_FAKE_SLEEP:-0}"
+EOF
+cat >"$FAKE/imsg" <<'EOF'
+#!/bin/bash
+printf '%s imsg %s\n' "$(perl -MTime::HiRes=time -e 'printf "%.3f", time')" "$(perl -e '$_ = shift; s/\n/\\n/g; print' "$*")" >>"$PJ_PING_FAKE_LOG"
+exit "${PJ_PING_FAKE_IMSG_RC:-0}"
+EOF
+cat >"$FAKE/curl" <<'EOF'
+#!/bin/bash
+url="" hs="" body="" stdin=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -H) hs="$hs H[${2:-}]"; shift 2 || set -- ;;
+    --data-binary|-d|--data) if [ "${2:-}" = "@-" ]; then stdin=1; else body="${2:-}"; fi; shift 2 || set -- ;;
+    -o|-w|--max-time|-X) shift 2 || set -- ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+[ "$stdin" -eq 1 ] && body="$(cat; printf x)" && body="${body%x}"
+printf '%s curl %s%s B[%s]\n' "$(perl -MTime::HiRes=time -e 'printf "%.3f", time')" "$url" "$hs" "$(perl -e '$_ = shift; s/\n/\\n/g; print' "$body")" >>"$PJ_PING_FAKE_LOG"
+printf '%s' "${ENGAGE_PING_FAKE_HTTP:-204}"
+EOF
+cat >"$FAKE/engage-go" <<'EOF'
+#!/bin/bash
+printf '%s\n' "$*" >>"$ENGAGE_PING_FAKE_TRAP"
+EOF
+chmod +x "$FAKE/afplay" "$FAKE/imsg" "$FAKE/curl" "$FAKE/engage-go"
+
+# Fixture session files: 4242.json is the session by CLAUDE_PID; other.json is found only by
+# its sessionId. Each names a cwd in a fixture repo.
+printf '{"pid":4242,"sessionId":"sess-uuid-1","cwd":"%s","name":"st-sess"}\n' "$ROOT/st-proj" >"$ROOT/sessions/4242.json"
+printf '{"pid":5151,"sessionId":"sess-uuid-2","cwd":"%s","name":"st-other"}\n' "$ROOT/other-proj" >"$ROOT/sessions/other.json"
+# Fixture settings. The gateway is written with a trailing / on purpose (arm 6).
+GW="http://gw.invalid:1"
+printf '# fixture\non: yes\ngateway: %s/\n' "$GW" >"$ROOT/conf/on.conf"
+printf 'on: no\ngateway: %s\n' "$GW" >"$ROOT/conf/off.conf"
+printf 'on: yes\n' >"$ROOT/conf/on-nogw.conf"
+printf '# fixture gateway.local\ngateway: %s\n' "$GW" >"$ROOT/conf/gateway.local"
+
+# The clock: 22:56:56 UTC 18 Oct 2026 is 9:56:56 AM 19 Oct in Melbourne (AEDT, +11).
+NOW1=1792364216; T1="9:56:56 AM 19 Oct"
+# 03:04:05 UTC 5 Oct 2026 is 2:04:05 PM 5 Oct: no leading zero on the hour or the day.
+NOW2=1791169445; T2="2:04:05 PM 5 Oct"
+
+export PATH="$FAKE:$PATH" PJ_PING_AFPLAY="$FAKE/afplay" PJ_PING_IMSG="$FAKE/imsg" ENGAGE_PING_CURL="$FAKE/curl"
+export ENGAGE_TRAP_GO="$FAKE/engage-go" ENGAGE_PING_FAKE_TRAP="$ROOT/trap.log"
+export IMSG_TO="selftest@example.invalid" ENGAGE_PING_SESSIONS="$ROOT/sessions"
+# This suite may run inside a session or a worker: every name it could pick up is pinned here.
+unset PJ_NO_PING PJ_PING_LOG PJ_PING_FAKE_IMSG_RC PJ_LAUNCHED_BY CLAUDE_CODE_SESSION_NAME PJ_SESSION_NAME \
+  ENGAGE_PING_FAKE_HTTP ENGAGE_PING_FAKE_SLEEP HERDR_PANE_ID PJ_PING_BIN ENGAGE_PING_BIN
+
+# arm <name>: fresh state, logs and the default pins for one arm.
+arm() {
+  export PJ_PING_STATE_DIR="$ROOT/state-$1" PJ_PING_FAKE_LOG="$ROOT/fake-$1.log"
+  export ENGAGE_PING_NTFY_CONF="$ROOT/conf/on.conf" ENGAGE_PING_GATEWAY_CONF="$ROOT/conf/no-such-file"
+  export ENGAGE_PING_NOW="$NOW1" CLAUDE_PID=4242 CLAUDE_CODE_SESSION_ID=sess-uuid-1
+  unset ENGAGE_PING_FAKE_HTTP PJ_PING_FAKE_IMSG_RC
+  LOG="$PJ_PING_STATE_DIR/ping.log"
+  : >"$PJ_PING_FAKE_LOG"
+}
+# settle: the sounds play in the background (Q89), so wait until the fake log stops growing
+# (0.15 s with no new line, at most 3 s) before an arm reads it.
+settle() {
+  local i=0 prev=-1 n
+  while :; do
+    n=$(wc -l <"$PJ_PING_FAKE_LOG" 2>/dev/null | tr -d ' ')
+    [ "$n" = "$prev" ] && break
+    prev=$n; sleep 0.15; i=$((i + 1)); [ $i -gt 20 ] && break
+  done
+}
+# run <args...>: sets OUT (stdout), ERR (stderr), RC and the elapsed time in T, then settles
+run() {
+  local t0; t0=$(now)
+  OUT="$("$TOOL" "$@" 2>"$ROOT/err")"; RC=$?
+  ERR="$(cat "$ROOT/err")"
+  T=$(perl -e "printf '%.3f', $(now) - $t0")
+  settle
+}
+wait_lines() { # wait_lines <file> <n>: up to 8 s
+  local i=0
+  while [ "$(wc -l <"$1" 2>/dev/null | tr -d ' ')" -lt "$2" ] && [ $i -lt 80 ]; do sleep 0.1; i=$((i + 1)); done
+}
+# the tools: every sound first, then the other calls in the order they were made. The sounds
+# run in the background (Q89), so where they fall among the others is not fixed.
+calls() { { awk '$2 == "afplay" {print $2}' "$PJ_PING_FAKE_LOG"; awk '$2 != "afplay" {print $2}' "$PJ_PING_FAKE_LOG"; } | tr '\n' ' '; }
+ncalls() { wc -l <"$PJ_PING_FAKE_LOG" | tr -d ' '; }
+nof() { awk -v t="$1" '$2 == t' "$PJ_PING_FAKE_LOG" | wc -l | tr -d ' '; }  # nof <tool>
+nth() { awk -v t="$1" -v n="$2" '$2 == t { c++; if (c == n) { sub(/^[^ ]+ [^ ]+ /, ""); print; exit } }' "$PJ_PING_FAKE_LOG"; }
+sounds() { awk '$2 == "afplay" {print $3}' "$PJ_PING_FAKE_LOG" | tr '\n' ' '; }
+
+Q=$'\xe2\x9d\x93'; OKI=$'\xe2\x9c\x85'; WI=$'\xe2\x8f\xb3'; TI=$'\xf0\x9f\xa7\xaa'
+OR=$'\xf0\x9f\x9f\xa0'; RD=$'\xf0\x9f\x94\xb4'; ROBOT=$'\xf0\x9f\xa4\x96'; DOT=$'\xc2\xb7'
+WHERE="st-proj $DOT st-sess"
+NL='\n'   # what the fakes write for a newline
+
+# ---- 1. One text, sent once ----------------------------------------------------------
+arm one
+run question "Pick a delivery route"
+[ "$(calls)" = "afplay afplay afplay afplay imsg curl " ] && [ "$RC" -eq 0 ] \
+  && ok "1 a question: 4 sounds started, exactly 1 imsg, then 1 curl" || bad "1 one text, once" "rc=$RC calls=$(calls) err=$ERR"
+
+# ---- 2. The five lines, for each kind -------------------------------------------------
+arm lines
+run question "Pick a delivery route"
+want="$Q Question: Pick a delivery route${NL}$WHERE${NL}You: answer the question box in the st-sess tab.${NL}$T1"
+[ "$(nth imsg 1)" = "$want" ] && ok "2 question: title, Where, the default You line, the time" || bad "2 question text" "$(nth imsg 1)"
+arm lines2
+run question "Pick a delivery route" --detail "Two routes; B is faster." --ref Q26
+want="$Q Question: Pick a delivery route${NL}$WHERE $DOT Q26${NL}Two routes; B is faster.${NL}You: answer the question box in the st-sess tab.${NL}$T1"
+[ "$(nth imsg 1)" = "$want" ] && ok "2 --ref joins the Where line; --detail is line 3" || bad "2 ref and detail" "$(nth imsg 1)"
+arm lines3
+run waiting "Blocked on sudo" --you "run the sudo step in the dotfiles tab"
+want="$WI Step for you: Blocked on sudo${NL}$WHERE${NL}You: run the sudo step in the dotfiles tab${NL}$T1"
+[ "$(nth imsg 1)" = "$want" ] && ok "2 waiting: Step for you, with its --you" || bad "2 waiting text" "$(nth imsg 1)"
+arm lines4
+run waiting "Q26 is open" --decision --you "answer Q26"
+case "$(nth imsg 1)" in "$Q Decision: Q26 is open${NL}"*) ok "2 waiting --decision: the Decision title" ;; *) bad "2 decision title" "$(nth imsg 1)" ;; esac
+arm lines5
+run alarm "The relay stopped" --you "look at mlbox"
+case "$(nth imsg 1)" in "$OR Alarm: The relay stopped${NL}"*) ok "2 alarm: the orange title" ;; *) bad "2 alarm title" "$(nth imsg 1)" ;; esac
+arm lines6
+run alarm "The relay stopped" --stopped --you "look at mlbox"
+case "$(nth imsg 1)" in "$RD Alarm: The relay stopped${NL}"*) ok "2 alarm --stopped: the red title" ;; *) bad "2 stopped title" "$(nth imsg 1)" ;; esac
+arm lines7
+run test "Ping route"
+want="$TI Test: Ping route${NL}$WHERE${NL}You: tell st-sess when you see it.${NL}$T1"
+[ "$(nth imsg 1)" = "$want" ] && ok "2 test: the Test title and its default You line" || bad "2 test text" "$(nth imsg 1)"
+arm lines8
+run done "Built B13"
+want="$GW/unsorted H[X-Title: $OKI Finished: Built B13] H[X-Priority: 2] B[$WHERE${NL}You: nothing needed.${NL}$T1]"
+[ "$(nth curl 1)" = "$want" ] && ok "2 done, by ntfy: title line 1, body lines 2 to 5, nothing needed." || bad "2 done text" "$(nth curl 1)"
+arm lines9
+ENGAGE_PING_NOW="$NOW2" run question "Afternoon"
+case "$(nth imsg 1)" in *"${NL}$T2") ok "2 the time is 12-hour Melbourne, no leading zeros ($T2)" ;; *) bad "2 afternoon time" "$(nth imsg 1)" ;; esac
+
+# ---- 3. No id anywhere; stdout is the time ---------------------------------------------
+arm noid
+run test "No codes"
+[ "$OUT" = "$T1" ] && ok "3 stdout is the time ($OUT)" || bad "3 stdout" "out=$OUT"
+case "$(cat "$PJ_PING_FAKE_LOG")$OUT" in *'#'*) bad "3 a # reached a text, a header or stdout" "$(cat "$PJ_PING_FAKE_LOG")" ;; *) ok "3 no # id in any text, header or stdout" ;; esac
+
+# ---- 4. The routing table -------------------------------------------------------------
+route() { # route <label> <want sounds> <want imsg count> <want priority> <args...>
+  local label="$1" ws="$2" wi="$3" wp="$4"; shift 4 || return 2
+  arm "route-$label"
+  run "$@"
+  local p; p=$(nth curl 1 | perl -ne 'print $1 if /H\[X-Priority: (\d)\]/')
+  if [ "$RC" -eq 0 ] && [ "$(sounds)" = "$ws" ] && [ "$(nof imsg)" = "$wi" ] && [ "$p" = "$wp" ]; then
+    ok "4 $label: sounds '$ws', $wi imsg, ntfy priority $wp"
+  else bad "4 $label routes" "rc=$RC sounds=$(sounds) imsg=$(nof imsg) prio=$p err=$ERR"; fi
+}
+route question "Ping.aiff Glass.aiff Glass.aiff Glass.aiff " 1 4 question "q"
+route waiting  "Ping.aiff Glass.aiff Glass.aiff Glass.aiff " 1 4 waiting "w" --you "x"
+route decision "Ping.aiff Glass.aiff Glass.aiff Glass.aiff " 1 4 waiting "w" --decision --you "x"
+route alarm    "Ping.aiff Glass.aiff Glass.aiff Glass.aiff " 1 4 alarm "a" --you "x"
+route stopped  "Ping.aiff Glass.aiff Glass.aiff Glass.aiff " 1 5 alarm "a" --stopped --you "x"
+route done     "Ping.aiff " 0 2 done "d"
+route test     "Ping.aiff " 1 1 test "t"
+
+# ---- 5. The test's ntfy form ----------------------------------------------------------
+arm robot
+run test "Ping route"
+want="$GW/unsorted H[X-Title: $ROBOT AGENT $DOT engage-ping self-test] H[X-Priority: 1] H[X-Tags: robot] B[test, ignore${NL}$WHERE${NL}$T1]"
+[ "$(nth curl 1)" = "$want" ] && ok "5 a test posts the robot form: title, priority 1, robot tag, test, ignore" || bad "5 robot form" "$(nth curl 1)"
+: >"$ROOT/real-calls"
+for k in "question q" "done d" "waiting w --you x" "alarm a --you x"; do
+  arm robot-ctl; run $k; nth curl 1 >>"$ROOT/real-calls"
+done
+if [ "$(wc -l <"$ROOT/real-calls" | tr -d ' ')" -eq 4 ] && ! grep -q -e "$ROBOT" -e 'X-Tags' "$ROOT/real-calls"; then
+  ok "5 control: 4 real kinds posted, none with the robot or an X-Tags header"
+else bad "5 real kinds carry the robot" "$(cat "$ROOT/real-calls")"; fi
+
+# ---- 6. The topic ---------------------------------------------------------------------
+arm topic
+run done "d" --topic agents
+case "$(nth curl 1)" in "$GW/agents "*) ok "6 --topic agents posts to <gateway>/agents (the trailing / stripped)" ;; *) bad "6 topic agents" "$(nth curl 1)" ;; esac
+arm topic2
+run done "d"
+case "$(nth curl 1)" in "$GW/unsorted "*) ok "6 no --topic posts to <gateway>/unsorted" ;; *) bad "6 default topic" "$(nth curl 1)" ;; esac
+arm topic3
+printf 'on: yes\ngateway: %s\n' "$GW" >"$ROOT/conf/on-noslash.conf"
+ENGAGE_PING_NTFY_CONF="$ROOT/conf/on-noslash.conf" run done "d" --topic agents
+case "$(nth curl 1)" in "$GW/agents "*) ok "6 a gateway with no trailing / posts to the same URL" ;; *) bad "6 no slash" "$(nth curl 1)" ;; esac
+arm topic4
+run done "d" --topic "a/b"; r1=$RC
+run done "d" --topic "a b"; r2=$RC
+run done "d" --topic "$(printf 'a%.0s' $(seq 33))"; r3=$RC
+run done "d" --topic "$(printf 'a%.0s' $(seq 32))"; r4=$RC
+[ "$r1$r2$r3" = "222" ] && [ "$r4" -eq 0 ] && [ "$(nof curl)" -eq 1 ] \
+  && ok "6 a bad topic (a/b, a space, 33 characters) exits 2 with nothing sent; 32 characters posts (control)" \
+  || bad "6 bad topics" "rc=$r1$r2$r3 32-char rc=$r4 curls=$(nof curl)"
+
+# ---- 7. A refused send ----------------------------------------------------------------
+for code in 403 502 000; do
+  arm "refused-$code"
+  ENGAGE_PING_FAKE_HTTP="$code" run done "Built B13"
+  if [ "$RC" -eq 0 ] && [ "$(calls)" = "afplay curl imsg " ] && [ "$(nth imsg 1)" = "$OKI Finished: Built B13${NL}$WHERE${NL}You: nothing needed.${NL}$T1" ] \
+     && grep -q "ntfy=unsorted:$code fallback=imsg:0" "$LOG"; then
+    ok "7 ntfy answers $code: a done goes by one imsg instead, logged fallback=imsg:0"
+  else bad "7 refused $code" "rc=$RC calls=$(calls) log=$(cat "$LOG" 2>/dev/null)"; fi
+done
+arm refused-q
+ENGAGE_PING_FAKE_HTTP=403 run question "q"
+[ "$(nof imsg)" -eq 1 ] && ! grep -q fallback "$LOG" && ok "7 a question refused with 403 sends no second imsg" || bad "7 question fallback" "imsg=$(nof imsg) $(cat "$LOG")"
+arm refused-ok
+run done "d"
+[ "$(nof imsg)" -eq 0 ] && grep -q 'ntfy=unsorted:204$' "$LOG" && ok "7 control: 204 sends no fallback" || bad "7 204 control" "imsg=$(nof imsg) $(cat "$LOG")"
+arm nocurl
+ENGAGE_PING_CURL="$ROOT/no-such-curl" run done "d"
+if [ "$RC" -eq 1 ] && [ "$(calls)" = "afplay imsg " ] && grep -q 'curl missing' "$LOG" && printf '%s' "$ERR" | grep -q 'curl missing'; then
+  ok "7 curl missing counts as refused: one imsg instead, named in the log and on stderr, exit 1"
+else bad "7 curl missing" "rc=$RC calls=$(calls) err=$ERR log=$(cat "$LOG" 2>/dev/null)"; fi
+
+# ---- 8. The setting off ---------------------------------------------------------------
+offcase() { # offcase <label> <env assignments...>
+  local label="$1"; shift
+  arm "off-$label"
+  env "$@" "$TOOL" done "d" >/dev/null 2>&1; settle
+  env "$@" "$TOOL" question "q" >/dev/null 2>&1; settle
+  if [ "$(nof curl)" -eq 0 ] && [ "$(calls)" = "afplay afplay afplay afplay afplay imsg imsg " ]; then
+    ok "8 $label: no curl at all; the done and the question each go by one imsg"
+  else bad "8 $label" "calls=$(calls)"; fi
+}
+offcase "on: no" ENGAGE_PING_NTFY_CONF="$ROOT/conf/off.conf"
+offcase "no setting file" ENGAGE_PING_NTFY_CONF="$ROOT/conf/no-such-file"
+offcase "no gateway line anywhere" ENGAGE_PING_NTFY_CONF="$ROOT/conf/on-nogw.conf"
+if [ -f "$SHIPPED" ]; then
+  offcase "the shipped ntfy.conf" ENGAGE_PING_NTFY_CONF="$SHIPPED"
+  grep -Eq '^[[:space:]]*gateway:' "$SHIPPED" \
+    && bad "8 the shipped ntfy.conf holds a gateway: line" "$(cat "$SHIPPED")" || ok "8 the shipped ntfy.conf holds no gateway: line (Q31: the address lives in dot-private)"
+else bad "8 INVALID TRIAL: the shipped ntfy.conf is missing" "$SHIPPED"; fi
+arm gwlocal
+ENGAGE_PING_NTFY_CONF="$ROOT/conf/on-nogw.conf" ENGAGE_PING_GATEWAY_CONF="$ROOT/conf/gateway.local" run done "d"
+case "$(nth curl 1)" in "$GW/unsorted "*) ok "8 control: on: yes, the gateway only in gateway.local -> it posts" ;; *) bad "8 gateway.local control" "calls=$(calls)" ;; esac
+
+# ---- 9. The session name and the project ----------------------------------------------
+arm sess
+run test "t"
+case "$(nth imsg 1)" in *"${NL}st-proj $DOT st-sess${NL}"*) ok "9 by CLAUDE_PID's session file; the project from its cwd, not the calling folder" ;; *) bad "9 by pid" "$(nth imsg 1)" ;; esac
+arm sess2
+CLAUDE_PID=9999 CLAUDE_CODE_SESSION_ID=sess-uuid-2 run test "t"
+case "$(nth imsg 1)" in *"${NL}other-proj $DOT st-other${NL}"*) ok "9 no file for CLAUDE_PID: found by sessionId" ;; *) bad "9 by session id" "$(nth imsg 1)" ;; esac
+arm sess3
+CLAUDE_PID=9999 CLAUDE_CODE_SESSION_ID=nope CLAUDE_CODE_SESSION_NAME=named run test "t"
+case "$(nth imsg 1)" in *"${NL}elsewhere $DOT named${NL}You: tell named when you see it.${NL}"*) ok "9 no session file: CLAUDE_CODE_SESSION_NAME, the project from the folder" ;; *) bad "9 by env name" "$(nth imsg 1)" ;; esac
+arm sess4
+CLAUDE_PID=9999 CLAUDE_CODE_SESSION_ID=nope PJ_SESSION_NAME=pjname run question "q"
+case "$(nth imsg 1)" in *"${NL}elsewhere $DOT pjname${NL}"*) ok "9 then PJ_SESSION_NAME" ;; *) bad "9 by PJ_SESSION_NAME" "$(nth imsg 1)" ;; esac
+arm sess5
+CLAUDE_PID=9999 CLAUDE_CODE_SESSION_ID=nope run question "q"
+want="$Q Question: q${NL}elsewhere${NL}You: answer the question box.${NL}$T1"
+[ "$(nth imsg 1)" = "$want" ] && ok "9 no name at all: the Where line is the project alone; the plain question default" || bad "9 no name" "$(nth imsg 1)"
+arm sess6
+CLAUDE_PID=9999 CLAUDE_CODE_SESSION_ID=nope run test "t"
+case "$(nth imsg 1)" in *"${NL}You: tell the session when you see it.${NL}"*) ok "9 no name: the plain test default" ;; *) bad "9 test default" "$(nth imsg 1)" ;; esac
+mkdir -p "$ROOT/st-proj/.claude" && printf 'session-alias: stp\n' >"$ROOT/st-proj/.claude/pj-homes"
+arm sess7
+run test "t"
+case "$(nth imsg 1)" in *"${NL}stp $DOT st-sess${NL}"*) ok "9 the session's repo's session-alias names the project" ;; *) bad "9 alias" "$(nth imsg 1)" ;; esac
+command mv -f "$ROOT/st-proj/.claude/pj-homes" "$ROOT/pj-homes.used"   # moved aside, never deleted
+
+# ---- 10. Cleaning and caps ------------------------------------------------------------
+arm clean
+tok="ghp_$(printf 'A%.0s' $(seq 36))"
+run question $'Hi\033[31mRED\xe2\x80\xaeevil\tx '"$tok" --detail $'line one\nline two\x07 '"$tok" --you $'do\x01 it\nnow' --ref $'Q2\n6'
+m=$(nth imsg 1)
+if printf '%s' "$m" | perl -CSD -ne 'exit(/[\x00-\x1F\x7F-\x9F\x{202A}-\x{202E}]/ ? 1 : 0)'; then ok "10 no control or bidi character reaches the text"; else bad "10 control chars" "$m"; fi
+case "$m" in *ghp_*) bad "10 a token reached the text" "$m" ;; *) ok "10 token shapes become [redacted]" ;; esac
+want="$Q Question: Hi [31mRED evil x [redacted]${NL}$WHERE $DOT Q2 6${NL}line one line two [redacted]${NL}You: do it now${NL}$T1"
+[ "$m" = "$want" ] && ok "10 a newline inside a part becomes a space: still exactly five lines" || bad "10 parts stay on their lines" "$m"
+arm caps
+run question "$(printf 's%.0s' $(seq 200))" --detail "$(printf 'd%.0s' $(seq 400))" --you "$(printf 'y%.0s' $(seq 300))" --ref "$(printf 'r%.0s' $(seq 50))"
+m=$(nth imsg 1)
+s=$(printf '%s' "$m" | perl -ne 'print $1 if /Question: (s+)/'); d=$(printf '%s' "$m" | perl -ne 'print $1 if /\\n(d+)\\n/')
+y=$(printf '%s' "$m" | perl -ne 'print $1 if /You: (y+)/'); r=$(printf '%s' "$m" | perl -ne 'print $1 if / (r+)\\n/')
+[ "${#s}${#d}${#y}${#r}" = "8030016020" ] && ok "10 caps: summary 80, detail 300, you 160, ref 20" || bad "10 caps" "summary ${#s}, detail ${#d}, you ${#y}, ref ${#r}"
+cat >"$ROOT/sessions/4242.json" <<EOF
+{"pid":4242,"sessionId":"sess-uuid-1","cwd":"$ROOT/st-proj","name":"evil\u001b[2Jsess$(printf 'z%.0s' $(seq 60))"}
+EOF
+arm clean-sess
+run test "t"
+w=$(nth imsg 1 | perl -ne 'print $1 if /\\nst-proj \x{00B7} (.*?)\\n/ or /\\nst-proj \xc2\xb7 (.*?)\\n/')
+[ "${#w}" -eq 40 ] && ! printf '%s' "$w" | perl -ne 'exit(/[\x00-\x1F]/ ? 0 : 1)' && ok "10 a session name from the file is cleaned and capped at 40" || bad "10 session cleaning" "$(nth imsg 1)"
+printf '{"pid":4242,"sessionId":"sess-uuid-1","cwd":"%s","name":"st-sess"}\n' "$ROOT/st-proj" >"$ROOT/sessions/4242.json"
+
+# ---- 11. The log ----------------------------------------------------------------------
+arm log
+run question "Secret summary words" --detail "secret detail words" --you "secret you words" --ref Q99
+iso=$(perl -MPOSIX -e 'print strftime("%Y-%m-%dT%H:%M:%S%z", localtime(shift))' "$NOW1")
+q=$(awk -F'\t' '$5 == "queued"' "$LOG"); s=$(awk -F'\t' '$5 == "sent"' "$LOG")
+[ "$(wc -l <"$LOG" | tr -d ' ')" -eq 2 ] && [ "$q" = "$iso	$T1	question	st-sess	queued	-" ] \
+  && ok "11 two lines; queued: the message's ISO time, its text time, kind, session, nothing missing" || bad "11 queued line" "$(cat "$LOG")"
+[ "$s" = "$iso	$T1	question	st-sess	sent	sound=started imsg=0 ntfy=unsorted:204" ] \
+  && ok "11 sent: the same two times, then the sounds started, imsg and ntfy" || bad "11 sent line" "$(cat "$LOG")"
+grep -q -e secret -e Q99 "$LOG" && bad "11 the log carries text" "$(cat "$LOG")" || ok "11 never the summary, detail, you or ref"
+arm log-off
+ENGAGE_PING_NTFY_CONF="$ROOT/conf/off.conf" run done "d"
+grep -q '	sent	sound=started imsg=- ntfy=off fallback=imsg:0$' "$LOG" && ok "11 the setting off: ntfy=off, and the imsg that took its place" || bad "11 off line" "$(cat "$LOG")"
+
+# ---- 12. Kept from today --------------------------------------------------------------
+arm kill
+OUT="$(PJ_NO_PING=1 "$TOOL" question "q" 2>/dev/null)"; RC=$?
+sleep 0.5
+[ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ "$(ncalls)" -eq 0 ] && [ ! -e "$LOG" ] \
+  && ok "12 PJ_NO_PING=1: exit 0, no time, nothing called, nothing logged" || bad "12 kill switch" "rc=$RC out=$OUT calls=$(ncalls)"
+arm launched
+OUT="$(PJ_LAUNCHED_BY=conductor-x "$TOOL" question "q" 2>/dev/null)"; RC=$?
+OUT2="$(PJ_LAUNCHED_BY=conductor-x "$TOOL" done "d" --detach 2>/dev/null)"
+sleep 1
+[ "$RC" -eq 0 ] && [ -z "$OUT$OUT2" ] && [ "$(ncalls)" -eq 0 ] && [ "$(grep -c 'silent	launched-by=conductor-x' "$LOG" 2>/dev/null)" -eq 2 ] \
+  && ok "12 PING-1: PJ_LAUNCHED_BY set -> nothing called, one silent line each, naming the launcher" || bad "12 PING-1" "rc=$RC calls=$(ncalls) log=$(cat "$LOG" 2>/dev/null)"
+arm notlaunched
+OUT="$(PJ_LAUNCHED_BY= "$TOOL" question "q" 2>/dev/null)"
+[ "$(ncalls)" -gt 0 ] && ok "12 control: PJ_LAUNCHED_BY empty -> the message goes out" || bad "12 PING-1 control" "calls=$(ncalls)"
+arm detach
+ENGAGE_PING_FAKE_SLEEP=0.3 run question "q" --detach
+[ "$RC" -eq 0 ] && [ "$OUT" = "$T1" ] && perl -e "exit !($T < 0.3)" \
+  && ok "12 --detach prints the time and returns in ${T}s, while 4 sounds take 1.2 s" || bad "12 detach return" "rc=$RC out=$OUT t=$T"
+wait_lines "$PJ_PING_FAKE_LOG" 6; wait_lines "$LOG" 2
+[ "$(calls)" = "afplay afplay afplay afplay imsg curl " ] && grep -q '	sent	sound=started imsg=0 ntfy=unsorted:204$' "$LOG" \
+  && ok "12 the detached worker sends everything and logs it" || bad "12 detached worker" "calls=$(calls) log=$(cat "$LOG" 2>/dev/null)"
+arm refuse
+run nonsense "x"; r1=$RC
+run question "   "; r2=$RC
+run question "x" --bogus; r3=$RC
+run question; r4=$RC
+run question "x" --you "  "; r5=$RC
+run question "x" --detail; r6=$RC
+sleep 0.5
+[ "$r1$r2$r3$r4$r5$r6" = "222222" ] && [ "$(ncalls)" -eq 0 ] && [ ! -e "$LOG" ] \
+  && ok "12 bad kind, blank summary, unknown option, no summary, blank or missing value -> exit 2, nothing called or logged" \
+  || bad "12 refusals" "rcs=$r1$r2$r3$r4$r5$r6 calls=$(ncalls)"
+run question "-starts with a dash"
+case "$(nth imsg 1)" in "$Q Question: -starts with a dash${NL}"*) ok "12 control: a summary starting with a dash is a summary" ;; *) bad "12 dash summary" "rc=$RC $(nth imsg 1)" ;; esac
+arm noaf
+PJ_PING_AFPLAY="$ROOT/missing/afplay" run question "q"
+[ "$RC" -eq 1 ] && [ "$(calls)" = "imsg curl " ] && grep -q 'queued	afplay missing;' "$LOG" && ok "12 afplay missing: the rest goes, named, exit 1" || bad "12 afplay missing" "rc=$RC calls=$(calls) $(cat "$LOG")"
+arm noim
+PJ_PING_IMSG="$ROOT/missing/imsg" run question "q"
+[ "$RC" -eq 1 ] && [ "$(calls)" = "afplay afplay afplay afplay curl " ] && grep -q 'queued	imsg missing;' "$LOG" && ok "12 imsg missing: the rest goes, named, exit 1" || bad "12 imsg missing" "rc=$RC calls=$(calls) $(cat "$LOG")"
+arm noto
+( unset IMSG_TO; "$TOOL" question "q" >/dev/null 2>"$ROOT/err" ); RC=$?; settle
+[ "$RC" -eq 1 ] && [ "$(nof imsg)" -eq 0 ] && grep -q 'IMSG_TO unset' "$LOG" && grep -q 'IMSG_TO unset' "$ROOT/err" \
+  && ok "12 IMSG_TO unset: no imsg, named in the log and on stderr, exit 1" || bad "12 IMSG_TO" "rc=$RC calls=$(calls) $(cat "$LOG")"
+arm imfail
+PJ_PING_FAKE_IMSG_RC=3 run question "q"
+[ "$RC" -eq 1 ] && grep -q 'sent	sound=started imsg=3 ntfy=unsorted:204$' "$LOG" && ok "12 imsg failing: exit 1, rc 3 logged, ntfy still tried" || bad "12 imsg fail" "rc=$RC $(cat "$LOG")"
+FH="$ROOT/b12a-home"; FA="$ROOT/b12a-account"; mkdir -p "$FH" "$FA"
+arm statedir
+OUT="$(env -u PJ_PING_STATE_DIR -u XDG_STATE_HOME HOME="$FH" ENGAGE_ACCOUNT_ROOT="$FA" "$TOOL" question "default folder" 2>"$ROOT/err")"; RC=$?
+[ "$RC" -eq 0 ] && [ -s "$FA/engine-room/pj-state/ping.log" ] && [ ! -e "$FH/.local/state/pj" ] \
+  && ok "12 no state variable: ping.log lands in engage's pj-state, nothing under ~/.local/state/pj" || bad "12 state folder" "rc=$RC err=$(cat "$ROOT/err")"
+arm logpath
+PJ_PING_LOG="$ROOT/elsewhere-log/p.log" run done "d"
+grep -q '	done	' "$ROOT/elsewhere-log/p.log" 2>/dev/null && [ ! -e "$LOG" ] && ok "12 PJ_PING_LOG moves the log" || bad "12 PJ_PING_LOG" "$(ls "$ROOT/elsewhere-log" 2>&1)"
+
+# ---- 13. --you, --action, --decision, --stopped ----------------------------------------
+arm you
+run waiting "w"; r1=$RC; e1=$ERR
+run alarm "a"; r2=$RC; e2=$ERR
+[ "$r1$r2" = "22" ] && printf '%s%s' "$e1" "$e2" | grep -q -- '--you' && [ "$(ncalls)" -eq 0 ] \
+  && ok "13 waiting and alarm without --you exit 2, naming --you, nothing sent" || bad "13 --you required" "rc=$r1$r2 err=$e1 $e2"
+run waiting "w" --action "do y"
+case "$(nth imsg 1)" in *"${NL}You: do y${NL}"*) ok "13 --action is read as --you" ;; *) bad "13 --action" "rc=$RC $(nth imsg 1)" ;; esac
+arm you2
+run waiting "w" --you "first" --action "second"
+case "$(nth imsg 1)" in *"${NL}You: second${NL}"*) ok "13 --you then --action: the last one wins" ;; *) bad "13 last wins" "$(nth imsg 1)" ;; esac
+arm you3
+run question "q" --decision; r1=$RC
+run waiting "w" --you x --stopped; r2=$RC
+run done "d" --stopped; r3=$RC
+[ "$r1$r2$r3" = "222" ] && [ "$(ncalls)" -eq 0 ] && ok "13 --decision off waiting, --stopped off alarm -> exit 2" || bad "13 misplaced flags" "rc=$r1$r2$r3 calls=$(ncalls)"
+
+# ---- 14. The stubs --------------------------------------------------------------------
+SD="$ROOT/stub"; mkdir -p "$SD"
+if [ -f "$STUB" ]; then
+  cp "$STUB" "$SD/pj-ping" && chmod +x "$SD/pj-ping" && ln -sf "$TOOL" "$SD/engage-ping"
+  arm stub
+  : >"$ENGAGE_PING_FAKE_TRAP"
+  OUT="$("$SD/pj-ping" done "Finished" 2>"$ROOT/err")"; RC=$?; settle
+  [ "$RC" -eq 0 ] && [ "$OUT" = "$T1" ] && [ "$(nof curl)" -eq 1 ] && ok "14 a call through the pj-ping stub reaches engage-ping (control)" || bad "14 stub forwards" "rc=$RC out=$OUT calls=$(calls) err=$(cat "$ROOT/err")"
+  grep -Eqx 'trap log --ppid [0-9]+ --stub --tool pj-ping -- done Finished' "$ENGAGE_PING_FAKE_TRAP" && [ "$(wc -l <"$ENGAGE_PING_FAKE_TRAP" | tr -d ' ')" -eq 1 ] \
+    && ok "14 the stub marks its call in the mousetrap, once" || bad "14 trap mark" "$(cat "$ENGAGE_PING_FAKE_TRAP" 2>/dev/null)"
+  arm stub2
+  "$SD/pj-ping" waiting "x" --action "do y" >/dev/null 2>&1; settle
+  case "$(nth imsg 1)" in *"${NL}You: do y${NL}"*) ok "14 pj-ping waiting --action: the You line" ;; *) bad "14 stub --action" "$(nth imsg 1)" ;; esac
+  arm stub3
+  PJ_LAUNCHED_BY=conductor-x "$SD/pj-ping" question "q" >/dev/null 2>&1
+  [ "$(ncalls)" -eq 0 ] && ok "14 PJ_LAUNCHED_BY set: nothing sent through the stub" || bad "14 stub PING-1" "calls=$(calls)"
+  arm stub4
+  ENGAGE_TRAP_GO="$ROOT/no-such-engage-go" "$SD/pj-ping" done "d" >/dev/null 2>&1; RC=$?; settle
+  [ "$RC" -eq 0 ] && [ "$(nof curl)" -eq 1 ] && ok "14 no engage-go: the call still goes through" || bad "14 no engage-go" "rc=$RC calls=$(calls)"
+  SD2="$ROOT/stub-alone"; mkdir -p "$SD2"; cp "$STUB" "$SD2/pj-ping"; chmod +x "$SD2/pj-ping"
+  arm stub5
+  OUT="$(PATH="$FAKE:/usr/bin:/bin" "$SD2/pj-ping" done "d" 2>"$ROOT/err")"; RC=$?
+  [ "$RC" -eq 127 ] && grep -q engage-ping "$ROOT/err" && [ "$(ncalls)" -eq 0 ] && ok "14 no engage-ping beside it or on PATH: exit 127, named, nothing sent" || bad "14 stub alone" "rc=$RC err=$(cat "$ROOT/err")"
+  SD3="$ROOT/stub-loop"; mkdir -p "$SD3/path"; cp "$STUB" "$SD3/pj-ping"; chmod +x "$SD3/pj-ping"; ln -sf "$SD3/pj-ping" "$SD3/path/engage-ping"
+  arm stub6
+  perl -e 'alarm 5; exec @ARGV' env PATH="$SD3/path:$FAKE:/usr/bin:/bin" "$SD3/pj-ping" done "d" >/dev/null 2>"$ROOT/err"; RC=$?
+  [ "$RC" -eq 127 ] && [ "$(ncalls)" -eq 0 ] && ok "14 the only engage-ping on PATH is a link to the stub: exit 127, no loop" || bad "14 stub loop" "rc=$RC err=$(cat "$ROOT/err")"
+else bad "14 INVALID TRIAL: no pj-ping stub at $STUB" "-"; fi
+SS="$ROOT/ststub"; mkdir -p "$SS"
+if [ -f "$STSTUB" ]; then
+  cp "$STSTUB" "$SS/pj-ping-selftest"; chmod +x "$SS/pj-ping-selftest"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >"%s/fake-st.args"\necho "engage-ping-selftest (fake)"\nexit 3\n' "$SS" >"$SS/engage-ping-selftest"
+  chmod +x "$SS/engage-ping-selftest"
+  : >"$ENGAGE_PING_FAKE_TRAP"
+  OUT="$("$SS/pj-ping-selftest" a b 2>/dev/null)"; RC=$?
+  [ "$RC" -eq 3 ] && [ "$OUT" = "engage-ping-selftest (fake)" ] && [ "$(cat "$SS/fake-st.args" 2>/dev/null)" = "a b" ] \
+    && grep -Eqx 'trap log --ppid [0-9]+ --stub --tool pj-ping-selftest -- a b' "$ENGAGE_PING_FAKE_TRAP" \
+    && ok "14 the pj-ping-selftest stub runs engage-ping-selftest with a b, its output and exit 3, marked once" \
+    || bad "14 selftest stub" "rc=$RC out=$OUT args=$(cat "$SS/fake-st.args" 2>/dev/null) trap=$(cat "$ENGAGE_PING_FAKE_TRAP")"
+else bad "14 INVALID TRIAL: no pj-ping-selftest stub at $STSTUB" "-"; fi
+
+printf 'engage-ping-selftest: %d passed, %d failed\n' "$PASS" "$FAIL"
+[ "$FAIL" -eq 0 ]
