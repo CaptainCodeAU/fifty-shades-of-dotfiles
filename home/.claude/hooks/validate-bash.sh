@@ -167,6 +167,72 @@ _classify() {
   _guard "$1" "${2:-}"
 }
 
+# A saved copy that is PROVED, never trusted (Gavin, dotfiles-main Q84: 1, 19 Oct 2026: "If a
+# command can be reversed, don't create a friction by adding me into the loop"). The same check
+# as enforce-no-permanent-delete.sh: rc 0 only when the bundle verifies against the repo in $1 and
+# every tip in $3.. is one of its heads, or an ancestor of a head the repo also holds.
+_bundle_holds() { # $1 repo dir, $2 bundle path, $3.. tips (full shas)
+  local dir="${1:-}" bun="${2:-}" tip h ok heads
+  [ $# -ge 3 ] || return 1; shift 2 || set --
+  [ -n "$dir" ] && [ -n "$bun" ] || return 1
+  case "$bun" in "~"/*) bun="$HOME/${bun#\~/}" ;; /*) ;; *) bun="$dir/$bun" ;; esac
+  [ -f "$bun" ] || return 1
+  git -C "$dir" bundle verify "$bun" >/dev/null 2>&1 || return 1
+  heads=$(git -C "$dir" bundle list-heads "$bun" 2>/dev/null | awk '$1 ~ /^[0-9a-f]+$/ {print $1}')
+  [ -n "$heads" ] || return 1
+  for tip in "$@"; do
+    [[ $tip =~ ^[0-9a-f]{40}$ ]] || return 1
+    ok=0
+    for h in $heads; do
+      if [ "$h" = "$tip" ]; then ok=1; break; fi
+      if git -C "$dir" cat-file -e "$h^{commit}" 2>/dev/null && git -C "$dir" merge-base --is-ancestor "$tip" "$h" 2>/dev/null; then ok=1; break; fi
+    done
+    [ "$ok" -eq 1 ] || return 1
+  done
+  return 0
+}
+
+# Q84: 1. rc 0 when the WHOLE command is one plain remote branch delete carrying the bundle:
+#   GIT_BRANCH_BUNDLE=<file> git [-C <dir>] push <remote> --delete|-d <branch>...
+#   GIT_BRANCH_BUNDLE=<file> git [-C <dir>] push --delete|-d <remote> <branch>...
+#   GIT_BRANCH_BUNDLE=<file> git [-C <dir>] push <remote> :<branch>...
+# Each branch's tip is read from the REMOTE (git ls-remote, 15 s cap), never a local copy that may
+# be stale, and must be held by the bundle. Anything else, a chain, a quote, a substitution or a
+# failed read, returns 1 and the delete stays denied.
+_remote_delete_bundled() { # $1 command, $2 cwd
+  local cmd="$1" dir="${2:-}" bun remote="" i=0 b t
+  local -a w=() br=() tips=()
+  case "$cmd" in *[\;\&\|\`\$\(\)\<\>\"\'\\]*|*$'\n'*) return 1 ;; esac
+  read -r -a w <<<"$cmd"
+  [[ ${w[0]:-} == GIT_BRANCH_BUNDLE=?* ]] || return 1
+  bun="${w[0]#GIT_BRANCH_BUNDLE=}"; i=1
+  [ "${w[$i]:-}" = git ] || return 1; i=$((i + 1))
+  if [ "${w[$i]:-}" = -C ]; then
+    case "${w[$((i + 1))]:-}" in /*) dir="${w[$((i + 1))]}" ;; "") return 1 ;; *) [ -n "$dir" ] || return 1; dir="$dir/${w[$((i + 1))]}" ;; esac
+    i=$((i + 2))
+  fi
+  [ "${w[$i]:-}" = push ] || return 1; i=$((i + 1))
+  local del=0
+  if [ "${w[$i]:-}" = --delete ] || [ "${w[$i]:-}" = -d ]; then del=1; i=$((i + 1)); fi
+  remote="${w[$i]:-}"; [[ -n $remote && $remote != -* && $remote != *:* ]] || return 1; i=$((i + 1))
+  if [ "$del" -eq 0 ] && { [ "${w[$i]:-}" = --delete ] || [ "${w[$i]:-}" = -d ]; }; then del=1; i=$((i + 1)); fi
+  while [ "$i" -lt "${#w[@]}" ]; do
+    b="${w[$i]}"; i=$((i + 1))
+    case "$b" in -*) return 1 ;; esac
+    if [ "$del" -eq 1 ]; then case "$b" in *:*) return 1 ;; esac
+    else case "$b" in :?*) b="${b#:}" ;; *) return 1 ;; esac; fi
+    b="${b#refs/heads/}"; [ -n "$b" ] || return 1
+    br[${#br[@]}]="$b"
+  done
+  [ "${#br[@]}" -gt 0 ] && [ -n "$dir" ] || return 1
+  for b in "${br[@]}"; do
+    t=$(perl -e 'alarm 15; exec @ARGV' git -C "$dir" ls-remote --exit-code "$remote" "refs/heads/$b" 2>/dev/null | awk 'NR == 1 {print $1}')
+    [ -n "$t" ] || return 1
+    tips[${#tips[@]}]="$t"
+  done
+  _bundle_holds "$dir" "$bun" "${tips[@]}"
+}
+
 # The three scanner rules (nested-Claude aliases, gpf!, brew install). Prints the
 # deny reason, or nothing. A missing or failed scanner is named, never silent.
 _guard() {
@@ -184,7 +250,13 @@ _guard() {
   fi
   case "${out%%$'\n'*}" in
     ALLOW) ;;
-    DENY) r=${out#*$'\n'}; echo "${r%%$'\n'*}" ;;
+    DENY) r=${out#*$'\n'}; r="${r%%$'\n'*}"
+      case "$r" in
+        "Remote delete (W-20260929-A37): git push"*)
+          _remote_delete_bundled "$1" "${2:-}" && return 0
+          r="$r -- or save the branch first and prove it: git bundle create <file> <branch>, then GIT_BRANCH_BUNDLE=<file> git push <remote> --delete <branch> (the bundle must verify and hold the remote tip; Q84: 1)" ;;
+      esac
+      echo "$r" ;;
     *) echo "validate-bash: its scanner answered '${out%%$'\n'*}'; denying rather than guessing" ;;
   esac
 }
@@ -712,6 +784,31 @@ if [ "${1:-}" = "--selftest" ]; then
   echo
   echo "function arms: $_must_n, $((_must_n - fails)) passed, $fails failed"
   echo "payload arms:  $_st_n, $((_st_n - _st_fails)) passed, $_st_fails failed"
+  # Q84: 1 (Gavin, 19 Oct 2026): a remote branch delete passes only when GIT_BRANCH_BUNDLE names
+  # a bundle that holds the REMOTE tip, read with git ls-remote. A local bare repo stands in for
+  # GitHub, so this runs offline; one arm has the remote moved on past the bundle.
+  RDR="$FX/rd-remote.git"; RDL="$FX/rd-local"
+  [ -d "$RDR" ] || git init -q --bare "$RDR"
+  _vb_repo rd-local main
+  git -C "$RDL" branch -f topic main >/dev/null 2>&1; git -C "$RDL" branch -f moved main >/dev/null 2>&1
+  git -C "$RDL" remote add origin "$RDR" 2>/dev/null || git -C "$RDL" remote set-url origin "$RDR"
+  git -C "$RDL" push -q origin main topic >/dev/null 2>&1
+  git -C "$RDL" bundle create -q "$FX/rd-topic.bundle" topic >/dev/null 2>&1
+  git -C "$RDL" bundle create -q "$FX/rd-moved.bundle" moved >/dev/null 2>&1
+  RDC2=$(GIT_AUTHOR_NAME=vb GIT_AUTHOR_EMAIL=vb@selftest GIT_COMMITTER_NAME=vb GIT_COMMITTER_EMAIL=vb@selftest \
+         GIT_AUTHOR_DATE=2026-01-02T00:00:00Z GIT_COMMITTER_DATE=2026-01-02T00:00:00Z \
+         git -C "$RDL" commit-tree -p main -m moved-on "$(git -C "$RDL" mktree </dev/null)")
+  git -C "$RDL" push -q origin "$RDC2:refs/heads/moved" >/dev/null 2>&1
+  conv_arm allow 'Q84 push <remote> --delete with a bundle holding the remote tip' "GIT_BRANCH_BUNDLE=$FX/rd-topic.bundle git push origin --delete topic" '' "$RDL"
+  conv_arm allow 'Q84 push --delete <remote> with that bundle'      "GIT_BRANCH_BUNDLE=$FX/rd-topic.bundle git push --delete origin topic" '' "$RDL"
+  conv_arm allow 'Q84 push <remote> :<branch> with that bundle'     "GIT_BRANCH_BUNDLE=$FX/rd-topic.bundle git push origin :topic" '' "$RDL"
+  conv_arm deny  'Q84 control: the same delete without a bundle'    'git push origin --delete topic' '' "$RDL"
+  conv_arm deny  'Q84 the remote moved past the bundle'             "GIT_BRANCH_BUNDLE=$FX/rd-moved.bundle git push origin --delete moved" '' "$RDL"
+  conv_arm deny  'Q84 a branch the remote does not have'            "GIT_BRANCH_BUNDLE=$FX/rd-topic.bundle git push origin --delete nosuch" '' "$RDL"
+  conv_arm deny  'Q84 chained after the delete'                     "GIT_BRANCH_BUNDLE=$FX/rd-topic.bundle git push origin --delete topic; true" '' "$RDL"
+  conv_arm deny  'Q84 a missing bundle'                             "GIT_BRANCH_BUNDLE=$FX/rd-none.bundle git push origin --delete topic" '' "$RDL"
+  conv_arm deny  'Q84 a force push is never covered'                "GIT_BRANCH_BUNDLE=$FX/rd-topic.bundle git push --force origin main" '' "$RDL"
+
   echo "$((_must_n + _st_n)) arms, $((_must_n + _st_n - fails - _st_fails)) passed, $((fails + _st_fails)) failed"
   [ $((fails + _st_fails)) -eq 0 ] && { echo "ALL ARMS PASS"; exit 0; } || { echo "$((fails + _st_fails)) ARM(S) FAILED"; exit 1; }
 fi

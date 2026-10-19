@@ -413,7 +413,7 @@ _msg() { # $1 = rule id -> what it does, then the safe route
     git-checkout-discard) echo "git checkout on paths (-- <path>, ., or a file) or with -f discards uncommitted work. SAFE ROUTE: git stash push -u (recoverable), or ask Gavin; for a branch use git switch <branch>." ;;
     git-restore)    echo "git restore without --staged overwrites the working tree. SAFE ROUTE: git stash push -u (recoverable), or ask Gavin; git restore --staged <f> only unstages." ;;
     git-switch-discard) echo "git switch -f / --discard-changes throws away uncommitted work. SAFE ROUTE: git stash push -u first, or ask Gavin." ;;
-    git-branch-force) echo "git branch -D / --delete --force / -M / -C deletes or overwrites a branch even when unmerged. SAFE ROUTE: git branch -d (refuses unmerged work)." ;;
+    git-branch-force) echo "git branch -D / --delete --force / -M / -C deletes or overwrites a branch even when unmerged. SAFE ROUTE: git branch -d (refuses unmerged work), or save the branch first and prove it: git bundle create <file> <branch>, then GIT_BRANCH_BUNDLE=<file> git branch -D <branch> (the bundle must verify and hold the branch's tip; Gavin, dotfiles-main Q84: 1)." ;;
     git-stash-drop) echo "git stash drop / clear destroys stashed work. SAFE ROUTE: ask Gavin." ;;
     git-rm-force)   echo "git rm -f removes files AND their uncommitted changes, which are in neither the Trash nor git. SAFE ROUTE: commit or stash first, git rm --cached to keep the file, or ask Gavin." ;;
     git-filter-repo) echo "git filter-repo / filter-branch rewrites history; the old commits are gone once their refs expire. SAFE ROUTE: ask Gavin." ;;
@@ -670,11 +670,13 @@ _argv() {
   local adepth="$1"; shift
   local RM_LOOKUP="${RM_LOOKUP-}" pa="" ha=""
   local TRASH_VIA="${TRASH_VIA-}"   # command/env seen before a trash (trash-path, 2026-09-29)
+  local BRANCH_BUNDLE=""            # GIT_BRANCH_BUNDLE=<file> on this command (Q84: 1, 19 Oct 2026)
   # leading assignments: VAR=1 cmd
   while [ $# -gt 0 ] && [[ $1 == *=* ]] && _is_assign "$1"; do
     case "$1" in SAFE_RM_OFF=*|SAFE_RM_OFF+=*) _deny safe-rm-off "$1"; return 0 ;; esac   #M: SAFE_RM_OFF prefix
     case "$1" in PATH=*|PATH+=*|path=*|path+=*) pa="$1" ;; esac
     case "$1" in HOME=*|HOME+=*) ha="$1" ;; esac
+    case "$1" in GIT_BRANCH_BUNDLE=?*) BRANCH_BUNDLE="${1#GIT_BRANCH_BUNDLE=}" ;; esac
     shift
   done
   [ -n "$pa" ] && RM_LOOKUP="$pa"                                                            #M: PATH= prefix
@@ -1195,6 +1197,31 @@ _exists() { # $1 = path, $2 = directory it is relative to
 _l() { [[ $letters == *"$1"* ]]; }
 _o() { [[ $longs == *" $1 "* ]]; }
 
+# A saved copy that is PROVED, never trusted (Gavin, dotfiles-main Q84: 1, 19 Oct 2026: "If a
+# command can be reversed, don't create a friction by adding me into the loop"). rc 0 only when
+# the bundle file verifies against the repo in $1 and every tip in $3.. is one of the bundle's
+# heads, or an ancestor of a head the repo also holds. A relative path is read from the repo.
+_bundle_holds() { # $1 repo dir, $2 bundle path, $3.. tips (full shas)
+  local dir="${1:-}" bun="${2:-}" tip h ok heads
+  [ $# -ge 3 ] || return 1; shift 2 || set --
+  [ -n "$dir" ] && [ -n "$bun" ] || return 1
+  case "$bun" in "~"/*) bun="$HOME/${bun#\~/}" ;; /*) ;; *) bun="$dir/$bun" ;; esac
+  [ -f "$bun" ] || return 1
+  git -C "$dir" bundle verify "$bun" >/dev/null 2>&1 || return 1
+  heads=$(git -C "$dir" bundle list-heads "$bun" 2>/dev/null | awk '$1 ~ /^[0-9a-f]+$/ {print $1}')
+  [ -n "$heads" ] || return 1
+  for tip in "$@"; do
+    [[ $tip =~ ^[0-9a-f]{40}$ ]] || return 1
+    ok=0
+    for h in $heads; do
+      if [ "$h" = "$tip" ]; then ok=1; break; fi
+      if git -C "$dir" cat-file -e "$h^{commit}" 2>/dev/null && git -C "$dir" merge-base --is-ancestor "$tip" "$h" 2>/dev/null; then ok=1; break; fi
+    done
+    [ "$ok" -eq 1 ] || return 1
+  done
+  return 0
+}
+
 _git_cmd() {
   local gdir="$CWD" w
   # global options, and the directory they point at
@@ -1255,6 +1282,18 @@ _git_cmd() {
       if _l f || _o --force || _o --discard-changes; then _deny git-switch-discard "git switch"; fi      #M: git switch -f
       ;;
     branch)
+      # Q84: 1. A plain delete (-D, or --delete/-d with --force/-f; never -M/-C/move/copy, never -r)
+      # passes when GIT_BRANCH_BUNDLE names a bundle that provably holds every named branch's tip.
+      if [ -n "${BRANCH_BUNDLE:-}" ] && [ ${#args[@]} -gt 0 ] && [ ${#after[@]} -eq 0 ] \
+         && ! _l M && ! _l C && ! _l m && ! _l c && ! _l r && ! _o --move && ! _o --copy && ! _o --remotes \
+         && { _l D || { { _l d || _o --delete; } && { _l f || _o --force; }; }; }; then
+        local tips=() b t
+        for b in "${args[@]}"; do
+          t=$(git -C "$gdir" rev-parse --verify --quiet "refs/heads/$b^{commit}" 2>/dev/null) || { tips=(); break; }
+          tips[${#tips[@]}]="$t"
+        done
+        if [ ${#tips[@]} -eq ${#args[@]} ] && _bundle_holds "$gdir" "$BRANCH_BUNDLE" "${tips[@]}"; then return 0; fi   #M: git branch -D with a proving bundle
+      fi
       if _l D || _l M || _l C; then _deny git-branch-force "git branch -$letters"; return 0; fi   #M: git branch -D
       if { _l d || _o --delete || _l m || _o --move || _l c || _o --copy; } && { _l f || _o --force; }; then _deny git-branch-force "git branch --force"; fi   #M: git branch --delete --force
       ;;
@@ -1376,6 +1415,27 @@ SNAP
   _must git-branch-force    'git branch --delete --force'     'git branch --delete --force feature'
   _must git-branch-force    'git branch -df'                  'git branch -df feature'
   _must git-branch-force    'git branch -M (overwrite)'       'git branch -M old new'
+  # Q84: 1 (Gavin, 19 Oct 2026): a branch delete passes when GIT_BRANCH_BUNDLE names a bundle
+  # that provably holds the tip. A real repo and real bundles in the fixture dir; both sides.
+  local br="$fx/brepo" bt bc1 bc2 bc3 genv
+  genv="GIT_AUTHOR_NAME=g GIT_AUTHOR_EMAIL=g@x GIT_COMMITTER_NAME=g GIT_COMMITTER_EMAIL=g@x"
+  git init -q "$br" && bt=$(git -C "$br" mktree </dev/null) \
+    && bc1=$(env $genv git -C "$br" commit-tree -m one "$bt") && git -C "$br" update-ref refs/heads/main "$bc1" \
+    && git -C "$br" symbolic-ref HEAD refs/heads/main \
+    && bc2=$(env $genv git -C "$br" commit-tree -p "$bc1" -m two "$bt") && git -C "$br" update-ref refs/heads/topic "$bc2" \
+    && bc3=$(env $genv git -C "$br" commit-tree -p "$bc1" -m three "$bt") && git -C "$br" update-ref refs/heads/side "$bc3" \
+    && git -C "$br" bundle create -q "$fx/topic.bundle" topic 2>/dev/null \
+    && git -C "$br" bundle create -q "$fx/main.bundle" main 2>/dev/null
+  printf 'not a bundle\n' > "$fx/junk.bundle"
+  _must -                   'Q84 git branch -D with a bundle that holds the tip' "GIT_BRANCH_BUNDLE=$fx/topic.bundle git branch -D topic" "$br"
+  _must -                   'Q84 --delete --force with that bundle'          "GIT_BRANCH_BUNDLE=$fx/topic.bundle git branch --delete --force topic" "$br"
+  _must -                   'Q84 a branch whose tip is an ancestor in the bundle' "GIT_BRANCH_BUNDLE=$fx/topic.bundle git branch -D main" "$br"
+  _must git-branch-force    'Q84 control: the same delete without a bundle'  'git branch -D topic' "$br"
+  _must git-branch-force    'Q84 a bundle that does not hold the tip'        "GIT_BRANCH_BUNDLE=$fx/main.bundle git branch -D topic" "$br"
+  _must git-branch-force    'Q84 a file that is not a bundle'                "GIT_BRANCH_BUNDLE=$fx/junk.bundle git branch -D topic" "$br"
+  _must git-branch-force    'Q84 a missing bundle'                           "GIT_BRANCH_BUNDLE=$fx/none.bundle git branch -D topic" "$br"
+  _must git-branch-force    'Q84 -M is never covered'                        "GIT_BRANCH_BUNDLE=$fx/topic.bundle git branch -M topic other" "$br"
+  _must git-branch-force    'Q84 a second branch the bundle lacks'           "GIT_BRANCH_BUNDLE=$fx/topic.bundle git branch -D topic side" "$br"
   _must git-stash-drop      'git stash drop'                  'git stash drop'
   _must git-stash-drop      'git stash clear'                 'git stash clear'
   _must git-history-prune   'git reflog expire'               'git reflog expire --expire=now --all'
