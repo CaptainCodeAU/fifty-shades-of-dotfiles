@@ -203,22 +203,6 @@
     },
     {
       "event": "SessionStart",
-      "script": "pj-launch-check",
-      "script_path": "$HOME/.local/bin/pj-launch-check",
-      "targets": ["project"],
-      "entry": {
-        "type": "command",
-        "command": "h=\"$HOME/.local/bin/pj-launch-check\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: pj-launch-check is registered but ~/.local/bin/pj-launch-check is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: pj-launch-check is registered but ~/.local/bin/pj-launch-check is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
-        "timeout": 5
-      },
-      "why": "F3 (W-20260921-13): reads the running claude's argv via CLAUDE_PID and prints ONE LAUNCH WARNING line when the appended prompt file is not the pj-prompt-file cache (RULES.md missing), a plugin dir is absent or --setting-sources drifted; silent on a match; always appends one line to ~/.local/state/pj/launches.log. Separate from the read-only card on purpose (P5.2). Project target only",
-      "class": "alarm",
-      "legacy_commands": [
-        "test -x \"$HOME/.local/bin/pj-launch-check\" && \"$HOME/.local/bin/pj-launch-check\" || true"
-      ]
-    },
-    {
-      "event": "SessionStart",
       "script": "pj-temp",
       "script_path": "$HOME/.local/bin/pj-temp",
       "targets": ["project"],
@@ -700,6 +684,22 @@
       "class": "alarm",
       "legacy_commands": [
         "test -x \"$HOME/.local/bin/pj-session-end\" && \"$HOME/.local/bin/pj-session-end\" || true"
+      ]
+    },
+    {
+      "event": "SessionStart",
+      "script": "pj-launch-check",
+      "script_path": "$HOME/.local/bin/pj-launch-check",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.local/bin/pj-launch-check\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: pj-launch-check is registered but ~/.local/bin/pj-launch-check is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: pj-launch-check is registered but ~/.local/bin/pj-launch-check is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
+        "timeout": 5
+      },
+      "why": "F3 (W-20260921-13): reads the running claude's argv via CLAUDE_PID and prints ONE LAUNCH WARNING line when the appended prompt file is not the pj-prompt-file cache (RULES.md missing), a plugin dir is absent or --setting-sources drifted; silent on a match; always appends one line to ~/.local/state/pj/launches.log. Separate from the read-only card on purpose (P5.2). Project target only",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.local/bin/pj-launch-check\" && \"$HOME/.local/bin/pj-launch-check\" || true"
       ]
     }
   ]

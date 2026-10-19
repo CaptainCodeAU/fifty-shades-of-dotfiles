@@ -266,7 +266,7 @@ sync_line(){
 # The rules-copy line (FOLLOWUP-BRIEF T1/T2, 2026-09-29). A relay-fed machine gets pj's rules in
 # ~/repos/pj-rules and links lead pj there, so an edit made THROUGH a link lands in the copy
 # unnoticed and pj loads it; the relay's next push (updateInstead) is then refused. The same
-# finding as pj-health's rules-copy row, which holds the fix. EXCEPTION-BASED like sync_line:
+# finding pj-health's rules-copy row made (pj-health retired in wean B12a). EXCEPTION-BASED like sync_line:
 # silent when clean, when there is no copy (the Mac), and when the copy is not its own repo
 # (pj-health says NOT MEASURED for that). --no-optional-locks keeps CONTRACT 2: a plain status
 # may rewrite the copy's index. Seam: PJ_RULES_COPY.
@@ -286,7 +286,7 @@ rules_copy_line(){
   n="$(printf '%s\n' "$out" | grep -c .)"
   eg="$(printf '%s\n' "$out" | head -3 | cut -c4- | LC_ALL=C tr -d '\000-\037\177' | paste -sd, - | sed 's/,/, /g')"
   [ "$n" -gt 3 ] && eg="$eg, +$((n - 3)) more"
-  printf "Rules copy edited on this machine: %s path(s) in %s (%s). pj loads them and the relay's next push is refused; 'pj-health' rules-copy row has the fix." "$n" "$(tilde "$rc")" "$eg"
+  printf "Rules copy edited on this machine: %s path(s) in %s (%s). pj loads them and the relay's next push is refused; git -C %s status lists them." "$n" "$(tilde "$rc")" "$eg" "$(tilde "$rc")"
 }
 
 # The mods API line (F8b, D-20260923-A06). mods-api-drift --card reads the saved reports and
