@@ -17,7 +17,7 @@
 #   yes/no and got yes-plus-secret. It reads as a redaction and is an expansion, which
 #   is why nobody reviewing those commands looked twice.
 #
-#   Prose alone does not stop this: the rule now lives in OPERATIONAL_RULES.md, but the
+#   Prose alone does not stop this: the hard line is in the account's rules/always.md, but the
 #   two leaks were written by sessions that had every count-and-absence rule loaded and
 #   still typed the probe. This fires at the only moment that helps.
 #
@@ -466,7 +466,7 @@ _argv() { # $1 = depth, then one simple command's words. Sets R.
       [ "${1:-}" = auth ] || return 0
       case "${2:-}" in
         token)  R="RULE 6: gh auth token prints a GitHub token. SAFE: pass one without printing it, GH_TOKEN=\"\$(github-agent-token token)\" <cmd>; to check one exists, github-agent-token token | cut -c1-4" ;;
-        status) R="RULE 6: gh auth status prints part of the token (23 characters of a PAT, OPERATIONAL_RULES [H11]). SAFE: gh api user --jq .login names who answers; gh api -i user 2>&1 | grep -i '^x-oauth-scopes' shows the scopes; [ -n \"\${GH_TOKEN-}\" ] && echo \"SET len=\${#GH_TOKEN}\" shows whether one is set" ;;
+        status) R="RULE 6: gh auth status prints part of the token (23 characters of a PAT, measured [H11]). SAFE: gh api user --jq .login names who answers; gh api -i user 2>&1 | grep -i '^x-oauth-scopes' shows the scopes; [ -n \"\${GH_TOKEN-}\" ] && echo \"SET len=\${#GH_TOKEN}\" shows whether one is set" ;;
       esac
       return 0 ;;
 
@@ -662,9 +662,8 @@ _advice='Print a FACT ABOUT the secret, never the secret:
 ${V:-word} returns the VALUE when V is set -- it is an expansion, not a redaction.
 Transcripts under ~/.claude/projects are append-only and gitignored, so git-leak-scan
 cannot see them: a secret printed here is a secret with no way back.
-Full rule, by where this session loads its rules from:
-    pj: ~/.claude/pj-global/OPERATIONAL_RULES.md, section "Security" (the ${V:-x} line)
-    engage: ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/rules/always.md ("Test a secret only as")'
+The rule: ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/rules/always.md, the hard line
+    "Never print, write down or send a secret."'
 
 # ---------------------------------------------------------------- selftest
 if [ "${1:-}" = "--selftest" ]; then
@@ -902,7 +901,7 @@ if [ "${1:-}" = "--selftest" ]; then
       unreadable) [[ $got == "deny enforce-secret-probe: cannot read the tool payload"* ]] && ok=1 ;;
       shout)      [[ $got == "null null 🔴 THE SECRET-PROBE GUARD IS BROKEN"* ]] && ok=1 ;;
       halfbroken) [[ $got == "null null 🔴 THE SECRET-PROBE GUARD IS HALF BROKEN"* ]] && ok=1 ;;
-      rulefiles)  [[ $got == "deny 🔴 BLOCKED"*"pj: ~/.claude/pj-global/OPERATIONAL_RULES.md"*"engage: ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/rules/always.md"* ]] && ok=1 ;;
+      rulefiles)  [[ $got == "deny 🔴 BLOCKED"*"The rule: ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/rules/always.md"*'"Never print, write down or send a secret."'* ]] && ok=1 ;;
       unreadable_lexer) [[ $got == "deny 🔴 BLOCKED"*"the shell lexer could not be used"* ]] && ok=1 ;;
       quiet)      [ -z "$out" ] && ok=1 ;;
     esac
@@ -929,7 +928,7 @@ if [ "${1:-}" = "--selftest" ]; then
   _hk blocked    'H4 through the hook: printenv a credential'                   "$(_pl 'printenv GH_TOKEN')"
   _hk blocked    'H4 through the hook: bash -c body'                            "$(_pl "bash -c 'echo \$GH_TOKEN'")"
   _hk quiet      'H4 through the hook: a safe form stays quiet'                 "$(_pl 'env | cut -d= -f1')"
-  _hk rulefiles  'the deny names BOTH rule files (pj and engage)'               "$(_pl 'printenv GH_TOKEN')"
+  _hk rulefiles  'the deny names the rule: always.md, the hard line'               "$(_pl 'printenv GH_TOKEN')"
   # The lexer missing: the crude match denies by name, a harmless command SHOUTS.
   _lk() { SECRET_PROBE_LEXER_FROM=/nonexistent/enforce-no-permanent-delete.sh _hk "$@"; }
   _lk unreadable_lexer 'lexer missing: printenv a credential still denied'      "$(_pl 'printenv GH_TOKEN')"
