@@ -51,7 +51,9 @@ tmux() {
     # Execute the actual tmux command, passing all arguments to it.
     # 'command' is used to bypass this wrapper function and avoid an infinite loop.
     # command tmux "$@"
-	command tmux -f ~/.tmux.conf "$@"
+    # ~/.tmux.conf is archived (archive/tmux/ in the dotfiles repo, 19 Oct 2026), so -f is
+    # passed only while that file exists; without it tmux uses its own defaults.
+	if [[ -f ~/.tmux.conf ]]; then command tmux -f ~/.tmux.conf "$@"; else command tmux "$@"; fi
 }
 
 

@@ -1026,7 +1026,7 @@ Two SSH fixes worth knowing, both per the release notes and not measured here:
 
 ### What dropping tmux would cost
 
-Measured against this repo's `home/.tmux.conf` and `home/.zsh_cursor_functions`:
+Measured against this repo's `.tmux.conf` (in `home/` then; `archive/tmux/` since 19 Oct 2026) and `home/.zsh_cursor_functions`:
 
 - **vim-tmux-navigator** — seamless `ctrl+hjkl` between nvim splits and panes. No
   herdr equivalent found.
@@ -1381,7 +1381,7 @@ reference copy here was replaced. After it, `herdr integration status` reads
 - [`docs/SECURITY.md`](SECURITY.md) — the estate-wide release-cooldown posture
 - [`docs/TOOLCHAIN_CVE_CHECK.md`](TOOLCHAIN_CVE_CHECK.md) — the sibling floor watcher
 - [`docs/CI_WATCH.md`](CI_WATCH.md) — the alert-design rules this hook follows
-- [`docs/reference/tmux_cheatsheet.md`](reference/tmux_cheatsheet.md) — the incumbent
+- [`archive/tmux/tmux_cheatsheet.md`](../archive/tmux/tmux_cheatsheet.md) — the incumbent
 - [`docs/HERDR_SIDEBAR.md`](HERDR_SIDEBAR.md) — the left sidebar, colours, naming, and
   what an outside program can change (events, metadata, plugins, a pane's background)
 

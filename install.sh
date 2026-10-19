@@ -112,7 +112,7 @@ NO_SUDO_SKIPPED=()
 SKIP_CLAUDE=false            # home/.claude, Claude hook registration, pj settings and pj checks
 SKIP_SSH=false               # home/.ssh
 SKIP_SYSTEM_PACKAGES=false   # the package-manager (apt/dnf/pacman/zypper/brew) tool installs
-SKIP_TMUX=false              # home/.tmux.conf, TPM
+SKIP_TMUX=false              # the tmux formula and TPM (.tmux.conf is archived in archive/tmux/ since 19 Oct 2026)
 SKIP_DOCKER=false            # home/.zsh_docker_functions, lazydocker
 SKIP_RUST=false              # rustup
 SKIP_YAZI=false              # yazi
@@ -5207,7 +5207,7 @@ show_help() {
     echo -e "  --skip-claude             home/.claude, Claude hook registration, pj settings and checks"
     echo -e "  --skip-ssh                home/.ssh"
     echo -e "  --skip-system-packages    apt/dnf/pacman/zypper/brew tool installs"
-    echo -e "  --skip-tmux               .tmux.conf, TPM"
+    echo -e "  --skip-tmux               tmux and TPM"
     echo -e "  --skip-docker             .zsh_docker_functions, lazydocker"
     echo -e "  --skip-rust --skip-yazi --skip-fonts --skip-git-hooks --skip-git-identity"
     echo -e "  --skip-nvm --skip-pnpm --skip-bun --skip-uv --skip-ccw --skip-herdr --skip-omz"

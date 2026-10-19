@@ -5,7 +5,7 @@ manifest_check = false
 channel = "stable"
 
 # =============================================================================
-#  Keybindings - ported from home/.tmux.conf
+#  Keybindings - ported from .tmux.conf (archived in the repo's archive/tmux/ since 19 Oct 2026)
 # =============================================================================
 # tmux is no longer launched (2026-07-29) but its config is kept on disk as a
 # retreat path. These bindings carry the muscle memory across.

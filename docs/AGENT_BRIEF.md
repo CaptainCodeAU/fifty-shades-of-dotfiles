@@ -23,7 +23,6 @@ Authoritative listing: `git ls-tree HEAD home/` from inside the repo. As of 2026
 | `home/.ssh/config`       | `~/.ssh/config`       | strict base; ends with `Include ~/.ssh/config.local`              |
 | `home/.gitconfig`        | `~/.gitconfig`        | public-safe; includes `~/.gitconfig.private` (not stowed)         |
 | `home/.gitignore_global` | `~/.gitignore_global` | global git ignore                                                 |
-| `home/.tmux.conf`        | `~/.tmux.conf`        | tmux + tilit                                                      |
 | `home/.vimrc`            | `~/.vimrc`            | minimal vim                                                       |
 | `home/.config/...`       | `~/.config/...`       | nested directory tree                                             |
 | `home/.local/...`        | `~/.local/...`        | scripts subsystem                                                 |

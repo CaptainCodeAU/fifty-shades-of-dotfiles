@@ -34,7 +34,6 @@ All files in `home/` are deployed directly to your home directory (`~/`).
 
 | File         | Purpose                           | Deployed To    |
 | ------------ | --------------------------------- | -------------- |
-| `.tmux.conf` | Tmux configuration                | `~/.tmux.conf` |
 | `.p10k.zsh`  | Powerlevel10k theme configuration | `~/.p10k.zsh`  |
 | `.vimrc`     | Lightweight Vim configuration     | `~/.vimrc`     |
 
@@ -373,7 +372,6 @@ Documentation and reference materials.
 | `comms/`                              | Dated outbound notes to peer agent projects (CONVENTION.md spec v1.15; read on-demand only — see `comms/README.md` for the index; contents are NOT enumerated here by design)                 |
 | `reference/colors.md`                 | Color palette reference                                                                                                                                                                       |
 | `reference/mermaid_examples.md`       | Mermaid diagram examples                                                                                                                                                                      |
-| `reference/tmux_cheatsheet.md`        | Tmux quick reference guide                                                                                                                                                                    |
 | `reference/pai_memory_system.md`      | How Claude remembers across conversations, projects and sessions — the memory and persistence mechanisms, written as a read-at-leisure explainer                                              |
 | `reference/windows/`                  | Historical Windows batch scripts (reference only, not for deployment)                                                                                                                         |
 
@@ -439,7 +437,6 @@ When deploying files, use this quick reference:
 | ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | `home/.zshrc`                                                           | `~/.zshrc`                                                                          |
 | `home/.zsh_*`                                                           | `~/.zsh_*`                                                                          |
-| `home/.tmux.conf`                                                       | `~/.tmux.conf`                                                                      |
 | `home/.p10k.zsh`                                                        | `~/.p10k.zsh`                                                                       |
 | `home/.config/direnv/direnv.toml`                                       | `~/.config/direnv/direnv.toml`                                                      |
 | `home/.config/direnv/direnvrc`                                          | `~/.config/direnv/direnvrc`                                                         |
