@@ -159,7 +159,7 @@
   "sandbox": {
     "enabled": true,
     "filesystem": {
-      "allowWrite": ["~/.claude/MEMORY", "~/.config/herdr/herdr.sock"],
+      "allowWrite": ["~/.config/herdr/herdr.sock"],
       "denyRead": [
         "~/.ssh",
         "~/Downloads",
