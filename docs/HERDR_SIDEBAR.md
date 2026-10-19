@@ -24,23 +24,66 @@ installed binary. File:line references are into that source. What Gavin chose is
 in `home/.config/herdr/config.toml`, each block with its reason; this doc holds the
 facts behind the choices and the options not taken.
 
-## What is set now (16 Oct)
+## What is set now (16 Oct, updated 19 Oct)
 
 - **Active pane border** gold `#ffd75f` (`ui.accent`); **inactive borders** a dim
   warm grey `#5c4a4a` (`theme.custom.overlay0`).
-- **Agents section:** line 1 the state mark, the workspace in bold white, then a
-  remote machine name in soft teal `#7fb0a8`; line 2 the session's pane title in
-  light sand `#b0a084` (the spaces section's branch colour), not bold, then the
-  tab in a dim periwinkle `#8186cf`; no gap between entries (Q38 (v2): 1, Q40,
-  Q41: 2, variation 5 of 6; swapped and recoloured 17 Oct, Q52 tried and undone,
-  Q53: 1, Q54: 1, then Q55 (v3): 1 after six colours tried live).
+- **Agents section, two lines a row since 19 Oct** (Gavin: "two lines acceptable"):
+  line 1 the state mark, the workspace in bold white, the tab in a dim periwinkle
+  `#8186cf`, a remote machine name in soft teal `#7fb0a8` (hidden when "Local"), then
+  the prompt-cache countdown (below); line 2 the state word, then the session name in
+  a dimmer sand `#8c8069` (Gavin, 19 Oct: "reduce their brightness"; it was
+  `#b0a084`). No gap between entries. The three-line form with the coloured bar line
+  is kept commented in `config.toml`, to go back to; the state-words plugin still
+  sets the `$bar_*` tokens it used (#3333). History: Q38 (v2): 1, Q40, Q41: 2,
+  variation 5 of 6; swapped and recoloured 17 Oct, Q52 tried and undone, Q53: 1,
+  Q54: 1, then Q55 (v3): 1 after six colours tried live; three lines 18 Oct (Q64,
+  Q65); two lines 19 Oct.
 - **No right-alignment:** a row's tokens are laid out left to right; herdr 0.9.3,
   0.9.5 and master (17 Oct) have no align setting, and a rule cannot pad (Q56: 4).
 - **Spaces section:** the space name in white; the branch in light sand `#b0a084`
   (Q42: 1).
-- **Selected row bar** `#33201f`, **navigate cursor** `#432a28`. Each is ONE setting
-  shared by the spaces and agents sections (`active_row_bg`, `selection_bg`), so the
-  two sections cannot have different bars.
+- **Selected row bar** a deep navy `#1a2233`, **navigate cursor** one step lighter
+  `#24304a` (Gavin, 19 Oct: the copper "does not work at all", the navy "better,
+  definitely"; until then `#33201f` and `#432a28`). Contrast on the navy: white
+  15.9, sand 6.2, periwinkle 4.7, the working and resting grey 3.6. Each is ONE
+  setting shared by the spaces and agents sections (`active_row_bg`,
+  `selection_bg`), so the two sections cannot have different bars.
+- **Panel background** `#170d0d`, Ghostty's own background (Gavin, 19 Oct). herdr
+  draws a menu's highlighted row on the gold in `panel_bg`; left at the terminal's
+  "reset" it used a mid grey (contrast 3.8), so "Rename pane" in the right-click menu
+  read as a header. Now near-black on the gold, 13.8, in every menu, the focused tab
+  and the settings screen. `panel_bg` also paints the tab bar, popups and herdr's own
+  background; whether Ghostty's 0.95 background opacity still shows through there
+  was not checked.
+
+## The cache countdown and the prompt palette (19 Oct)
+
+- **Cache countdown** (Gavin, dotfiles-main Q70: 1): line 1 of each agent row ends
+  with the minutes left before that session's prompt cache goes cold, "◷ 42m".
+  `herdr-cache-report` (home/.local/bin) reports it on the pane as one of three
+  tokens and clears the other two: `$cache_warm` cyan `#55ffff`, `$cache_low`
+  bright yellow `#ffff55` (the last fifth of the ttl: 12 min of 1 h, 1 min of 5 min,
+  5 min when the ttl is unknown) or `$cache_cold` red `#ff5555`, the status line's
+  own colours. The token expires 2 min after the last report, and goes when Claude
+  exits. The numbers come from Claude Code's own status-line input
+  (`.prompt_cache.expires_at`, `.warm`, `.ttl`), so two status lines feed it, each
+  about every 30 s: `~/.claude/statusline-command.sh` for plain sessions (dot-claude
+  repo), and engage's status line for engage sessions (engage 75c1dda, #3319, live
+  19 Oct: a test session's row read "◷ 51m" while its status line read "51:56
+  left"). Silent outside herdr. `herdr-cache-report --selftest`.
+- **Prompt palette** (Gavin, dotfiles-main Q69: 1): herdr's sidebar has exactly two
+  sections and no plugin can draw in it, so the "third section of words" is a popup.
+  `ctrl+Space` then `p`, or `ctrl+alt+p` in one press, or `cmd+option+p` in Ghostty
+  (Q72: 1; Ghostty sends herdr's `ctrl+alt+p`), opens `herdr-palette` at 75% wide and
+  70% tall over the focused pane. Its tabs come from `~/.config/herdr/palette.toml`
+  (Reply, Ask, Do, Commands), plus an "Answer" tab first when the session's last reply
+  ends on a 👉 line, one chip per option ("Q66: 3"). One click types a chip into that
+  pane's Claude prompt through `herdr-type` (which re-reads the screen before every
+  key and never approves a permission prompt); auto-submit adds Enter. The arrows,
+  Enter and 1 to 9 work too, and the title bar has clear, edit, auto-submit and close.
+  The palette's own words are still Gavin's to give (#3331), and its clear button
+  waits for a try on a real draft (#3330).
 
 ## State words (18 Oct, dotfiles-main Q60, Q61)
 
