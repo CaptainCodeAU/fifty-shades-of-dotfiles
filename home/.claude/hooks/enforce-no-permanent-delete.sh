@@ -1205,11 +1205,17 @@ _bundle_holds() { # $1 repo dir, $2 bundle path, $3.. tips (full shas)
   local dir="${1:-}" bun="${2:-}" tip h ok heads
   [ $# -ge 3 ] || return 1; shift 2 || set --
   [ -n "$dir" ] && [ -n "$bun" ] || return 1
-  case "$bun" in "~"/*) bun="$HOME/${bun#\~/}" ;; /*) ;; *) bun="$dir/$bun" ;; esac
-  [ -f "$bun" ] || return 1
+  case "$bun" in
+    "~"/*) bun="$HOME/${bun#\~/}" ;;
+    '$HOME'/*) bun="$HOME/${bun#\$HOME/}" ;;
+    '${HOME}'/*) bun="$HOME/${bun#\$\{HOME\}/}" ;;
+    /*) ;; *) bun="$dir/$bun" ;;
+  esac
+  BH_WHY="no bundle file at $bun"; [ -f "$bun" ] || return 1
+  BH_WHY="$bun does not verify as a git bundle for this repo"
   git -C "$dir" bundle verify "$bun" >/dev/null 2>&1 || return 1
   heads=$(git -C "$dir" bundle list-heads "$bun" 2>/dev/null | awk '$1 ~ /^[0-9a-f]+$/ {print $1}')
-  [ -n "$heads" ] || return 1
+  BH_WHY="$bun lists no heads"; [ -n "$heads" ] || return 1
   for tip in "$@"; do
     [[ $tip =~ ^[0-9a-f]{40}$ ]] || return 1
     ok=0
@@ -1217,9 +1223,9 @@ _bundle_holds() { # $1 repo dir, $2 bundle path, $3.. tips (full shas)
       if [ "$h" = "$tip" ]; then ok=1; break; fi
       if git -C "$dir" cat-file -e "$h^{commit}" 2>/dev/null && git -C "$dir" merge-base --is-ancestor "$tip" "$h" 2>/dev/null; then ok=1; break; fi
     done
-    [ "$ok" -eq 1 ] || return 1
+    BH_WHY="the bundle does not hold the tip ${tip:0:12}"; [ "$ok" -eq 1 ] || return 1
   done
-  return 0
+  BH_WHY=""; return 0
 }
 
 _git_cmd() {

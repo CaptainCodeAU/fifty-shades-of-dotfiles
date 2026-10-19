@@ -175,11 +175,17 @@ _bundle_holds() { # $1 repo dir, $2 bundle path, $3.. tips (full shas)
   local dir="${1:-}" bun="${2:-}" tip h ok heads
   [ $# -ge 3 ] || return 1; shift 2 || set --
   [ -n "$dir" ] && [ -n "$bun" ] || return 1
-  case "$bun" in "~"/*) bun="$HOME/${bun#\~/}" ;; /*) ;; *) bun="$dir/$bun" ;; esac
-  [ -f "$bun" ] || return 1
+  case "$bun" in
+    "~"/*) bun="$HOME/${bun#\~/}" ;;
+    '$HOME'/*) bun="$HOME/${bun#\$HOME/}" ;;
+    '${HOME}'/*) bun="$HOME/${bun#\$\{HOME\}/}" ;;
+    /*) ;; *) bun="$dir/$bun" ;;
+  esac
+  BH_WHY="no bundle file at $bun"; [ -f "$bun" ] || return 1
+  BH_WHY="$bun does not verify as a git bundle for this repo"
   git -C "$dir" bundle verify "$bun" >/dev/null 2>&1 || return 1
   heads=$(git -C "$dir" bundle list-heads "$bun" 2>/dev/null | awk '$1 ~ /^[0-9a-f]+$/ {print $1}')
-  [ -n "$heads" ] || return 1
+  BH_WHY="$bun lists no heads"; [ -n "$heads" ] || return 1
   for tip in "$@"; do
     [[ $tip =~ ^[0-9a-f]{40}$ ]] || return 1
     ok=0
@@ -187,9 +193,9 @@ _bundle_holds() { # $1 repo dir, $2 bundle path, $3.. tips (full shas)
       if [ "$h" = "$tip" ]; then ok=1; break; fi
       if git -C "$dir" cat-file -e "$h^{commit}" 2>/dev/null && git -C "$dir" merge-base --is-ancestor "$tip" "$h" 2>/dev/null; then ok=1; break; fi
     done
-    [ "$ok" -eq 1 ] || return 1
+    BH_WHY="the bundle does not hold the tip ${tip:0:12}"; [ "$ok" -eq 1 ] || return 1
   done
-  return 0
+  BH_WHY=""; return 0
 }
 
 # Q84: 1. rc 0 when the WHOLE command is one plain remote branch delete carrying the bundle:
@@ -202,6 +208,12 @@ _bundle_holds() { # $1 repo dir, $2 bundle path, $3.. tips (full shas)
 _remote_delete_bundled() { # $1 command, $2 cwd
   local cmd="$1" dir="${2:-}" bun remote="" i=0 b t
   local -a w=() br=() tips=()
+  # $HOME or ${HOME} at the start of the bundle path reads as ~/ (any other $ is still refused)
+  case "$cmd" in
+    'GIT_BRANCH_BUNDLE=$HOME/'*) cmd="GIT_BRANCH_BUNDLE=~/${cmd#GIT_BRANCH_BUNDLE=\$HOME/}" ;;
+    'GIT_BRANCH_BUNDLE=${HOME}/'*) cmd="GIT_BRANCH_BUNDLE=~/${cmd#GIT_BRANCH_BUNDLE=\$\{HOME\}/}" ;;
+  esac
+  RD_WHY="the command must be ONE plain git push delete, with no chain, quote or substitution"
   case "$cmd" in *[\;\&\|\`\$\(\)\<\>\"\'\\]*|*$'\n'*) return 1 ;; esac
   read -r -a w <<<"$cmd"
   [[ ${w[0]:-} == GIT_BRANCH_BUNDLE=?* ]] || return 1
@@ -227,10 +239,11 @@ _remote_delete_bundled() { # $1 command, $2 cwd
   [ "${#br[@]}" -gt 0 ] && [ -n "$dir" ] || return 1
   for b in "${br[@]}"; do
     t=$(perl -e 'alarm 15; exec @ARGV' git -C "$dir" ls-remote --exit-code "$remote" "refs/heads/$b" 2>/dev/null | awk 'NR == 1 {print $1}')
-    [ -n "$t" ] || return 1
+    RD_WHY="could not read refs/heads/$b on $remote (git ls-remote)"; [ -n "$t" ] || return 1
     tips[${#tips[@]}]="$t"
   done
-  _bundle_holds "$dir" "$bun" "${tips[@]}"
+  _bundle_holds "$dir" "$bun" "${tips[@]}" && return 0
+  RD_WHY="$BH_WHY"; return 1
 }
 
 # The three scanner rules (nested-Claude aliases, gpf!, brew install). Prints the
@@ -253,7 +266,8 @@ _guard() {
     DENY) r=${out#*$'\n'}; r="${r%%$'\n'*}"
       case "$r" in
         "Remote delete (W-20260929-A37): git push"*)
-          _remote_delete_bundled "$1" "${2:-}" && return 0
+          RD_WHY=""; _remote_delete_bundled "$1" "${2:-}" && return 0
+          case "$1" in *GIT_BRANCH_BUNDLE=*) r="$r. The bundle route did not pass: ${RD_WHY:-the command is not one of its forms}" ;; esac
           r="$r -- or save the branch first and prove it: git bundle create <file> <branch>, then GIT_BRANCH_BUNDLE=<file> git push <remote> --delete <branch> (the bundle must verify and hold the remote tip; Q84: 1)" ;;
       esac
       echo "$r" ;;
@@ -808,6 +822,10 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm deny  'Q84 chained after the delete'                     "GIT_BRANCH_BUNDLE=$FX/rd-topic.bundle git push origin --delete topic; true" '' "$RDL"
   conv_arm deny  'Q84 a missing bundle'                             "GIT_BRANCH_BUNDLE=$FX/rd-none.bundle git push origin --delete topic" '' "$RDL"
   conv_arm deny  'Q84 a force push is never covered'                "GIT_BRANCH_BUNDLE=$FX/rd-topic.bundle git push --force origin main" '' "$RDL"
+  # A bundle path written with $HOME or ${HOME}, as ~/ is (cc-warehouse-main's first try, 19 Oct):
+  HOME="$FX" conv_arm allow 'Q84 a bundle path written $HOME/...'   'GIT_BRANCH_BUNDLE=$HOME/rd-topic.bundle git push origin --delete topic' '' "$RDL"
+  HOME="$FX" conv_arm allow 'Q84 a bundle path written ${HOME}/...' 'GIT_BRANCH_BUNDLE=${HOME}/rd-topic.bundle git push origin --delete topic' '' "$RDL"
+  HOME="$FX" conv_arm deny  'Q84 any other $ in the command stays denied' 'GIT_BRANCH_BUNDLE=$HOME/rd-topic.bundle git push origin --delete $B' '' "$RDL"
 
   echo "$((_must_n + _st_n)) arms, $((_must_n + _st_n - fails - _st_fails)) passed, $((fails + _st_fails)) failed"
   [ $((fails + _st_fails)) -eq 0 ] && { echo "ALL ARMS PASS"; exit 0; } || { echo "$((fails + _st_fails)) ARM(S) FAILED"; exit 1; }
