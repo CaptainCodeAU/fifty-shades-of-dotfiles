@@ -46,3 +46,8 @@ Gavin, in his own box in session dotfiles-doer during its wrap-up: the lock cove
 auto-memory files at the top of `memory/`, not the open-items drawer in `memory/WORK/`. The
 morning's wording ("the memory folders") also denied the wrap-up's handoff write and drawer
 report moves. validate-bash rule E and the settings deny list (`memory/*`) now match that.
+
+Withdrawn 19 Oct 2026 (Gavin, dotfiles-main session 82e5d3f8; engage records #3114 withdrawn,
+#3397): the drawer in `memory/WORK/` retires in B6 part 5, so the lock covers all of `memory/`
+again, as the morning ruling said. The settings deny becomes `memory/**` and conv-shscan.awk
+drops its `memory/WORK` exemption in B6 part 5a.
