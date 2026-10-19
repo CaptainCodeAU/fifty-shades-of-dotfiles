@@ -5440,8 +5440,7 @@ _write_pj_machine_file() {
 # The exit code is applied once, at the end of the dispatch.
 PJ_PREREQS_OK=1
 _check_pj_prereqs() {
-    local dotclaude="$HOME/.claude" ok=1 required="$HOME/CODE/Scaffoldings/fifty-shades-of-dotfiles"
-    local p dead=""
+    local p
 
     step "pj framework prerequisites (report only)"
 
@@ -5471,45 +5470,11 @@ _check_pj_prereqs() {
         echo -e "  ${YELLOW}~${RESET} $pdir absent -- pj uses its built-in argv (supported); \`pj --profile\` and \`c2\` need it, so re-run stow"
     fi
 
-    # The three tracked symlinks: a dangling one is worse than an absent one, because the
-    # folder still looks right.
-    for p in pj/.claude-plugin/plugin.json pj/skills/wrap-up/SKILL.md pj/skills/health/SKILL.md; do
-        if [[ -e "$dotclaude/$p" ]]; then echo -e "  ${GREEN}✓${RESET} $p"
-        elif [[ -L "$dotclaude/$p" ]]; then dead="$dead $p"
-        else echo -e "  ${YELLOW}~${RESET} $dotclaude/$p absent (stow places it)"; fi
-    done
-    if [[ -n "$dead" ]]; then
-        ok=0
-        echo -e "  ${RED}✗${RESET} dangling symlink(s) in ~/.claude:${dead}"
-        echo -e "      ${DIM}dot-claude tracks these as symlinks into the dotfiles repo, so the repo MUST be at:${RESET}"
-        echo -e "      ${CYAN}${required}${RESET}"
-        [[ "$REPO_DIR" != "$required" ]] && echo -e "      ${DIM}this checkout is at ${REPO_DIR} -- move or symlink it there, then re-run ./install.sh${RESET}"
-    fi
-
-    if (( ok )); then
-        success "pj can launch on this machine."
-        PJ_PREREQS_OK=1
-    else
-        # W-20260921-A23, ruled 2026-09-21. The public installer NEVER clones the
-        # two private repos -- a human clones them first. But it must SAY SO
-        # unmistakably and it must not exit 0, or "installed fine" and "installed,
-        # and pj cannot start" look identical to anyone reading a terminal or a CI
-        # log. That is the same silent-failure shape as the SessionStart hooks
-        # that were stowed but unregistered: a missing thing fails toward silence.
-        PJ_PREREQS_OK=0
-        echo
-        echo -e "${RED}${BOLD}  ════════════════════════════════════════════════════════════${RESET}"
-        echo -e "${RED}${BOLD}   pj is not ready on this machine${RESET}"
-        echo -e "${RED}${BOLD}  ════════════════════════════════════════════════════════════${RESET}"
-        warn "Everything this installer owns is done. pj itself will NOT launch until the items marked ✗ above exist. They live in a PRIVATE repo this installer deliberately does not clone:"
-        echo -e "      ${CYAN}git clone <dot-claude>      ~/.claude${RESET}          ${DIM}(the plugin symlinks)${RESET}"
-        echo -e "      ${DIM}Clone dot-claude BEFORE running stow.${RESET}"
-        echo -e "      ${DIM}And keep this repo at ${required} -- the tracked symlinks point there.${RESET}"
-        echo
-        echo -e "      ${DIM}Then re-run ./install.sh. When it is present this block is replaced by${RESET}"
-        echo -e "      ${DIM}one green line, and ${RESET}${CYAN}pj-health${RESET}${DIM}'s pj-global row is the standing proof.${RESET}"
-        echo -e "${RED}${BOLD}  ════════════════════════════════════════════════════════════${RESET}"
-    fi
+    # B11 item 5 (wean-off-pj, Gavin's Q81, 19 Oct 2026): the pj plugin (~/.claude/pj) retired, so
+    # its three links are no longer checked, and with them went the only thing that could fail this
+    # report and its "pj is not ready" block. PJ_PREREQS_OK stays 1; _finish keeps its exit 3 path.
+    success "pj can launch on this machine."
+    PJ_PREREQS_OK=1
 
     # The zsh helper namespace check, if it is stowed. Read-only, and a real failure here
     # means a pj session's shell helpers collide with something else.

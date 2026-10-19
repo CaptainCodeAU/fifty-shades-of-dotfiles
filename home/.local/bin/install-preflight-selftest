@@ -355,10 +355,12 @@ else ok "B8: no line calls RULES.md, OPERATIONAL_RULES.md or pj-voice missing"; 
 # A DANGLING plugin symlink must name the one path the whole scheme depends on.
 ln -sfn /nowhere/plugin.json "$pj_scratch/.claude/pj/.claude-plugin/plugin.json"
 out_dead="$(pj_drive "$pj_scratch" /some/other/place)"
-if grep -q 'dangling symlink' <<<"$out_dead"; then ok "a dangling plugin symlink is reported as dangling, not absent"
-else bad "a dangling plugin symlink is reported as dangling, not absent" "$(grep -i plugin <<<"$out_dead" | head -2)"; fi
-if grep -q 'CODE/Scaffoldings/fifty-shades-of-dotfiles' <<<"$out_dead"; then ok "  and names the required repo path"
-else bad "  and names the required repo path" "$(grep -i dangl -A3 <<<"$out_dead")"; fi
+# B11 item 5 (19 Oct 2026): the pj plugin retired, so its links are no longer checked. Even a
+# dangling one passes and is not named; nothing is left that can fail this report.
+if grep -q 'PJ_PREREQS_OK=1' <<<"$out_dead" && ! grep -q -e 'dangling' -e 'claude-plugin' <<<"$out_dead"; then ok "B11: a dangling pj plugin link is not checked and does not fail (PJ_PREREQS_OK=1)"
+else bad "B11: a dangling pj plugin link is not checked and does not fail (PJ_PREREQS_OK=1)" "$(grep -e PJ_PREREQS_OK -e dangling -e claude-plugin <<<"$out_dead")"; fi
+if grep -q 'pj is not ready' <<<"$out_dead"; then bad "B11: no 'pj is not ready' block any more" "$(grep -n 'not ready' <<<"$out_dead")"
+else ok "B11: no 'pj is not ready' block any more"; fi
 # POSITIVE CONTROL. Without this, every arm above passes just as well when the function
 # is broken and reports everything as missing.
 mkdir -p "$pj_scratch/ok/.claude/pj-global/notes" "$pj_scratch/ok/.claude/pj-voice" \
@@ -383,19 +385,8 @@ else ok "CONTROL: a complete machine gets NO warning"; fi
 # human does that first. But "installed fine" and "installed, and pj cannot
 # start" must not be the same observation -- for a human reading a terminal, or
 # for anything reading $?.
-# Since B8 the block appears only for a dangling plugin symlink, so these arms read out_dead.
-if grep -q 'pj is not ready on this machine' <<<"$out_dead"; then ok "dangling link: the block is headed 'pj is not ready on this machine'"
-else bad "dangling link: the block is headed 'pj is not ready on this machine'" "$(head -4 <<<"$out_dead")"; fi
-if grep -q 'PJ_PREREQS_OK=0' <<<"$out_dead"; then ok "dangling link: PJ_PREREQS_OK=0"
-else bad "dangling link: PJ_PREREQS_OK=0" "$(grep PJ_PREREQS_OK <<<"$out_dead")"; fi
-if grep -q 'git clone' <<<"$out_dead"; then ok "dangling link: the block carries the clone commands"
-else bad "dangling link: the block carries the clone commands" "$(head -4 <<<"$out_dead")"; fi
-# LifeOS retired 16 Oct 2026 (engage #2092): OPERATIONAL_RULES.md is a pj-global file in dot-claude,
-# so the block names one private repo, never lifeos-private or a ~/.claude/LIFEOS/USER link.
-if grep -q -e 'lifeos-private' -e 'LIFEOS/USER' <<<"$out_dead"; then bad "dangling link: the block names dot-claude only, no LifeOS clone or link" "$(grep -e lifeos-private -e LIFEOS/USER <<<"$out_dead")"
-else ok "dangling link: the block names dot-claude only, no LifeOS clone or link"; fi
-if grep -q 're-run ./install.sh' <<<"$out_dead"; then ok "dangling link: it says what to do next"
-else bad "dangling link: it says what to do next" "$(head -4 <<<"$out_dead")"; fi
+# The 'pj is not ready' block retired with the pj plugin check (B11 item 5); _finish's
+# exit 3 path stays, proven directly below.
 # CONTROL, the other half: a complete machine must NOT print the block and must
 # set the flag to 1. Without this pair, "the block appears" is equally true of a
 # function that prints it unconditionally.

@@ -575,7 +575,8 @@ mv "$PROJ/.claude/settings.json" "$T/ps.bak"; run; arm "hook-single-fire NOT MEA
 echo '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/local.sh"}]}]}}' >"$PROJ/.claude/settings.json"
 
 # 10. stow links
-gone "$BIN/pj-wrap"; run; arm "stow-links FAIL on an absent tool link" is stow-links FAIL; arm "stow-links names it" has stow-links "pj-wrap(absent)"; ln -s "$DF/home/.local/bin/pj-wrap" "$BIN/pj-wrap"
+# pj-id, not pj-wrap: pj-wrap retired in wean B11 item 5 and pj-health no longer checks it.
+gone "$BIN/pj-id"; run; arm "stow-links FAIL on an absent tool link" is stow-links FAIL; arm "stow-links names it" has stow-links "pj-id(absent)"; ln -s "$DF/home/.local/bin/pj-id" "$BIN/pj-id"
 gone "$BIN/pj-id"; echo x >"$BIN/pj-id"; chmod +x "$BIN/pj-id"; run; arm "stow-links FAIL on a real file where a link belongs" has stow-links "pj-id(real file)"; gone "$BIN/pj-id"; ln -s "$DF/home/.local/bin/pj-id" "$BIN/pj-id"
 gone "$H/hooks/validate-bash.sh"; ln -s "$T/nowhere" "$H/hooks/validate-bash.sh"; run; arm "stow-links FAIL on a dangling hook link" has stow-links "hooks/validate-bash.sh"; gone "$H/hooks/validate-bash.sh"; ln -s "$DF/home/.claude/hooks/validate-bash.sh" "$H/hooks/validate-bash.sh"
 run; arm "stow-links PASS restored" is stow-links PASS
@@ -705,8 +706,8 @@ run; arm "CONTROL: owed and bare-wrap back to folder-not-created" has owed "fold
 # 14. selftests
 gone "$BIN/decided-selftest"; run; arm "selftests FAIL when one is missing" is selftests FAIL; arm "selftests names it" has selftests "decided-selftest"; ln -s "$DF/home/.local/bin/decided-selftest" "$BIN/decided-selftest"
 run "$PROJ" --full; arm "--full runs them all PASS" is selftests PASS; arm "--full quotes a pass count" has selftests "7 passed, 0 failed"; arm "--full quotes the hook selftests" has selftests "validate-bash.sh: ALL ARMS PASS"
-fake "$DF/home/.local/bin/pj-wrap-selftest" 'echo "3 passed, 1 failed"; exit 1'; run "$PROJ" --full; arm "--full FAIL when one selftest fails" is selftests FAIL; arm "--full names the failing one" has selftests "pj-wrap-selftest (rc 1"
-fake "$DF/home/.local/bin/pj-wrap-selftest" 'echo "7 passed, 0 failed"; exit 0'
+fake "$DF/home/.local/bin/open-items-selftest" 'echo "3 passed, 1 failed"; exit 1'; run "$PROJ" --full; arm "--full FAIL when one selftest fails" is selftests FAIL; arm "--full names the failing one" has selftests "open-items-selftest (rc 1"
+fake "$DF/home/.local/bin/open-items-selftest" 'echo "7 passed, 0 failed"; exit 0'
 
 # M10b bin-strays (P8b, 2026-09-21). WARN, never FAIL.
 # The baseline fixture's $BIN holds only stow links, so the PASS arm above already
