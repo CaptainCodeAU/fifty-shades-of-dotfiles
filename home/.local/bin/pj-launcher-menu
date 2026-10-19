@@ -35,8 +35,8 @@ MENU_TEXT() {
 
   `c` is a signpost now, not a launcher. Nothing was started. Pick one:
 
-    engage                THIS PROJECT, with the framework on: start card, open items,
-                          rulings, /pj:wrap-up. This is the one you want almost always.
+    engage                THIS PROJECT, with the framework on: handoff, to-dos,
+                          rulings, /session-end. This is the one you want almost always.
 
 EOF
 }
@@ -64,6 +64,11 @@ selftest() {
   #     its alias removed, every LifeOS file kept for his own review. The menu must not
   #     send anyone to a command that no longer exists.
   case "$out" in *'lifeos'*) bad "2d still names the retired lifeos" "$out";; *) ok "2d does not name the retired lifeos";; esac
+  # 2e. the engage line names what an engage session gives today (R7, wean-off-pj B13b
+  #     part 4): the handoff, to-dos, rulings and /session-end. /pj:wrap-up went with the
+  #     pj plugin (B11); the handoff and to-dos stand in for the start card and open items.
+  case "$out" in *'handoff, to-dos,'*'rulings, /session-end.'*) ok "2e names handoff, to-dos, rulings, /session-end";; *) bad "2e the engage line is out of date" "$out";; esac
+  case "$out" in *'/pj:wrap-up'*|*'open items'*|*'start card'*) bad "2e still names /pj:wrap-up, open items or the start card" "$out";; *) ok "2e names no /pj:wrap-up, open items or start card";; esac
   # 2c. c2 is retired (option 1 step 11, 4 Oct 2026): the menu must not send anyone to it.
   case "$out" in *'c2 '*) bad "2c still names the retired c2" "$out";; *) ok "2c does not name the retired c2";; esac
   # 2a. pj is no longer offered as a route (option 1, 4 Oct 2026): engage is the launcher.
