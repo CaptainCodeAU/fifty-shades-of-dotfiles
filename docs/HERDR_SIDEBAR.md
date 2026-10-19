@@ -36,7 +36,9 @@ facts behind the choices and the options not taken.
   tad dimmer (`#8c8069` became `#736955`), then the state word, with no shape before it
   (`thinking`, `your turn`, `resting`, `needs you`). The seen `your turn` ends in a zero-width
   space (U+200B; herdr keeps it, read back 19 Oct) so a rule can colour it alone, as the square
-  corner did before. The cache timer reads `◷ 42 m` and has six bands by the minutes shown:
+  corner did before. The cache timer reads `— 42` (since 20 Oct, 12:15 AM: an em-dash in place
+  of the clock, no unit, every band bold; it read `◷ 42 m` from 11:55 PM) and has six bands by the
+  minutes shown:
   50 or more green `#5fd75f`, 40s mint `#9ef0c8`, 30s aqua `#3fe0e8`, 20s orchid `#da70d6`, 10s
   tangerine `#ff9a3c`, under 10 crimson `#e8264a` in bold. Gavin asked for a blink under 10:
   `herdr config check` refuses `blink = true` exactly as it refuses an unknown key, so it is bold

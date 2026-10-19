@@ -1,6 +1,6 @@
 #!/bin/bash
 # herdr-cache-report -- put a Claude session's prompt-cache countdown on its row
-# in herdr's agents list ("◷ 42 m"), from inside the session's status line.
+# in herdr's agents list ("— 42", the minutes left), from inside the session's status line.
 #
 #   herdr-cache-report --warm true|false --expires EPOCH [--ttl SECONDS]
 #   herdr-cache-report --selftest
@@ -14,15 +14,16 @@
 #
 # It reports one of seven tokens on $HERDR_PANE_ID, clearing the other six. The
 # band is the minutes shown (Gavin, 19 Oct, 11:55 PM: six colours, one per ten
-# minutes, and a space between the number and the m):
-#   $cache_m50   "◷ 55 m"    50 minutes or more   green
-#   $cache_m40   "◷ 45 m"    40 to 49             mint
-#   $cache_m30   "◷ 35 m"    30 to 39             aqua
-#   $cache_m20   "◷ 25 m"    20 to 29             orchid
-#   $cache_m10   "◷ 15 m"    10 to 19             tangerine
-#   $cache_m0    "◷ 9 m"     under 10             crimson (he asked for a blink too;
+# minutes; 20 Oct, 12:15 AM: an em-dash in place of the clock, no unit, the number
+# in bold, which config.toml does):
+#   $cache_m50   "— 55"      50 minutes or more   green (past an hour: "— 66")
+#   $cache_m40   "— 45"      40 to 49             mint
+#   $cache_m30   "— 35"      30 to 39             aqua
+#   $cache_m20   "— 25"      20 to 29             orchid
+#   $cache_m10   "— 15"      10 to 19             tangerine
+#   $cache_m0    "— 9"       under 10             crimson (he asked for a blink too;
 #                                                 herdr refuses blink in config.toml)
-#   $cache_cold  "◷ cold"    expired, or Claude Code says it is not warm
+#   $cache_cold  "— cold"    expired, or Claude Code says it is not warm
 # Their colours are in herdr's config.toml, [ui.sidebar.agents], line 1. --ttl is
 # still read, and no longer changes the band.
 # --ttl-ms drops the token 2 minutes after the last report, so a pane whose
@@ -35,11 +36,10 @@ set -u
 
 SOURCE="dotfiles-statusline-cache"
 
-minutes_left() { # epoch -> "42 m", or "1 h 05 m" past an hour
+minutes_left() { # epoch -> whole minutes left, "42" (and "66" past an hour)
     local d=$(($1 - $(date +%s)))
     [ "$d" -lt 0 ] && d=0
-    if [ "$d" -ge 3600 ]; then printf '%d h %02d m' $((d / 3600)) $((d % 3600 / 60))
-    else printf '%d m' $((d / 60)); fi
+    printf '%d' $((d / 60))
 }
 
 BANDS="m50 m40 m30 m20 m10 m0 cold"
@@ -68,21 +68,21 @@ if [ "${1:-}" = "--selftest" ]; then
     check() { if printf '%s' "$2" | grep -qF -- "$3"; then g=yes; else g=no; fi
               if [ "$g" = "$4" ]; then pass=$((pass + 1)); else fail=$((fail + 1)); echo "FAIL $1: '$3' present=$g, wanted $4"; fi; }
     run --warm true --expires $((now + 1830)) --ttl 3600; a=$(got)
-    check "30 min left: the 30s band, a space before the m" "$a" "--token cache_m30=◷ 30 m" yes
+    check "30 min left: the 30s band, an em-dash, no unit" "$a" "--token cache_m30=— 30 " yes
     check "the other six bands cleared" "$a" "--clear-token cache_m50 --clear-token cache_m40 --clear-token cache_m20 --clear-token cache_m10 --clear-token cache_m0 --clear-token cache_cold" yes
     check "pane, source, agent, expiry" "$a" "pane report-metadata wT:p1 --source $SOURCE --agent claude --ttl-ms 120000" yes
     for c in "3590 m50 59" "3030 m50 50" "2990 m40 49" "2430 m40 40" "2390 m30 39" "1790 m20 29" "1230 m20 20" "1190 m10 19" "630 m10 10" "590 m0 9" "30 m0 0"; do
         set -- $c; run --warm true --expires $((now + $1)) --ttl 3600; a=$(got)
-        check "$3 min shown: band $2" "$a" "--token cache_$2=◷ $3 m" yes
+        check "$3 min shown: band $2" "$a" "--token cache_$2=— $3 " yes
     done
     run --warm true --expires $((now + 4000)) --ttl 7200; a=$(got)
-    check "past an hour: 1 h 06 m, green" "$a" "--token cache_m50=◷ 1 h 06 m" yes
+    check "past an hour: 66, green" "$a" "--token cache_m50=— 66 " yes
     run --warm true --expires $((now + 215)) --ttl 300; a=$(got)
-    check "5 m ttl, 3 min left: the under-10 band" "$a" "--token cache_m0=◷ 3 m" yes
+    check "5 m ttl, 3 min left: the under-10 band" "$a" "--token cache_m0=— 3 " yes
     run --warm false --expires $((now + 1830)) --ttl 3600; a=$(got)
-    check "not warm: cold" "$a" "--token cache_cold=◷ cold" yes
+    check "not warm: cold" "$a" "--token cache_cold=— cold" yes
     run --warm true --expires $((now - 5)) --ttl 3600; a=$(got)
-    check "expired: cold" "$a" "--token cache_cold=◷ cold" yes
+    check "expired: cold" "$a" "--token cache_cold=— cold" yes
     sleep 0.3; command mv "$fx/args" "$fx/args.late" 2>/dev/null
     env -u HERDR_ENV HERDR_PANE_ID=wT:p1 PATH="$fx/bin:$PATH" "$0" --warm true --expires $((now + 900)); sleep 0.3
     check "outside herdr: nothing sent" "$([ -e "$fx/args" ] && echo sent || echo none)" "none" yes
@@ -114,7 +114,7 @@ case "$ttl" in ''|*[!0-9]*) ttl=0 ;; esac
 command -v herdr >/dev/null 2>&1 || exit 0
 
 b=$(bucket "$warm" "$expires")
-if [ "$b" = cold ]; then value="◷ cold"; else value="◷ $(minutes_left "$expires")"; fi
+if [ "$b" = cold ]; then value="— cold"; else value="— $(minutes_left "$expires")"; fi
 clear=()
 for other in $BANDS; do [ "$other" = "$b" ] || clear+=(--clear-token "cache_$other"); done
 # The three tokens before 19 Oct; cleared too, so no pane keeps an old one.
