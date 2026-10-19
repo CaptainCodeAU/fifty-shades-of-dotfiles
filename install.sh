@@ -4111,6 +4111,18 @@ BLOCK
         || warn "could not write ~/.zshenv"
 }
 
+# launchd is per ACCOUNT, not per HOME: gui/<uid> is the same domain whatever HOME says. So
+# a run with HOME pointed somewhere else (a test, a fake home) must never touch this account's
+# launchd jobs. Found 19 Oct 2026: a fake-home `HOME=<temp> ./install.sh --stow-only` booted
+# out the real dotlinks-watch job and bootstrapped one from the temp home, whose files then
+# went to the Trash; the restarted watcher alarmed at once. True when HOME is this account's
+# home from the user database (getpwnam, through the shell's ~user), both sides resolved.
+_home_is_this_account() {
+    local real
+    real=$(eval "printf '%s' ~$(id -un)" 2>/dev/null) || return 1
+    [[ -n "$real" && "$(cd "$HOME" 2>/dev/null && pwd -P)" == "$(cd "$real" 2>/dev/null && pwd -P)" ]]
+}
+
 # Run dotlinks-watch as a launchd agent (macOS), from a REAL-FILE copy beside the
 # manifest -- never through the ~/.local/bin link, which the very outage it
 # reports would remove. The plist is a real file too. Reloaded only when either
@@ -4142,6 +4154,10 @@ _install_links_watch() {
 PLIST
     cmp -s "$tmp" "$plist" 2>/dev/null || changed=1
     mv -f "$tmp" "$plist"   # identical bytes when unchanged; never a delete
+    if ! _home_is_this_account; then
+        warn "dotlinks-watch: HOME ($HOME) is not this account's home, so the launchd agent was left alone (launchd is per account, not per HOME)."
+        return 0
+    fi
     uid=$(id -u)
     if (( changed )) || ! launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
         launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
@@ -4921,7 +4937,7 @@ uninstall() {
             local lm="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/links/current.tsv"
             local wl="$HOME/Library/LaunchAgents/com.captaincodeau.dotlinks-watch.plist"
             [[ -f "$lm" ]] && run_cmd mv -f "$lm" "${lm%.tsv}.retired-$(date +%Y%m%d-%H%M%S).tsv"
-            if [[ -f "$wl" ]]; then
+            if [[ -f "$wl" ]] && _home_is_this_account; then
                 run_cmd launchctl bootout "gui/$(id -u)/com.captaincodeau.dotlinks-watch" 2>/dev/null || true
                 run_cmd mv -f "$wl" "$wl.retired-$(date +%Y%m%d-%H%M%S)"
             fi

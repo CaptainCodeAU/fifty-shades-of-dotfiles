@@ -436,6 +436,37 @@ else bad "B8 CONTROL: _claude_hooks_sync install is still called" "not found"; f
 if grep -qE '^[[:space:]]+_claude_hooks_sync check \|\| parity=1$' <<<"$b8_code"; then ok "B8 CONTROL: the parity check still runs the hook sync"
 else bad "B8 CONTROL: the parity check still runs the hook sync" "not found"; fi
 
+# --- launchd is per account, not per HOME (19 Oct 2026) ------------------------------
+# A fake-home `HOME=<temp> ./install.sh --stow-only` booted out the REAL dotlinks-watch job
+# and bootstrapped one from the temp home, whose files then went to the Trash. Driven with a
+# stand-in launchctl that only records its arguments: a HOME that is not this account's home
+# makes NO launchctl call; the CONTROL, the same run told the home is real, makes them.
+lw_drive() {   # lw_drive <real|fake> : print the stand-in launchctl's log
+    local H="$WORK/lw-$1"; mkdir -p "$H/bin" "$H/home/.local/state/dotfiles/links" "$H/repo/home/.local/bin"
+    printf '#!/bin/sh\necho "launchctl $*" >> "%s/calls"\nexit 0\n' "$H" > "$H/bin/launchctl"; chmod +x "$H/bin/launchctl"
+    printf '#!/bin/sh\n' > "$H/repo/home/.local/bin/dotlinks-watch"
+    : > "$H/calls"
+    HOME="$H/home" PATH="$H/bin:$PATH" bash -c '
+        REPO_DIR="$2"; GREEN=""; RED=""; YELLOW=""; RESET=""; DIM=""; CYAN=""; BOLD=""
+        info(){ :; }; success(){ :; }; warn(){ echo "WARN $*"; }; verbose(){ :; }; check_os(){ echo macos; }
+        pretty_path(){ echo "$1"; }
+        source <(sed -n "/^_home_is_this_account() {/,/^}/p;/^_install_links_watch() {/,/^}/p" "$1")
+        [[ "$3" == real ]] && _home_is_this_account(){ return 0; }
+        _install_links_watch "$HOME/.local/state/dotfiles/links"' _ "$INSTALL_SH" "$H/repo" "$1" >/dev/null 2>&1
+    cat "$H/calls"
+}
+if grep -q '^_home_is_this_account() {' "$INSTALL_SH"; then ok "launchd guard: _home_is_this_account is defined"
+else bad "launchd guard: _home_is_this_account is defined" "not found"; fi
+lw_fake="$(lw_drive fake)"
+if [[ -z "$lw_fake" ]]; then ok "launchd guard: a fake HOME makes no launchctl call"
+else bad "launchd guard: a fake HOME makes no launchctl call" "$(head -2 <<<"$lw_fake")"; fi
+lw_real="$(lw_drive real)"
+if grep -q 'launchctl bootstrap' <<<"$lw_real"; then ok "launchd guard CONTROL: told the home is real, it bootstraps the agent"
+else bad "launchd guard CONTROL: told the home is real, it bootstraps the agent" "calls: ${lw_real:-none}"; fi
+uninst="$(code_of "$(sed -n '/^uninstall() {/,/^}/p' "$INSTALL_SH")")"
+if grep -q 'launchctl bootout' <<<"$uninst" && grep -q '_home_is_this_account' <<<"$uninst"; then ok "launchd guard: uninstall's bootout is guarded too"
+else bad "launchd guard: uninstall's bootout is guarded too" "$(grep -n -e 'launchctl bootout' -e _home_is_this_account <<<"$uninst" | head -2)"; fi
+
 # --- setup_pnpm_audit_hooks: ~/.gitconfig.private may spell our hooks dir with a `~/`
 # (W-20261006-A32). Our dir by any spelling is "already active"; a foreign dir still
 # warns and an unset key still prompts, so the fix cannot pass by silencing everything.
