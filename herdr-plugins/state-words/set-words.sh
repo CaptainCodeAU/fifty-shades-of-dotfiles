@@ -66,19 +66,20 @@ TOKEN_SOURCE="dotfiles-state-words-box"
 # thingy"); the session name now comes first on line 2, so nothing hangs under the project.
 # 20 Oct, 12:28 AM (Gavin): "thinking" is the 💭 emoji instead of the word.
 WORKING_WORD="💭"
-# 20 Oct, 12:20 AM (Gavin): "your turn" became the 🫵 emoji; 12:25 AM, 👉 instead.
-DONE_WORD="👉"
+# 20 Oct, 12:20 AM (Gavin): "your turn" became the 🫵 emoji, at 12:25 AM 👉, and at 12:48 AM the
+# words again ("change this 👉 back to your turn").
+DONE_WORD="your turn"
 # Seen "your turn" (idle) ends in a zero-width space (U+200B), so config.toml can colour it on
 # its own: herdr trims labels and drops control characters, and the icon and word share one
 # state colour, so an invisible difference is the only way to give the seen word a softer
 # colour than its icon (Gavin, 19 Oct). Until 11:55 PM 19 Oct a square corner did this job.
 # herdr keeps U+200B: reported and read back with pane get, 19 Oct.
-IDLE_WORD=$(printf '\360\237\221\211\342\200\213')
+IDLE_WORD=$(printf 'your turn\342\200\213')
 BLOCKED_WORD="needs you"
 # 20 Oct, 12:35 AM (Gavin): "resting" is the 💤 emoji instead of the word.
 RESTING_WORD="💤"
 # Every idle word this script uses or has used; a pane holding one is ours.
-OUR_IDLE_WORDS="your turn|╰ your turn|└ your turn|╰ resting|$(printf 'your turn\342\200\213')|$(printf '\360\237\253\265\342\200\213')|$IDLE_WORD|resting|💤"
+OUR_IDLE_WORDS="your turn|╰ your turn|└ your turn|╰ resting|$(printf '\360\237\253\265\342\200\213')|$(printf '\360\237\221\211\342\200\213')|$IDLE_WORD|resting|💤"
 BAR="│"
 # resting is not a herdr state: it is idle or done with no 👉 in the last reply.
 STATES="working done idle blocked unknown resting"
