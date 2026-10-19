@@ -270,7 +270,7 @@ means starting real agents in a live session, so this is upstream's account plus
 our own script's behaviour, not a fresh measurement.
 
 Fix -- wait for the prompt, then retry with backoff. (The example uses `codex`: since 2026-09-24 a
-Claude worker starts only through `pj-worker start`, which does this handshake itself, and the
+Claude worker starts only through `engage-worker start`, which does this handshake itself, and the
 pane guard and `enforce-pj-workers.sh` refuse `--kind claude`; ruling D-20260924-A05.)
 
 ```bash

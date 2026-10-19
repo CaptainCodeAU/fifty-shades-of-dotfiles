@@ -506,7 +506,7 @@ status` and decide. It is executable code in real files under `~/.claude`, not
 stow symlinks, so a restow does not restore them. The section further down,
 "It installs hooks into your agent CLIs", has the full account.
 
-(Since 2026-09-24 a Claude worker starts only through `pj-worker start`, and the plain
+(Since 2026-09-24 a Claude worker starts only through `engage-worker start`, and the plain
 `--kind claude` route below is refused in herdr panes; D-20260924-A05. Kept as history.)
 
 **And the herdr spawn path does NOT run our credential wrapper.** Measured

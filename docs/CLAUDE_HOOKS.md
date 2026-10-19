@@ -545,7 +545,7 @@ Added 2026-09-24 for W-20260924-A59, on rulings D-20260924-A04 (layered) and A05
 (pj-worker, a pane guard, and this hook). On 2026-09-24 four workers started with
 `herdr agent start --kind claude` ran as plain `claude`: no pj system prompt, no
 project hooks, no Mods flag. A conductor starts a Claude worker ONLY with
-`pj-worker start`, and a clean-room worker with `pj-worker start --cleanroom`.
+`engage-worker start`, and a clean-room worker with `engage-worker start --cleanroom`.
 Registered on `PreToolUse`, matcher `Bash`, for **both** targets, because a
 conductor launched as `cb` or `lifeos` loads only the user target. Deny only.
 
@@ -564,7 +564,6 @@ started it. redteam-3 H1 measured the routes, with a decoy `claude()` in a pane:
 | any of the above inside `$(...)`, backticks, a function body, `bash -c`, `eval`, `ssh host` | yes, denied                                                              |
 | `send-text P "cla"`, then `send-text P "ude"` in a SECOND Bash call                         | **no**: each call alone is harmless text                                 |
 | a script or `python3` talking to herdr's socket (`agent.start`)                             | **no**: the text is `zsh x.sh`                                           |
-| `herdr-quick-task`                                                                          | no, and it does not need to: it routes kind `claude` through `pj-worker` |
 | the Monitor tool                                                                            | **no**: no Bash hook runs there at all (W-20260924-A71)                  |
 | a claude binary behind a variable (`pane run P "$CMD"`)                                     | **no**: the text is not known until it runs                              |
 
@@ -578,14 +577,14 @@ COMMAND WORD is `claude` (bare, by path, or `~/.local/share/claude/versions/X`),
 or a `.zshrc` launcher: `cb cr ci cpr cd_ cskip ct lifeos claude-clean`, or
 `__claude_launch claude`.
 
-**What it allows.** `pj` (the Mods probe launches too), `pj-worker`,
-`herdr-quick-task`, other kinds, `herdr agent start --help`, claude's info forms in
+**What it allows.** `pj` (the Mods probe launches too), `engage-worker`,
+other kinds, `herdr agent start --help`, claude's info forms in
 a pane (`--version`, `--help`, `agents`, `mcp`, `doctor`, `plugin`, `update`, ...),
 `claude` as an argument (`alias claude`, `which claude`), and prose: quotes,
 heredoc bodies, commit messages.
 
 **One named override** (redteam-3 H6). A proof whose control needs a plain worker
-prefixes the herdr command with `PJ_WORKERS_CONTROL=<W-YYYYMMDD-XNN>`. It is
+prefixes a herdr command with `PJ_WORKERS_CONTROL=<W-YYYYMMDD-XNN>`, or a plain `command claude` from the Bash tool with `PJ_WORKERS_CONTROL=<engage record id>` (3401 or #3401). It is
 allowed with no permission decision (the normal permission check still runs),
 logged as `CONTROL` to `hooks-security.log`, and named back in the hook's reply
 and a `systemMessage`. A malformed id, or the prefix on a different command,
@@ -598,14 +597,13 @@ launch verb it denies by name, in pure bash. Every deny is
 could not swallow it (a selftest arm runs the wrapper). A missing scanner falls back
 to a crude word match. The script not being there is covered by the registration
 since A76 (2026-09-25): a missing guard denies every Bash call by name; under the old
-wrapper it allowed everything. `pj-health`'s `pj-workers-hook` row
-checks that it is stowed and registered in both settings files.
+wrapper it allowed everything.
 
 The rule lives in `conv-shscan.awk` as the deny-only mode `pjw`, which records
 commands inside `$(...)` the way `guard` does and re-scans the nested strings.
 
 ```sh
-~/.claude/hooks/enforce-pj-workers.sh --selftest   # 80 arms; DENY and ALLOW arms are real transcript commands
+~/.claude/hooks/enforce-pj-workers.sh --selftest   # 116 arms; DENY and ALLOW arms are real transcript commands
 ```
 
 Measured 2026-09-24 against every distinct Bash command in this machine's
