@@ -90,7 +90,7 @@ Makefile), strips `--` (which `trash` mistakes for a filename), and ignores rm-s
 else in `~/.local/bin`. On 2026-10-05 a failed restow removed every link for 6.5 minutes. In that
 window, a script's or a fresh terminal's `rm` fell through to `/bin/rm`, a PERMANENT delete. That
 included the terminal Gavin used to repair it (measured by the outage investigation; record in
-the drawer `WORK/outage-2026-10-05/`).
+the dotfiles companion's byte copy of the old drawer, `~/CODE/Scaffoldings/fifty-shades-of-dotfiles-isolinear/workbench/pj-drawer/pj-memory/WORK/outage-2026-10-05/`).
 
 What now covers that window:
 
@@ -602,7 +602,7 @@ so it covers both; a measurement taken in an agent shell measures `bfs` unless i
 ## Agent shells never wait on a prompt, and a failed rm stops a reset
 
 Ruled by Gavin 2026-09-24 (W-20260924-A32, Stage 1). Research and red-team reports:
-the project drawer, `WORK/agent-shell-prompts/reports/` (cp-hang: why it hangs; bak-redteam: why
+the byte copy of the old drawer, `~/CODE/Scaffoldings/fifty-shades-of-dotfiles-isolinear/workbench/pj-drawer/pj-memory/WORK/agent-shell-prompts/reports/` (cp-hang: why it hangs; bak-redteam: why
 automatic backups were NOT built).
 
 **The hang.** A Claude Code Bash call gets stdin `/dev/null`, unless the call contains a `<`

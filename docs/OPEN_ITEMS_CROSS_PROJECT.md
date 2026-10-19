@@ -130,7 +130,7 @@ Rejected: no inbox, flag the item where filed (it sits in the wrong list); one i
 ### 7. Who owns a file, and routing by that owner (D-20260924-A12, W-20260924-A53)
 
 Ruled by Gavin 2026-09-24, four questions answered in one pass, all four recommendations taken.
-Evidence: drawer:agent-shell-prompts/reports/switcher-audit/2-ownership.md (investigator 2).
+Evidence: `~/CODE/Scaffoldings/fifty-shades-of-dotfiles-isolinear/workbench/pj-drawer/pj-memory/WORK/agent-shell-prompts/reports/switcher-audit/2-ownership.md` (investigator 2).
 
 **7a. An item about a file belongs to the repo that holds the file's REAL path.** A stow link
 under `~/.claude` or `~/.local/bin` resolves to the dotfiles repo, so an item about

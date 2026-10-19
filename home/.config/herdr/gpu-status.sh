@@ -58,7 +58,7 @@
 # needs no passphrase. The main mlbox key has one and is never used here;
 # IdentityAgent=none keeps the agent's keys out. The query is still sent so a
 # test against an unrestricted host works too. Setup and restart notes:
-# the project drawer, gpu-readout/HERDR.private.md (private dot-claude repo, never this one).
+# the dotfiles companion (private), workbench/pj-drawer/pj-memory/WORK/gpu-readout/HERDR.private.md.
 #
 # GPU_STATUS_HOST and GPU_STATUS_BACKOFF_FILE exist for testing each arm by
 # hand; herdr sets neither.

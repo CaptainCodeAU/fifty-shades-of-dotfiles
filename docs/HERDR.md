@@ -1266,7 +1266,7 @@ the earlier contents. A borrow-and-restore version (no copy on drag; the speak
 key copies the highlight, reads it, restores the old clipboard, then speaks)
 was built on 2026-10-02 and reverted on 2026-10-03 at Gavin's choice.
 `git revert d11b782` brings it back; its measurements and the untested real
-arm are in the project drawer at `WORK/speak-selection/20261002/REPORT.md`.
+arm are in the byte copy of the old drawer, `~/CODE/Scaffoldings/fifty-shades-of-dotfiles-isolinear/workbench/pj-drawer/pj-memory/WORK/speak-selection/20261002/REPORT.md`.
 
 The no-config alternative is to hold **option while dragging**, producing a
 native terminal selection the real accessibility hotkey can read. Fine

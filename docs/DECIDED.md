@@ -115,7 +115,7 @@ counts. Hits, ID lookups, `--list` and `--homes` are unchanged, byte for byte.
 Matching stays case-insensitive SUBSTRING. Measured 2026-09-25 over the 85 blocks in this
 project's default scope and 140 distinct `decided <words>` queries harvested from every
 transcript on the machine (A48 brief E; scripts and output in the drawer at
-`WORK/census-compare/reports/a48-build/decidede/measure/`):
+`~/CODE/Scaffoldings/fifty-shades-of-dotfiles-isolinear/workbench/pj-drawer/pj-memory/WORK/census-compare/reports/a48-build/decidede/measure/`):
 
 | Rule                                          | Queries whose hits change (of 140) | What it loses                                                                                                                      |
 | --------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |

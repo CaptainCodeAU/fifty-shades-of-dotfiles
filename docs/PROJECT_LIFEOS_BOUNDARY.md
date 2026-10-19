@@ -1,5 +1,10 @@
 # Project / LifeOS boundary for this repo
 
+**History:** the drawer this describes is being retired (wean-off-pj step B6, 19 Oct 2026);
+this project's to-dos, rulings and handoff are engage records now. The drawer's content is in
+the dotfiles companion's byte copy,
+`~/CODE/Scaffoldings/fifty-shades-of-dotfiles-isolinear/workbench/pj-drawer/pj-memory/`.
+
 **Status:** DECIDED 2026-09-19, EXECUTED 2026-09-19, all six steps. Four rulings
 (D-20260919-02 to -05 in the decisions register). The "Execution log" section at the end
 records each gate as it landed; everything above it is the plan as decided, with

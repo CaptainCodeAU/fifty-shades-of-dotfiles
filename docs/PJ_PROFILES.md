@@ -317,7 +317,7 @@ The 3 s limit runs in zsh itself: engage-go starts in its own process group thro
 sends TERM then KILL to that group, never to pj's own. Without perl, pj kills the pid and its
 descendants instead (weaker: W-20261002-A59). `pj --selftest` skips the check so the suite runs
 anywhere. A worktree of a moved project is refused too: engage-go resolves it to its parent.
-Proven end to end on a real marker on 2026-10-02 (drawer: `engage-move/2026-10-02/E2E-REPORT.md`).
+Proven end to end on a real marker on 2026-10-02 (`~/CODE/Scaffoldings/fifty-shades-of-dotfiles-isolinear/workbench/pj-drawer/pj-memory/WORK/engage-move/2026-10-02/E2E-REPORT.md`).
 
 ---
 

@@ -9,7 +9,7 @@ numbers in the 25 Sep table are that day's: the project step was step 8 then, 9 
 is step 6 since 5 Oct 2026.
 
 Evidence: five audit reports in
-drawer:pj-session-framework/reports/wrapup-audit-20260924/ (1-mechanics, 2-rulings,
+~/CODE/Scaffoldings/fifty-shades-of-dotfiles-isolinear/workbench/pj-drawer/pj-memory/WORK/pj-session-framework/reports/wrapup-audit-20260924/ (1-mechanics, 2-rulings,
 3-this-session, 4-history, 5-redteam).
 
 ## The eight rulings (Gavin, 2026-09-25, all recommendations taken)

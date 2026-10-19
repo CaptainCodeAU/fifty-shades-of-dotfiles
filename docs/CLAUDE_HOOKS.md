@@ -160,7 +160,7 @@ guard, 30 interleaved runs each, the median was 714 ms new against 701 ms old.
 ### Since 2026-10-05: one retry, the restore named, Monitor guarded, engage cross-checked
 
 After the 5 Oct outage (every stowed link gone, every session's Bash denied with
-HOOK MISSING; record: drawer `WORK/outage-2026-10-05/`), four changes, in dotfiles
+HOOK MISSING; record: `~/CODE/Scaffoldings/fifty-shades-of-dotfiles-isolinear/workbench/pj-drawer/pj-memory/WORK/outage-2026-10-05/`), four changes, in dotfiles
 `66d28eb` and engage `4deea29` / `a21892b`:
 
 - **One retry before HOOK MISSING.** Every guard command now opens with
