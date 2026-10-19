@@ -38,6 +38,9 @@
 #                             body "test, ignore", the Where line and the time. No real message
 #                             carries the robot or any X-Tags.
 # A real message to ntfy: X-Title line 1, X-Priority from the table, body lines 2 to 5.
+# EVERY iMESSAGE GOES TWICE, one second apart, the same text (wean B13 part 1b; Gavin, 20 Oct
+# 2026: "To send the iMessage twice for it to reach me, otherwise I won't get a notification for
+# it"), as old pj-ping did. Both are tried even when the first fails.
 # ntfy goes through the ntfy gateway: a POST of the body to <gateway>/<topic>, --max-time 15,
 # reading only the HTTP code. Anything but 204 is a refused send, 000 included. A refused send,
 # or ntfy switched off, goes by iMessage instead when the message has not already gone by iMessage.
@@ -71,7 +74,7 @@
 # ${ENGAGE_ACCOUNT_ROOT:-~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear}/engine-room/pj-state/ping.log.
 # Tab-separated, two lines a message, never the text; both carry the message's own time:
 #   <ISO local time>  <the time as in the text>  <kind>  <session>  queued  <what was missing, or ->
-#   <ISO local time>  <the time as in the text>  <kind>  <session>  sent    sound=started|- imsg=<rc or -> ntfy=<topic>:<code>|off|- [fallback=imsg:<rc>]
+#   <ISO local time>  <the time as in the text>  <kind>  <session>  sent    sound=started|- imsg=<rc1>,<rc2> or - ntfy=<topic>:<code>|off|- [fallback=imsg:<rc1>,<rc2>]
 #   <ISO local time>  <the time as in the text>  <kind>  <session>  silent  launched-by=<name>
 # So "did the 9:56:56 AM message go out?" is: grep '9:56:56 AM 19 Oct' <log>
 #
@@ -344,15 +347,25 @@ printf '%s\n' "$TTIME"
 # already. The sounds play one after another in a background process on /dev/null, so neither
 # this call nor a caller reading its output waits for them (Q89).
 send() {
-  local s r a="-" m="-" n f="" bad=0 phone=0 code refused=0
+  local s r a="-" m="-" n f="" bad=0 phone=0 code refused=0 PAIR
+  # imsg_twice: the text, then one second, then the same text again (B13 part 1b). PAIR is
+  # "<rc1>,<rc2>"; either 0 reaches the phone; any other rc makes the exit 1.
+  imsg_twice() {
+    local r1 r2
+    "$IMSG" "$TEXT" </dev/null >/dev/null 2>&1; r1=$?
+    sleep 1
+    "$IMSG" "$TEXT" </dev/null >/dev/null 2>&1; r2=$?
+    PAIR="$r1,$r2"
+    if [ "$r1" -eq 0 ] || [ "$r2" -eq 0 ]; then phone=1; fi
+    if [ "$r1" -ne 0 ] || [ "$r2" -ne 0 ]; then bad=1; fi
+  }
   if [ -n "$AFPLAY" ]; then
     if [ "$NSOUNDS" -eq 4 ]; then set -- Ping Glass Glass Glass; else set -- Ping; fi
     ( for s in "$@"; do "$AFPLAY" "$SOUNDS_DIR/$s.aiff"; done ) </dev/null >/dev/null 2>&1 &
     a="started"
   fi
   if [ "$HAS_IMSG" -eq 1 ] && [ -n "$IMSG" ]; then
-    "$IMSG" "$TEXT" </dev/null >/dev/null 2>&1; r=$?; m="$r"
-    if [ "$r" -eq 0 ]; then phone=1; else bad=1; fi
+    imsg_twice; m="$PAIR"
   fi
   if [ "$NTFY" -eq 0 ]; then
     n="ntfy=off"; refused=1
@@ -371,8 +384,7 @@ send() {
     if [ "$code" = 204 ]; then phone=1; else refused=1; fi
   fi
   if [ "$refused" -eq 1 ] && [ "$HAS_IMSG" -eq 0 ] && [ -n "$IMSG" ]; then
-    "$IMSG" "$TEXT" </dev/null >/dev/null 2>&1; r=$?; f=" fallback=imsg:$r"
-    if [ "$r" -eq 0 ]; then phone=1; else bad=1; fi
+    imsg_twice; f=" fallback=imsg:$PAIR"
   fi
   [ "$phone" -eq 1 ] || bad=1
   log sent "sound=$a imsg=$m $n$f" || bad=1

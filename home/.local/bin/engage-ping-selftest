@@ -121,13 +121,14 @@ arm() {
   : >"$PJ_PING_FAKE_LOG"
 }
 # settle: the sounds play in the background (Q89), so wait until the fake log stops growing
-# (0.15 s with no new line, at most 3 s) before an arm reads it.
+# (0.3 s with no new line, at most 6 s; 0.15 s until B13 part 1b, widened for a loaded Mac)
+# before an arm reads it.
 settle() {
   local i=0 prev=-1 n
   while :; do
     n=$(wc -l <"$PJ_PING_FAKE_LOG" 2>/dev/null | tr -d ' ')
     [ "$n" = "$prev" ] && break
-    prev=$n; sleep 0.15; i=$((i + 1)); [ $i -gt 20 ] && break
+    prev=$n; sleep 0.3; i=$((i + 1)); [ $i -gt 20 ] && break
   done
 }
 # run <args...>: sets OUT (stdout), ERR (stderr), RC and the elapsed time in T, then settles
@@ -158,8 +159,8 @@ NL='\n'   # what the fakes write for a newline
 # ---- 1. One text, sent once ----------------------------------------------------------
 arm one
 run question "Pick a delivery route"
-[ "$(calls)" = "afplay afplay afplay afplay imsg curl " ] && [ "$RC" -eq 0 ] \
-  && ok "1 a question: 4 sounds started, exactly 1 imsg, then 1 curl" || bad "1 one text, once" "rc=$RC calls=$(calls) err=$ERR"
+[ "$(calls)" = "afplay afplay afplay afplay imsg imsg curl " ] && [ "$RC" -eq 0 ] \
+  && ok "1 a question: 4 sounds started, its imsg twice (B13 part 1b), then 1 curl" || bad "1 one text, once" "rc=$RC calls=$(calls) err=$ERR"
 
 # ---- 2. The five lines, for each kind -------------------------------------------------
 arm lines
@@ -211,13 +212,13 @@ route() { # route <label> <want sounds> <want imsg count> <want priority> <args.
     ok "4 $label: sounds '$ws', $wi imsg, ntfy priority $wp"
   else bad "4 $label routes" "rc=$RC sounds=$(sounds) imsg=$(nof imsg) prio=$p err=$ERR"; fi
 }
-route question "Ping.aiff Glass.aiff Glass.aiff Glass.aiff " 1 4 question "q"
-route waiting  "Ping.aiff Glass.aiff Glass.aiff Glass.aiff " 1 4 waiting "w" --you "x"
-route decision "Ping.aiff Glass.aiff Glass.aiff Glass.aiff " 1 4 waiting "w" --decision --you "x"
-route alarm    "Ping.aiff Glass.aiff Glass.aiff Glass.aiff " 1 4 alarm "a" --you "x"
-route stopped  "Ping.aiff Glass.aiff Glass.aiff Glass.aiff " 1 5 alarm "a" --stopped --you "x"
+route question "Ping.aiff Glass.aiff Glass.aiff Glass.aiff " 2 4 question "q"
+route waiting  "Ping.aiff Glass.aiff Glass.aiff Glass.aiff " 2 4 waiting "w" --you "x"
+route decision "Ping.aiff Glass.aiff Glass.aiff Glass.aiff " 2 4 waiting "w" --decision --you "x"
+route alarm    "Ping.aiff Glass.aiff Glass.aiff Glass.aiff " 2 4 alarm "a" --you "x"
+route stopped  "Ping.aiff Glass.aiff Glass.aiff Glass.aiff " 2 5 alarm "a" --stopped --you "x"
 route done     "Ping.aiff " 0 2 done "d"
-route test     "Ping.aiff " 1 1 test "t"
+route test     "Ping.aiff " 2 1 test "t"
 
 # ---- 5. The test's ntfy form ----------------------------------------------------------
 arm robot
@@ -256,21 +257,21 @@ run done "d" --topic "$(printf 'a%.0s' $(seq 32))"; r4=$RC
 for code in 403 502 000; do
   arm "refused-$code"
   ENGAGE_PING_FAKE_HTTP="$code" run done "Built B13"
-  if [ "$RC" -eq 0 ] && [ "$(calls)" = "afplay curl imsg " ] && [ "$(nth imsg 1)" = "$OKI Finished: Built B13${NL}$WHERE${NL}You: nothing needed.${NL}$T1" ] \
-     && grep -q "ntfy=unsorted:$code fallback=imsg:0" "$LOG"; then
-    ok "7 ntfy answers $code: a done goes by one imsg instead, logged fallback=imsg:0"
+  if [ "$RC" -eq 0 ] && [ "$(calls)" = "afplay curl imsg imsg " ] && [ "$(nth imsg 1)" = "$OKI Finished: Built B13${NL}$WHERE${NL}You: nothing needed.${NL}$T1" ] \
+     && grep -q "ntfy=unsorted:$code fallback=imsg:0,0" "$LOG"; then
+    ok "7 ntfy answers $code: a done goes by imsg instead, twice, logged fallback=imsg:0,0"
   else bad "7 refused $code" "rc=$RC calls=$(calls) log=$(cat "$LOG" 2>/dev/null)"; fi
 done
 arm refused-q
 ENGAGE_PING_FAKE_HTTP=403 run question "q"
-[ "$(nof imsg)" -eq 1 ] && ! grep -q fallback "$LOG" && ok "7 a question refused with 403 sends no second imsg" || bad "7 question fallback" "imsg=$(nof imsg) $(cat "$LOG")"
+[ "$(nof imsg)" -eq 2 ] && ! grep -q fallback "$LOG" && ok "7 a question refused with 403 sends only its own two imsg, no fallback" || bad "7 question fallback" "imsg=$(nof imsg) $(cat "$LOG")"
 arm refused-ok
 run done "d"
 [ "$(nof imsg)" -eq 0 ] && grep -q 'ntfy=unsorted:204$' "$LOG" && ok "7 control: 204 sends no fallback" || bad "7 204 control" "imsg=$(nof imsg) $(cat "$LOG")"
 arm nocurl
 ENGAGE_PING_CURL="$ROOT/no-such-curl" run done "d"
-if [ "$RC" -eq 1 ] && [ "$(calls)" = "afplay imsg " ] && grep -q 'curl missing' "$LOG" && printf '%s' "$ERR" | grep -q 'curl missing'; then
-  ok "7 curl missing counts as refused: one imsg instead, named in the log and on stderr, exit 1"
+if [ "$RC" -eq 1 ] && [ "$(calls)" = "afplay imsg imsg " ] && grep -q 'curl missing' "$LOG" && printf '%s' "$ERR" | grep -q 'curl missing'; then
+  ok "7 curl missing counts as refused: the imsg instead (twice), named in the log and on stderr, exit 1"
 else bad "7 curl missing" "rc=$RC calls=$(calls) err=$ERR log=$(cat "$LOG" 2>/dev/null)"; fi
 
 # ---- 8. The setting off ---------------------------------------------------------------
@@ -279,8 +280,8 @@ offcase() { # offcase <label> <env assignments...>
   arm "off-$label"
   env "$@" "$TOOL" done "d" >/dev/null 2>&1; settle
   env "$@" "$TOOL" question "q" >/dev/null 2>&1; settle
-  if [ "$(nof curl)" -eq 0 ] && [ "$(calls)" = "afplay afplay afplay afplay afplay imsg imsg " ]; then
-    ok "8 $label: no curl at all; the done and the question each go by one imsg"
+  if [ "$(nof curl)" -eq 0 ] && [ "$(calls)" = "afplay afplay afplay afplay afplay imsg imsg imsg imsg " ]; then
+    ok "8 $label: no curl at all; the done and the question each go by imsg, twice"
   else bad "8 $label" "calls=$(calls)"; fi
 }
 offcase "on: no" ENGAGE_PING_NTFY_CONF="$ROOT/conf/off.conf"
@@ -295,7 +296,7 @@ if [ -f "$SHIPPED" ]; then
   [ "$(nof curl)" -eq 1 ] && [ "$(nof imsg)" -eq 0 ] && ok "8 the shipped file with a gateway: one post, no imsg" || bad "8 shipped file with a gateway" "calls=$(calls)"
   arm shipped-nogw
   ENGAGE_PING_NTFY_CONF="$SHIPPED" ENGAGE_PING_GATEWAY_CONF="$ROOT/conf/no-such-file" run done "d"
-  [ "$(nof curl)" -eq 0 ] && [ "$(nof imsg)" -eq 1 ] && ok "8 the shipped file with no gateway stays off: no curl, one imsg" || bad "8 shipped file with no gateway" "calls=$(calls)"
+  [ "$(nof curl)" -eq 0 ] && [ "$(nof imsg)" -eq 2 ] && ok "8 the shipped file with no gateway stays off: no curl, the imsg twice" || bad "8 shipped file with no gateway" "calls=$(calls)"
   grep -Eq '^[[:space:]]*gateway:' "$SHIPPED" \
     && bad "8 the shipped ntfy.conf holds a gateway: line" "$(cat "$SHIPPED")" || ok "8 the shipped ntfy.conf holds no gateway: line (Q31: the address lives in dot-private)"
 else bad "8 INVALID TRIAL: the shipped ntfy.conf is missing" "$SHIPPED"; fi
@@ -360,12 +361,12 @@ iso=$(perl -MPOSIX -e 'print strftime("%Y-%m-%dT%H:%M:%S%z", localtime(shift))' 
 q=$(awk -F'\t' '$5 == "queued"' "$LOG"); s=$(awk -F'\t' '$5 == "sent"' "$LOG")
 [ "$(wc -l <"$LOG" | tr -d ' ')" -eq 2 ] && [ "$q" = "$iso	$T1	question	st-sess	queued	-" ] \
   && ok "11 two lines; queued: the message's ISO time, its text time, kind, session, nothing missing" || bad "11 queued line" "$(cat "$LOG")"
-[ "$s" = "$iso	$T1	question	st-sess	sent	sound=started imsg=0 ntfy=unsorted:204" ] \
+[ "$s" = "$iso	$T1	question	st-sess	sent	sound=started imsg=0,0 ntfy=unsorted:204" ] \
   && ok "11 sent: the same two times, then the sounds started, imsg and ntfy" || bad "11 sent line" "$(cat "$LOG")"
 grep -q -e secret -e Q99 "$LOG" && bad "11 the log carries text" "$(cat "$LOG")" || ok "11 never the summary, detail, you or ref"
 arm log-off
 ENGAGE_PING_NTFY_CONF="$ROOT/conf/off.conf" run done "d"
-grep -q '	sent	sound=started imsg=- ntfy=off fallback=imsg:0$' "$LOG" && ok "11 the setting off: ntfy=off, and the imsg that took its place" || bad "11 off line" "$(cat "$LOG")"
+grep -q '	sent	sound=started imsg=- ntfy=off fallback=imsg:0,0$' "$LOG" && ok "11 the setting off: ntfy=off, and the imsg that took its place" || bad "11 off line" "$(cat "$LOG")"
 
 # ---- 12. Kept from today --------------------------------------------------------------
 arm kill
@@ -384,10 +385,10 @@ OUT="$(PJ_LAUNCHED_BY= "$TOOL" question "q" 2>/dev/null)"
 [ "$(ncalls)" -gt 0 ] && ok "12 control: PJ_LAUNCHED_BY empty -> the message goes out" || bad "12 PING-1 control" "calls=$(ncalls)"
 arm detach
 ENGAGE_PING_FAKE_SLEEP=0.3 run question "q" --detach
-[ "$RC" -eq 0 ] && [ "$OUT" = "$T1" ] && perl -e "exit !($T < 0.3)" \
+[ "$RC" -eq 0 ] && [ "$OUT" = "$T1" ] && perl -e "exit !($T < 0.6)" \
   && ok "12 --detach prints the time and returns in ${T}s, while 4 sounds take 1.2 s" || bad "12 detach return" "rc=$RC out=$OUT t=$T"
-wait_lines "$PJ_PING_FAKE_LOG" 6; wait_lines "$LOG" 2
-[ "$(calls)" = "afplay afplay afplay afplay imsg curl " ] && grep -q '	sent	sound=started imsg=0 ntfy=unsorted:204$' "$LOG" \
+wait_lines "$PJ_PING_FAKE_LOG" 7; wait_lines "$LOG" 2
+[ "$(calls)" = "afplay afplay afplay afplay imsg imsg curl " ] && grep -q '	sent	sound=started imsg=0,0 ntfy=unsorted:204$' "$LOG" \
   && ok "12 the detached worker sends everything and logs it" || bad "12 detached worker" "calls=$(calls) log=$(cat "$LOG" 2>/dev/null)"
 arm refuse
 run nonsense "x"; r1=$RC
@@ -404,7 +405,7 @@ run question "-starts with a dash"
 case "$(nth imsg 1)" in "$Q Question: -starts with a dash${NL}"*) ok "12 control: a summary starting with a dash is a summary" ;; *) bad "12 dash summary" "rc=$RC $(nth imsg 1)" ;; esac
 arm noaf
 PJ_PING_AFPLAY="$ROOT/missing/afplay" run question "q"
-[ "$RC" -eq 1 ] && [ "$(calls)" = "imsg curl " ] && grep -q 'queued	afplay missing;' "$LOG" && ok "12 afplay missing: the rest goes, named, exit 1" || bad "12 afplay missing" "rc=$RC calls=$(calls) $(cat "$LOG")"
+[ "$RC" -eq 1 ] && [ "$(calls)" = "imsg imsg curl " ] && grep -q 'queued	afplay missing;' "$LOG" && ok "12 afplay missing: the rest goes, named, exit 1" || bad "12 afplay missing" "rc=$RC calls=$(calls) $(cat "$LOG")"
 arm noim
 PJ_PING_IMSG="$ROOT/missing/imsg" run question "q"
 [ "$RC" -eq 1 ] && [ "$(calls)" = "afplay afplay afplay afplay curl " ] && grep -q 'queued	imsg missing;' "$LOG" && ok "12 imsg missing: the rest goes, named, exit 1" || bad "12 imsg missing" "rc=$RC calls=$(calls) $(cat "$LOG")"
@@ -414,7 +415,7 @@ arm noto
   && ok "12 IMSG_TO unset: no imsg, named in the log and on stderr, exit 1" || bad "12 IMSG_TO" "rc=$RC calls=$(calls) $(cat "$LOG")"
 arm imfail
 PJ_PING_FAKE_IMSG_RC=3 run question "q"
-[ "$RC" -eq 1 ] && grep -q 'sent	sound=started imsg=3 ntfy=unsorted:204$' "$LOG" && ok "12 imsg failing: exit 1, rc 3 logged, ntfy still tried" || bad "12 imsg fail" "rc=$RC $(cat "$LOG")"
+[ "$RC" -eq 1 ] && grep -q 'sent	sound=started imsg=3,3 ntfy=unsorted:204$' "$LOG" && ok "12 imsg failing: both still tried, exit 1, rc 3,3 logged, ntfy still tried" || bad "12 imsg fail" "rc=$RC $(cat "$LOG")"
 FH="$ROOT/b12a-home"; FA="$ROOT/b12a-account"; mkdir -p "$FH" "$FA"
 arm statedir
 OUT="$(env -u PJ_PING_STATE_DIR -u XDG_STATE_HOME HOME="$FH" ENGAGE_ACCOUNT_ROOT="$FA" "$TOOL" question "default folder" 2>"$ROOT/err")"; RC=$?
@@ -481,6 +482,41 @@ if [ -f "$STSTUB" ]; then
     && ok "14 the pj-ping-selftest stub runs engage-ping-selftest with a b, its output and exit 3, marked once" \
     || bad "14 selftest stub" "rc=$RC out=$OUT args=$(cat "$SS/fake-st.args" 2>/dev/null) trap=$(cat "$ENGAGE_PING_FAKE_TRAP")"
 else bad "14 INVALID TRIAL: no pj-ping-selftest stub at $STSTUB" "-"; fi
+
+# ---- 15. Each iMessage twice, one second apart (B13 part 1b) --------------------------
+# Gavin, 20 Oct 2026: "To send the iMessage twice for it to reach me, otherwise I won't get a
+# notification for it". Old pj-ping's own gap: send, sleep 1, send again. The upper bound is
+# 2.5 s, not 1.5, so a loaded Mac does not fail a correct pair.
+twice() { # twice <label> <args...>: exactly 2 imsg, identical, 1.0 to 2.5 s apart
+  local label="$1"; shift
+  arm "twice-$label"
+  run "$@"
+  local t1 t2 g
+  t1=$(nth imsg 1); t2=$(nth imsg 2)
+  g=$(awk '$2 == "imsg" { if (!a) a = $1; else { printf "%.3f", $1 - a; exit } }' "$PJ_PING_FAKE_LOG")
+  if [ "$(nof imsg)" -eq 2 ] && [ -n "$t1" ] && [ "$t1" = "$t2" ] && perl -e "exit !(${g:-0} >= 1.0 && ${g:-0} < 2.5)"; then
+    ok "15 $label: the imsg twice, the same text, ${g} s apart"
+  else bad "15 $label twice" "imsg=$(nof imsg) gap=$g"; fi
+}
+twice question question "q"
+twice waiting waiting "w" --you "x"
+twice decision waiting "w" --decision --you "x"
+twice alarm alarm "a" --you "x"
+twice stopped alarm "a" --stopped --you "x"
+twice test test "t"
+arm twice-done
+run done "d"
+[ "$(nof imsg)" -eq 0 ] && ok "15 done, ntfy took it (204): no imsg" || bad "15 done 204" "imsg=$(nof imsg)"
+arm twice-fallback
+ENGAGE_PING_FAKE_HTTP=403 run done "d"
+[ "$(nof imsg)" -eq 2 ] && [ "$(nth imsg 1)" = "$(nth imsg 2)" ] && grep -q 'fallback=imsg:0,0$' "$LOG" \
+  && ok "15 done refused (403): the fallback imsg twice, logged fallback=imsg:0,0" || bad "15 fallback twice" "imsg=$(nof imsg) $(cat "$LOG")"
+arm twice-q403
+ENGAGE_PING_FAKE_HTTP=403 run question "q"
+[ "$(nof imsg)" -eq 2 ] && ok "15 a question refused (403): its own 2, no third or fourth" || bad "15 question 403" "imsg=$(nof imsg)"
+arm twice-fail
+PJ_PING_FAKE_IMSG_RC=3 run question "q"
+[ "$RC" -eq 1 ] && [ "$(nof imsg)" -eq 2 ] && grep -q 'imsg=3,3 ' "$LOG" && ok "15 a failing imsg: both still tried, imsg=3,3, exit 1" || bad "15 failing pair" "rc=$RC imsg=$(nof imsg) $(cat "$LOG")"
 
 printf 'engage-ping-selftest: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
