@@ -1602,7 +1602,7 @@ function reset_check(    k, j, n, b, a, w, rec, p, c, v, chain, exited, shown) {
 # ------------------------------------------------------------------ pjw
 # Used by enforce-pj-workers.sh (CONV_MODE=pjw). Deny only, never a rewrite.
 # W-20260924-A59, rulings D-20260924-A04/A05: a conductor starts a Claude worker
-# ONLY through `pj-worker start` (clean room: `pj-worker start --cleanroom`).
+# ONLY through `engage-worker start` (clean room: `engage-worker start --cleanroom`).
 # This mode refuses the conductor's honest slip, early. It is NOT the floor: the
 # `claude()` guard in the pane's own zsh is, because herdr TYPES `claude` into the
 # pane and a Bash hook sees only this call's text (redteam-3 H1: send-keys letter
@@ -1681,7 +1681,7 @@ function pj_hit(v, m, ov) {
 }
 
 function pj_msg_worker(what) {
-    return "enforce-pj-workers: " what ". A conductor starts a Claude worker ONLY with `pj-worker start` (it launches a pj session, checks it, and counts the 4-session cap), and a clean-room worker with `pj-worker start --cleanroom` (D-20260924-A04/A05; the text exemption -- --setting-sources '' is refused). Other agent kinds (codex, gemini, ...) are allowed. A proof that needs a plain worker as its control: prefix the herdr command with PJ_WORKERS_CONTROL=<item id>; it is allowed, logged and named."
+    return "enforce-pj-workers: " what ". A conductor starts a Claude worker ONLY with `engage-worker start` (it launches an engage session, proves it, and holds the session caps), and a clean-room worker with `engage-worker start --cleanroom` (D-20260924-A04/A05; the text exemption -- --setting-sources '' is refused). Other agent kinds (codex, gemini, ...) are allowed. A proof that needs a plain worker as its control: prefix a plain `command claude` from the Bash tool with PJ_WORKERS_CONTROL=<engage record id> (3401 or #3401), or a herdr command with PJ_WORKERS_CONTROL=<W-YYYYMMDD-XNN>; it is allowed, logged and named."
 }
 
 # herdr command k, its command word at j. Reads global options, then the group.
@@ -1714,7 +1714,7 @@ function pj_herdr(k, j, ov, ctx, where,    a, n, g, s, kind, gotk, clean, t, w, 
         if (clean) t = "`herdr agent start --kind claude -- --setting-sources ''` is the clean-room text exemption, refused by ruling"
         else if (!gotk) t = "`herdr agent start` with no --kind this hook can read (herdr needs one, and it may be claude)"
         else if (kind == "") t = "`herdr agent start --kind` from an expansion this hook cannot read (it may be claude)"
-        else if (kind == "claude" || kind == "claude-code") t = "`herdr agent start --kind " kind "` starts plain claude, not a pj session"
+        else if (kind == "claude" || kind == "claude-code") t = "`herdr agent start --kind " kind "` starts plain claude, not an engage session"
         else t = "`herdr agent start --kind " kind "`: not a kind herdr 0.9.1 lists besides claude"
         pj_hit("DENY", pj_msg_worker(t (where != "" ? " (" where ")" : "")), ov)
         return
@@ -1775,13 +1775,13 @@ function pj_scan(ctx, ov, where,    k, j, n, a, w, b, ovk, t, lab) {
         w = unq(WR[k, j]); b = base(w)
         if (ctx == "pane") {
             lab = pj_pane_claude(k, j)
-            if (lab != "") { pj_hit("DENY", pj_msg_worker("`" lab "` " (where != "" ? where : "typed into a pane") ", which starts plain claude, not a pj session"), ovk); if (PV == "DENY") return }
+            if (lab != "") { pj_hit("DENY", pj_msg_worker("`" lab "` " (where != "" ? where : "typed into a pane") ", which starts plain claude, not an engage session"), ovk); if (PV == "DENY") return }
         }
         # W-20260929-A36 (red-team H6): a claude started from the Bash tool itself runs outside
-        # herdr, the pj rules and both session caps. Info forms (--version, mcp, agents ...) pass.
+        # herdr, the engage rules and both session caps. Info forms (--version, mcp, agents ...) pass.
         if (ctx == "bash") {
             lab = pj_pane_claude(k, j)
-            if (lab != "") { pj_hit("DENY", pj_msg_worker("`" lab "` started from the Bash tool" (where != "" ? " (" where ")" : "") " runs outside herdr, the pj rules and both session caps (W-20260929-A36)"), ovk); if (PV == "DENY") return }
+            if (lab != "") { pj_hit("DENY", pj_msg_worker("`" lab "` started from the Bash tool" (where != "" ? " (" where ")" : "") " runs outside herdr, the engage rules and both session caps (W-20260929-A36)"), ovk); if (PV == "DENY") return }
         }
         if (b == "herdr") { pj_herdr(k, j, ovk, ctx, where); if (PV == "DENY") return; continue }
         if (b ~ /^(bash|sh|zsh|dash|ksh)$/) {

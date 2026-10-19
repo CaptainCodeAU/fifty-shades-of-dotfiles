@@ -8,7 +8,7 @@
 # pane guard plus this hook). On 2026-09-24 four workers started with
 # `herdr agent start --kind claude` ran as PLAIN claude: no pj system prompt, no
 # project hooks, no Mods flag. A conductor starts a Claude worker ONLY with
-# `pj-worker start`, and a clean-room one with `pj-worker start --cleanroom`.
+# `engage-worker start`, and a clean-room one with `engage-worker start --cleanroom`.
 #
 # WHAT THIS IS, AND WHAT IT IS NOT. This hook is the EARLY, HONEST-SLIP layer: it
 # refuses the conductor's own Bash call before anything reaches a pane, and names
@@ -54,7 +54,7 @@ CONV_LIB_DIR="$(dirname "$0")"
 CONV_LOG_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/hooks-security.log"
 CONV_FALLBACK_ERE='herdr.*(agent[[:space:]]+start|pane[[:space:]]+(run|send-text|send-keys))'
 
-PJW_ROUTE="A conductor starts a Claude worker ONLY with pj-worker start, and a clean-room one with pj-worker start --cleanroom (D-20260924-A04/A05)."
+PJW_ROUTE="A conductor starts a Claude worker ONLY with engage-worker start, and a clean-room one with engage-worker start --cleanroom (D-20260924-A04/A05)."
 
 # Deny without jq: a fixed string, so it cannot fail to build.
 pjw_deny_static() { # $1 why (no double quotes, no backslashes)
@@ -399,6 +399,22 @@ EOF
     'PJ_WORKERS_CONTROL=3401 command claude -p x' 'PJ_WORKERS_CONTROL=3401 '
   control_arm "3401 an engage record id written #3401" \
     'PJ_WORKERS_CONTROL=#3401 ENGAGE_TEST_RUN=10a command claude -p x' 'PJ_WORKERS_CONTROL=#3401 '
+
+  echo "=== MESSAGE arms: the deny names today's route (wean-off-pj B13b part 5, engage #3434) ==="
+  msg_arm() { # $1 label, $2 command (denied), $3 text its reason must hold, $4 text it must not
+    local out ok=0
+    _st_n=$((_st_n + 1))
+    out=$(conv_payload "$2" | CONV_HOOK_LOG=/dev/null "$_st_hook" 2>/dev/null |
+      jq -r 'select(.hookSpecificOutput.permissionDecision == "deny") | .hookSpecificOutput.permissionDecisionReason' 2>/dev/null)
+    case "$out" in *"$3"*) case "$out" in *"$4"*) ;; *) ok=1 ;; esac ;; esac
+    if [ "$ok" -eq 1 ]; then printf 'ok    %-7s %s\n' message "$1"
+    else printf 'FAIL  %-7s %s\n        got: %s\n' message "$1" "$(printf '%s' "${out:-<no output>}" | head -c 300)"; _st_fails=$((_st_fails + 1)); fi
+  }
+  msg_arm "names engage-worker start, not pj-worker" 'herdr agent start w --kind claude --pane w1:p1' 'ONLY with `engage-worker start`' '`pj-worker start`'
+  msg_arm "a record id is offered for a plain command claude" 'herdr agent start w --kind claude --pane w1:p1' 'prefix a plain `command claude` from the Bash tool with PJ_WORKERS_CONTROL=<engage record id>' 'prefix the herdr command'
+  msg_arm "a herdr command is offered only a W- id (the pane guard takes no other)" 'herdr agent start w --kind claude --pane w1:p1' 'or a herdr command with PJ_WORKERS_CONTROL=<W-YYYYMMDD-XNN>' 'a herdr command or a plain'
+  msg_arm "a plain command claude is denied with the same words" 'command claude -p x' 'runs outside herdr, the engage rules' 'the pj rules'
+  msg_arm "a herdr claude is not an engage session; no session cap of 4" 'herdr agent start w --kind claude --pane w1:p1' 'not an engage session' '4-session cap'
 
   echo "=== FAIL-CLOSED arms: the payload cannot be read (redteam-3 H4) ==="
   GOOD=$(conv_payload 'herdr agent start w --kind claude --pane w1:p1')
