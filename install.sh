@@ -5440,7 +5440,6 @@ _write_pj_machine_file() {
 # The exit code is applied once, at the end of the dispatch.
 PJ_PREREQS_OK=1
 _check_pj_prereqs() {
-    local p
 
     step "pj framework prerequisites (report only)"
 
@@ -5448,27 +5447,9 @@ _check_pj_prereqs() {
     # pj-global/OPERATIONAL_RULES.md and pj-voice are no longer required or reported. Sessions
     # start through engage, which carries its own rules, so their absence is not a fault.
 
-    # Profiles (F5a). NOT a ✗ and NOT part of `ok`: with no profiles dir `pj` falls back to
-    # its built-in argv and launches exactly as it always did. That fallback is a supported
-    # state, not a fault, so a missing profiles dir must not turn a working install red.
-    # It is still worth a line, because the dir is what `pj --profile` and `c2` need.
-    local pdir="${XDG_CONFIG_HOME:-$HOME/.config}/pj/profiles"
-    if [[ -d "$pdir" ]]; then
-        local pnames; pnames="$(ls "$pdir" 2>/dev/null | paste -sd ' ' -)"
-        echo -e "  ${GREEN}✓${RESET} pj profiles: ${pnames:-none} ${DIM}(${pdir/#$HOME/\~})${RESET}"
-        # A declared config dir that does not exist yet needs a human: a fresh config dir
-        # has no credentials and no folder trust, so its first launch stops at /login.
-        local pf cfg
-        for pf in "$pdir"/*; do
-            [[ -f "$pf" ]] || continue
-            cfg="$(sed -n 's/^config_dir:[[:space:]]*//p' "$pf" 2>/dev/null | head -1)"
-            [[ -n "$cfg" ]] || continue
-            cfg="${cfg/#\~/$HOME}"
-            [[ -d "$cfg" ]] || echo -e "      ${YELLOW}~${RESET} profile $(basename "$pf") declares ${cfg/#$HOME/\~}, which does not exist yet -- its first launch will ask you to /login and to trust the folder"
-        done
-    else
-        echo -e "  ${YELLOW}~${RESET} $pdir absent -- pj uses its built-in argv (supported); \`pj --profile\` and \`c2\` need it, so re-run stow"
-    fi
+    # B11 item 8 (wean-off-pj, Gavin's Q81, 19 Oct 2026): pj's launch profiles
+    # (~/.config/pj/profiles) retired; engage reads its own profiles folder, so this report no
+    # longer looks for pj's.
 
     # B11 item 5 (wean-off-pj, Gavin's Q81, 19 Oct 2026): the pj plugin (~/.claude/pj) retired, so
     # its three links are no longer checked, and with them went the only thing that could fail this

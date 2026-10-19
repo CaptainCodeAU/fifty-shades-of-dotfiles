@@ -385,6 +385,10 @@ else ok "CONTROL: a complete machine gets NO warning"; fi
 # human does that first. But "installed fine" and "installed, and pj cannot
 # start" must not be the same observation -- for a human reading a terminal, or
 # for anything reading $?.
+# B11 item 8 (19 Oct 2026): pj's launch profiles (~/.config/pj/profiles) retired, so the report
+# no longer looks for that folder or tells anyone to re-run stow for it.
+if grep -q -e 'pj profiles' -e 'pj/profiles' <<<"$out_missing$out_dead"; then bad "B11: the pj report names no pj profiles folder" "$(grep -e 'pj profiles' -e 'pj/profiles' <<<"$out_missing$out_dead" | head -2)"
+else ok "B11: the pj report names no pj profiles folder"; fi
 # The 'pj is not ready' block retired with the pj plugin check (B11 item 5); _finish's
 # exit 3 path stays, proven directly below.
 # CONTROL, the other half: a complete machine must NOT print the block and must

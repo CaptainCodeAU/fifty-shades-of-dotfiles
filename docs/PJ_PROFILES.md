@@ -1,5 +1,9 @@
 # pj profiles, the three roots, and `c2`
 
+**History:** pj's three profiles (`default`, `memory`, `scratch`) left `home/.config/pj/profiles/` in
+wean-off-pj step B11 item 8 (19 Oct 2026), with copies in `~/RETIRED/2026-10-18-step-d/`.
+Sessions start through engage, which reads its own profiles folder. This page is the design record.
+
 A **profile** lets one moving part of a `pj` launch vary while everything that
 records work stays in one place. It is a `key: value` file, the same shape as the
 `~/.config/pj/machine` file `install.sh` already writes.
