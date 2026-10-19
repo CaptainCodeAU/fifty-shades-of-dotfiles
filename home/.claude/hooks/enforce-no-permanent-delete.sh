@@ -3,7 +3,8 @@
 # without going through the Trash, and name the safe route in the denial.
 # PreToolUse on Bash. Registered for BOTH targets (user and project) in
 # settings/claude/hooks.json, because the rule it enforces is machine-wide:
-# OPERATIONAL_RULES.md "Deletion" and CLAUDE.md "Deletion safety".
+# the hard line in the account's rules/always.md ("Delete only through the Trash, never
+# permanently") and CLAUDE.md "Deletion safety".
 #
 # WHY IT EXISTS. Ruled by Gavin 2026-09-23 (option A). The trigger: an agent was
 # one step from `git worktree remove`, which unlinks a whole tree outside the
@@ -388,7 +389,7 @@ function lex(i, term,   c, c2, j, op) {
 AWK
 
 # ---------------------------------------------------------------- messages
-FOOTER='A permanent delete is Gavin'"'"'s call: stop and ask. Rules: OPERATIONAL_RULES.md "Deletion", docs/DELETION_SAFETY.md.
+FOOTER='A permanent delete is Gavin'"'"'s call: stop and ask. The rule: ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/rules/always.md, the hard line "Delete only through the Trash, never permanently"; the detail: docs/DELETION_SAFETY.md.
 If the banned words are DATA here (a message, a pattern, prose), put them inside quotes or a heredoc and they are not read as a command.'
 
 _msg() { # $1 = rule id -> what it does, then the safe route
@@ -742,7 +743,9 @@ _argv() {
     command)
       TRASH_VIA="command"                                                                    #M: command trash
       while [ $# -gt 0 ]; do
-        case "$1" in -v|-V) return 0 ;; esac   #M: command -v is a lookup
+        # No mutant tag (Q86: 1, 19 Oct 2026): the next line's -*[vV]* also returns for -v and -V,
+        # so removing this line changes no verdict; the arms "command -v rm" still prove it.
+        case "$1" in -v|-V) return 0 ;; esac
         case "$1" in -*[vV]*) return 0 ;; -*p*) RM_LOOKUP="command $1" ;; esac                #M: command -p
         case "$1" in -*) shift ;; *) break ;; esac
       done
@@ -775,7 +778,10 @@ _argv() {
       return 0 ;;
     env)
       RM_LOOKUP="env"                                                                        #M: env rm
-      TRASH_VIA="env"                                                                        #M: env trash
+      # No mutant tag (Q86: 1, 19 Oct 2026): RM_LOOKUP="env" above makes the trash rule's
+      # "trash after a lookup change" line deny env trash as trash-path anyway, so this line
+      # only words the reason ("env trash"). trash-guard-selftest's hook mutant removes both.
+      TRASH_VIA="env"
       while [ $# -gt 0 ]; do
         case "$1" in
           --) shift; break ;;
@@ -1716,6 +1722,11 @@ SNAP
   _must git-worktree-remove 'inside $( )'                     'echo "$(git worktree remove x)"'
   _must git-worktree-remove 'inside backticks'                'echo `git worktree remove x`'
   _must git-worktree-remove 'inside <( )'                     'cat <(git worktree remove x)'
+  # Q86: 1 (19 Oct 2026). Without the lexer's <( ) line, the scan runs on past the ) and loses
+  # the ; that follows, so a command after a process substitution went unseen (allowed).
+  _must git-clean           'Q86 a command after <( )'        'cat <(ls); git clean -fdx'
+  _must git-clean           'Q86 a command after >( ) >( )'   'echo >(cat) >(cat); git clean -fdx'
+  _must git-clean           'Q86 a command after <( ) >( )'   'diff <(ls) >(cat); git clean -fdx'
   _must git-worktree-remove 'zsh =( )'                        'cat =(git worktree remove x)'
   _must git-worktree-remove 'VAR=1 prefix'                    'FOO=1 git worktree remove x'
   _must git-worktree-remove 'sudo'                            'sudo git worktree remove x'
@@ -1952,6 +1963,11 @@ SNAP
   _hook 'git worktree remove ../wt'
   [ "$rc" -eq 0 ] && [ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision' 2>/dev/null)" = deny ]; _chk 'real payload, deny: JSON deny, exit 0' $?
   printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason' 2>/dev/null | grep -q 'git worktree prune'; _chk 'deny names the safe route' $?
+  # Q87: 1 (19 Oct 2026): the rule is the hard line in always.md; OPERATIONAL_RULES.md was retired in B9
+  printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason' 2>/dev/null \
+    | grep -q 'rules/always.md, the hard line "Delete only through the Trash, never permanently"'; _chk 'Q87 deny names the rule in always.md' $?
+  printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason' 2>/dev/null | grep -q 'docs/DELETION_SAFETY.md'; _chk 'Q87 deny names DELETION_SAFETY.md' $?
+  ! printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason' 2>/dev/null | grep -q 'OPERATIONAL_RULES'; _chk 'Q87 deny no longer names OPERATIONAL_RULES.md' $?
   printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName' 2>/dev/null | grep -qx PreToolUse; _chk 'deny carries hookEventName' $?
   grep -q "BLOCKED $HOOK_NAME \"git-worktree-remove\"" "$logf" 2>/dev/null; _chk 'denial logged in the sibling shape' $?
   # the fake token is assembled at run time so this file never holds one

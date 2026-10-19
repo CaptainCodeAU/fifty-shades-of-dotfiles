@@ -904,9 +904,13 @@ if [ "$MODE" = mutants ]; then
 		else echo "  MISSED   overhead forced to $cv ms: exit $mrc (want $cw with '$cs')"; missed=$((missed + 1)); fi
 	done
 	MH=$FX/mut-hook; mkdir -p "$MH"
-	sed '/#M: env trash$/d' "$HOOK" > "$MH/enforce-no-permanent-delete.sh"; chmod +x "$MH/enforce-no-permanent-delete.sh"
-	n0=$(grep -c '#M: env trash$' "$HOOK"); n1=$(grep -c '#M: env trash$' "$MH/enforce-no-permanent-delete.sh")
-	if [ "$n0" -ne 1 ] || [ "$n1" -ne 0 ]; then echo "  INVALID  hook env trash: tag matched $n0 / $n1"; missed=$((missed + 1))
+	# Two lines deny env trash, each on its own: TRASH_VIA="env" and the RM_LOOKUP="env" that
+	# feeds the hook's "trash after a lookup change" rule. Removing one changes no verdict, so
+	# this mutant removes both (Q86: 1, 19 Oct 2026; removing only the first was MISSED).
+	hm='^[[:space:]]*TRASH_VIA="env"$|#M: env rm$'
+	grep -Ev "$hm" "$HOOK" > "$MH/enforce-no-permanent-delete.sh"; chmod +x "$MH/enforce-no-permanent-delete.sh"
+	n0=$(grep -Ec "$hm" "$HOOK"); n1=$(grep -Ec "$hm" "$MH/enforce-no-permanent-delete.sh")
+	if [ "$n0" -ne 2 ] || [ "$n1" -ne 0 ]; then echo "  INVALID  hook env trash: the two lines matched $n0 / $n1"; missed=$((missed + 1))
 	elif TG_HOOK="$MH/enforce-no-permanent-delete.sh" "$0" -q --hook-only >"$FX/mut-hook.out" 2>&1; then echo "  MISSED   hook env trash"; missed=$((missed + 1))
 	else echo "  caught   hook: env trash no longer denied ($(grep -c 'FAIL' "$FX/mut-hook.out") arms failed)"; caught=$((caught + 1)); fi
 	printf '\ntrash-guard-selftest --mutants: %d caught, %d missed (outputs in %s)\n' "$caught" "$missed" "$FX"

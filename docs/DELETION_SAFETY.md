@@ -319,7 +319,15 @@ agent, because it is a permanent delete.
 arms, 40 controls; after the blank ruling). Against master's code: controls 40 passed, new arms
 130 failed and 1 passed (the rm route's `-- -name`, which safe-rm already handled). `--mutants`:
 removing the blank check, the cwd check, the timeout refusal, the temp exemption, safe-rm's
-blank skip, safe-rm's blank warning, or the hook's `env trash` line is each caught (7 of 7). `--e2e` with the real `/usr/bin/trash`: the incident shape (`trash ''` from inside a temp
+blank skip, safe-rm's blank warning, or the hook's `env trash` line is each caught (7 of 7). That
+held on the branch, but not for long: commit 7e100d7, the same day, added a second rule that denies
+`env trash` on its own (trash after a lookup change, fed by `env`'s `RM_LOOKUP`). From then on,
+removing the `env trash` line changed no verdict, and both `--mutants` passes reported it MISSED:
+measured 2026-10-19, trash-guard-selftest 14 caught and 1 missed, and the delete guard 175 caught
+and 3 missed (#2713). Since 2026-10-19 (Gavin, dotfiles-main Q86: 1) the trash guard's mutant
+removes both lines, and the delete guard's `env trash` line carries no `#M:` tag, with the reason
+beside it. Measured after the change, 19 Oct: trash-guard-selftest 15 caught and 0 missed, and the
+delete guard 176 caught and 0 missed. `--e2e` with the real `/usr/bin/trash`: the incident shape (`trash ''` from inside a temp
 folder) is refused with the folder intact, and a throwaway temp file goes to the Trash.
 
 **Timing arms calibrate themselves** (W-20260929-A188, W-20261002-A04; Gavin's ruling,
