@@ -68,7 +68,8 @@ BASELINE_MIN_TRANSCRIPTS=3
 BASELINE_WINDOW=5
 FRAMEWORK_TOOLS="pj pj-launch-check pj-prompt-file pj-start-card pj-session-end pj-wrap pj-id open-items decided claude-hooks-sync claude-project-settings-render ci-watch ccw-watch pj-health mods-api-drift"
 SELFTESTS="pj:--selftest pj-launch-check:--selftest pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest pj-prompt-file:--selftest pj-id:--selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest audit-chain-selftest pj-launcher-menu:--selftest mods-api-drift:--selftest"
-HOOK_SELFTESTS="enforce-secret-probe.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh pj-voice-contract.sh enforce-pj-workers.sh"
+# enforce-uv, enforce-pnpm and pj-voice-contract retired in wean step B11 item 2 (copies in ~/RETIRED/2026-10-18-step-d/).
+HOOK_SELFTESTS="enforce-secret-probe.sh validate-bash.sh enforce-pj-workers.sh"
 PLUGIN_DIRS_EXPECTED="skills/herdr pj"   # pj-voice retired by option A, 2026-10-03; ISA unwired with LifeOS
 LAUNCH_LOG_WINDOW=20
 
