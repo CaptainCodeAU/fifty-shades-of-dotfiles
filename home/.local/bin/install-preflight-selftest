@@ -586,6 +586,42 @@ ng_expect "a second run sees it already guarded"               "already guarded"
 ng_expect "no nvm Node yet: nothing to guard, said so"          "No nvm Node versions yet"      "$NG/nonvm" false
 ng_expect "no npm-guard on disk: warns NOT guarded"             "NOT guarded"                   "$NG/noguard" false real
 
+# --- empty folders under home/ are named before a restow (#3507) -----------------------
+# stow -R --no-folding MKDIRs a folder that holds no file, so a folder emptied by a move
+# came back in ~ unseen (20 Oct: ~/.claude/pj, ~/.claude/adopt-kit, ~/.config/pj/profiles).
+if grep -qE '^[[:space:]]+_warn_empty_home_dirs$' <(sed -n '/^_restow_home_inner() {/,/^}/p' "$INSTALL_SH"); then
+    ok "empty folders: _restow_home_inner names them before stow runs"
+else bad "empty folders: _restow_home_inner names them before stow runs" "no _warn_empty_home_dirs line in it"; fi
+EH="$WORK/emptyhome"; mkdir -p "$EH/repo/home" "$EH/home/a"
+( builtin cd "$EH/repo/home" && mkdir -p a b/c/d e f g h/i .ssh/x j/k && : > e/.DS_Store && : > f/file \
+    && ln -s ../f/file g/link && : > h/file && : > j/k/file && chmod 000 j/k )
+eh_drive() {  # eh_drive <skip-ssh> <function>
+    REPO_DIR="$EH/repo" HOME="$EH/home" SKIP_CLAUDE=false SKIP_SSH="$1" SKIP_TMUX=false SKIP_DOCKER=false \
+    bash -c 'warn(){ printf "WARN %s\n" "$*"; }
+        for f in _stow_skip_names _stow_skipped_rel _empty_home_dirs _warn_empty_home_dirs; do
+            src=$(sed -n "/^${f}() {/,/^}/p" "$1"); [[ -n "$src" ]] && eval "$src"
+        done; "$2"' _ "$INSTALL_SH" "$2" 2>&1
+}
+eh_list=$(eh_drive true _empty_home_dirs | sort | paste -sd ' ' -)
+eh_want="empty a empty b empty e empty h/i unreadable j/k"
+if [[ "$eh_list" == "$eh_want" ]]; then
+    ok "empty folders: top-most only, .DS_Store does not count, a file or a link does, skips honoured"
+else bad "empty folders: top-most only, .DS_Store does not count, a file or a link does, skips honoured" \
+    "want: $eh_want | got: $eh_list"; fi
+eh_list=$(eh_drive false _empty_home_dirs | sort | paste -sd ' ' -)
+if [[ "$eh_list" == *"empty .ssh"* ]]; then ok "empty folders: an unskipped .ssh is named (control for the skip)"
+else bad "empty folders: an unskipped .ssh is named (control for the skip)" "got: $eh_list"; fi
+eh_out=$(eh_drive true _warn_empty_home_dirs)
+if [[ "$eh_out" == *"home/a is an empty folder; ~/a already exists"* \
+   && "$eh_out" == *"home/b is an empty folder; stow will create ~/b"* \
+   && "$eh_out" == *"home/j/k could not be read"* ]]; then
+    ok "empty folders: the warning says whether ~ already has it, and names an unreadable one"
+else bad "empty folders: the warning says whether ~ already has it, and names an unreadable one" "$eh_out"; fi
+eh_out=$(eh_drive true _warn_empty_home_dirs; echo "rc=$?")
+if [[ "$eh_out" == *"rc=0" ]]; then ok "empty folders: naming them never stops the install"
+else bad "empty folders: naming them never stops the install" "$eh_out"; fi
+chmod 755 "$EH/repo/home/j/k"
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))

@@ -3773,6 +3773,46 @@ _stow_preflight() {
     return 1
 }
 
+# Read-only. Every folder under home/ that holds no file or link anywhere beneath it
+# (a .DS_Store does not count), top-most only, one "empty <rel>" line each. stow -R
+# --no-folding MKDIRs such a folder in ~, so a folder emptied by a move came back unseen
+# (#3507, 20 Oct 2026). A folder find cannot read is "unreadable <rel>", never "empty":
+# a refusal is not an answer. Skipped trees (the --skip flags) are left out.
+_empty_home_dirs() {
+    local home_dir="$REPO_DIR/home" dir rel last="" hit
+    while IFS= read -r -d '' dir; do
+        rel="${dir#$home_dir/}"
+        # find lists a folder before what is inside it, so one already named covers these.
+        [[ -n "$last" && "$rel" == "$last"/* ]] && continue
+        _stow_skipped_rel "$rel" && continue
+        if ! hit=$(find "$dir" \( -type f -o -type l \) ! -name '.DS_Store' -print -quit 2>/dev/null); then
+            # Blocked lower down: the folder it cannot read is named when the loop reaches it.
+            [[ -r "$dir" && -x "$dir" ]] && continue
+            printf 'unreadable %s\n' "$rel"; last="$rel"
+        elif [[ -z "$hit" ]]; then
+            printf 'empty %s\n' "$rel"; last="$rel"
+        fi
+    done < <(find "$home_dir" -mindepth 1 -type d -print0 2>/dev/null)
+    return 0
+}
+
+# Name each empty folder before a restow, and say whether ~ already has it. Never stops
+# the install: an old empty folder (home/.config/dirdiff) is harmless; a new one is worth
+# a look, and moving it out of home/ is the fix.
+_warn_empty_home_dirs() {
+    local kind rel
+    while read -r kind rel; do
+        if [[ "$kind" == unreadable ]]; then
+            warn "home/$rel could not be read, so whether it is empty is not known"
+        elif [[ -d "$HOME/$rel" ]]; then
+            warn "home/$rel is an empty folder; ~/$rel already exists"
+        else
+            warn "home/$rel is an empty folder; stow will create ~/$rel (move it out of home/ if it was emptied by a move)"
+        fi
+    done < <(_empty_home_dirs)
+    return 0
+}
+
 # Restow home/ into ~ without ever leaving ~ half-linked (W-20261005-A48).
 # 1. Name every real conflict and stop, with nothing touched.
 # 2. Ask stow itself with `stow -n` (read-only, so it runs under --dry-run too).
@@ -3807,6 +3847,7 @@ _restow_home_inner() {
     else
         _stow_preflight || return 1
     fi
+    _warn_empty_home_dirs
     # Skip flags: the ignores go BEFORE the package name; stow reads options anywhere
     # but a listing reads better with the package last.
     local -a ign=()
