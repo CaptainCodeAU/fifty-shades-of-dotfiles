@@ -14,15 +14,16 @@
 # on its own. pj-ping was a stub that forwarded here until it was retired on 22 Oct 2026 (no call for two days).
 #
 # THE TEXT (Gavin, dotfiles-main 22 Oct 2026: Q7 (v5) "2C, but the next comes last", Q8: 3,
-# Q10: 2, Q11: 1, and "don't waste the notification real estate"). The phone's lock screen shows
-# the title and 3 lines under it; the rest shows when the message is opened. Nothing is said twice.
+# Q10: 2, Q11: 1, Q14: 1, and "don't waste the notification real estate"). The phone's lock
+# screen shows the title and 4 lines under it (seen on his phone 3:11 PM 22 Oct; a 5th line is
+# cut off with "..."); the rest shows when the message is opened. Nothing is said twice.
 #   the title        "<project> <icon> <summary>"   about 32 characters fit; a longer one is still
 #                    sent, with a note on stderr. No session name: the project leads.
-#   3 preview lines  each "<Label>: <text>", about 40 characters each (a longer one wraps and
+#   4 preview lines  each "<Label>: <text>", about 40 characters each (a longer one wraps and
 #                    pushes the last line off the lock screen; a note on stderr). Made from, in
 #                    order: each --line; then --detail as "Ask: <detail>" for a question, else
 #                    "Note: <detail>"; then --you as "Do: <you>", or the kind's default Do line.
-#   when opened      any preview line past the third, each --more, "Ref: <ref>",
+#   when opened      any preview line past the fourth, each --more, "Ref: <ref>",
 #                    "Session: <session>", "Time: <9:56:56 AM 19 Oct>" (12-hour Melbourne).
 #   last, after a blank line, only when given: "Next: <next>" and "Held up: <held>".
 #
@@ -34,7 +35,7 @@
 #   alarm                orange   NONE: --you is required; --stopped makes it red, "work has stopped"
 #   test                 lab      Do: tell <session> when you see it.
 #
-# At most 3 --line and 8 --more. Old callers that pass only --detail and --you get the same
+# At most 4 --line and 8 --more. Old callers that pass only --detail and --you get the same
 # layout through the mapping above.
 #
 # WHERE EACH KIND GOES, in this order: the sounds, the iMessage, then ntfy. The sounds start in
@@ -294,7 +295,7 @@ esac
 [ "$STOPPED" -eq 0 ] || [ "$KIND" = alarm ] || die2 "--stopped is for alarm only"
 [[ $TOPIC =~ ^[a-z0-9_-]{1,32}$ ]] || die2 "--topic must be one word of a-z, 0-9, _ or -, at most 32 characters"
 
-[ "${#RAW_LINES[@]}" -le 3 ] || die2 "at most 3 --line: the lock screen shows 3 lines under the title"
+[ "${#RAW_LINES[@]}" -le 4 ] || die2 "at most 4 --line: the lock screen shows 4 lines under the title"
 [ "${#RAW_MORE[@]}" -le 8 ] || die2 "at most 8 --more"
 
 # Every part cleaned in one perl: the six fixed parts, then each --line, then each --more.
@@ -404,10 +405,10 @@ fit_notes() {
   w=$(( ${#PROJECT} + ${#SUMMARY} + 4 ))
   [ "$w" -le 32 ] || printf 'engage-ping: note: the title is %d characters wide and about 32 show on the lock screen; shorten the summary\n' "$w" >&2
   for x in ${SHOWN[@]+"${SHOWN[@]}"}; do
-    n=$((n + 1)); [ "$n" -le 3 ] || break
+    n=$((n + 1)); [ "$n" -le 4 ] || break
     [ "${#x}" -le 40 ] || printf 'engage-ping: note: preview line %d is %d characters and about 40 fit before it wraps: "%s"\n' "$n" "${#x}" "$x" >&2
   done
-  [ "${#SHOWN[@]}" -le 3 ] || printf 'engage-ping: note: %d preview lines; the lock screen shows 3, the rest show when opened\n' "${#SHOWN[@]}" >&2
+  [ "${#SHOWN[@]}" -le 4 ] || printf 'engage-ping: note: %d preview lines; the lock screen shows 4, the rest show when opened\n' "${#SHOWN[@]}" >&2
   return 0
 }
 fit_notes

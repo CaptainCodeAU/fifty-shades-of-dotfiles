@@ -161,7 +161,7 @@ run question "Pick a delivery route"
   && ok "1 a question: 4 sounds started, its imsg twice (B13 part 1b), then 1 curl" || bad "1 one text, once" "rc=$RC calls=$(calls) err=$ERR"
 
 # ---- 2. The text, for each kind -------------------------------------------------------
-# Gavin, dotfiles-main 22 Oct 2026 (Q7 (v5), Q8: 3, Q10: 2, Q11: 1): the title is the project,
+# Gavin, dotfiles-main 22 Oct 2026 (Q7 (v5), Q8: 3, Q10: 2, Q11: 1, Q14: 1): the title is the project,
 # the icon and the summary; the lines under it are labelled; the session and the time come
 # last; nothing is said twice.
 arm lines
@@ -211,9 +211,15 @@ arm order
 run waiting "w" --you "x" --detail "d" --line "L: 1"
 case "$(nth imsg 1)" in "st-proj $WI w${NL}L: 1${NL}Note: d${NL}Do: x${NL}Session: "*) ok "2b order: each --line, then --detail as Note, then --you as Do" ;; *) bad "2b order" "$(nth imsg 1)" ;; esac
 arm overflow
+run waiting "w" --line "A: 1" --line "B: 2" --line "C: 3" --line "D: 4" --you "x"
+case "$(nth imsg 1)" in "st-proj $WI w${NL}A: 1${NL}B: 2${NL}C: 3${NL}D: 4${NL}Do: x${NL}Session: st-sess${NL}"*) ok "2b a 5th preview line goes first in the opened part, not lost" ;; *) bad "2b overflow" "$(nth imsg 1)" ;; esac
+grep -q '5 preview lines' <<<"$ERR" && ok "2b ... and stderr says only 4 show" || bad "2b overflow note" "err=$ERR"
+arm four
 run waiting "w" --line "A: 1" --line "B: 2" --line "C: 3" --you "x"
-case "$(nth imsg 1)" in "st-proj $WI w${NL}A: 1${NL}B: 2${NL}C: 3${NL}Do: x${NL}Session: st-sess${NL}"*) ok "2b a 4th preview line goes first in the opened part, not lost" ;; *) bad "2b overflow" "$(nth imsg 1)" ;; esac
-grep -q '4 preview lines' <<<"$ERR" && ok "2b ... and stderr says only 3 show" || bad "2b overflow note" "err=$ERR"
+[ -z "$ERR" ] && ok "2b control (Q14: 1): 4 preview lines fit, nothing on stderr" || bad "2b four fit" "err=$ERR"
+arm fourwide
+run done "d" --line "A: 1" --line "B: 2" --line "C: 3" --line "D: $(printf 'x%.0s' $(seq 38))"
+grep -q 'preview line 4 is 41 characters' <<<"$ERR" && ok "2b the 4th preview line's width is checked too" || bad "2b 4th width" "err=$ERR"
 arm heldonly
 run done "d" --held "the push"
 case "$(nth curl 1)" in *"B[Session: st-sess${NL}Time: $T1${NL}${NL}Held up: the push]") ok "2b --held alone: the blank line, then Held up" ;; *) bad "2b held only" "$(nth curl 1)" ;; esac
@@ -222,7 +228,7 @@ run done "d" --line "A: 1" --more "B: 2"
 c=$(nth curl 1)
 case "$c" in *"${NL}${NL}"*) bad "2b a blank line with no Next or Held up" "$c" ;; *"B[A: 1${NL}B: 2${NL}Session: st-sess${NL}Time: $T1]") ok "2b control: no --next or --held, no blank line" ;; *) bad "2b no-next body" "$c" ;; esac
 arm linebad
-run done "d" --line "A" --line "B" --line "C" --line "D"; r1=$RC
+run done "d" --line "A" --line "B" --line "C" --line "D" --line "E"; r1=$RC
 run done "d" $(for i in 1 2 3 4 5 6 7 8 9; do printf -- '--more m%s ' "$i"; done); r2=$RC
 run done "d" --line "   "; r3=$RC
 run done "d" --next ""; r4=$RC
@@ -230,10 +236,10 @@ run done "d" --line; r5=$RC
 run done "d" --held $'\t'; r6=$RC
 run done "d" --more " "; r7=$RC
 [ "$r1$r2$r3$r4$r5$r6$r7" = "2222222" ] && [ "$(ncalls)" -eq 0 ] \
-  && ok "2b 4 --line, 9 --more, a blank --line, --next, --held or --more, or a missing value: exit 2, nothing sent" || bad "2b bad lines" "rc=$r1$r2$r3$r4$r5$r6$r7 calls=$(ncalls)"
+  && ok "2b 5 --line, 9 --more, a blank --line, --next, --held or --more, or a missing value: exit 2, nothing sent" || bad "2b bad lines" "rc=$r1$r2$r3$r4$r5$r6$r7 calls=$(ncalls)"
 arm linemax
-run done "d" --line "A: 1" --line "B: 2" --line "C: 3" $(for i in 1 2 3 4 5 6 7 8; do printf -- '--more m%s ' "$i"; done)
-[ "$RC" -eq 0 ] && [ "$(nof curl)" -eq 1 ] && ok "2b control: 3 --line and 8 --more are sent" || bad "2b max lines" "rc=$RC err=$ERR"
+run done "d" --line "A: 1" --line "B: 2" --line "C: 3" --line "D: 4" $(for i in 1 2 3 4 5 6 7 8; do printf -- '--more m%s ' "$i"; done)
+[ "$RC" -eq 0 ] && [ "$(nof curl)" -eq 1 ] && ok "2b control: 4 --line and 8 --more are sent" || bad "2b max lines" "rc=$RC err=$ERR"
 arm lineclean
 run done "d" --line $'Was:\033[2J a\nb '"ghp_$(printf 'A%.0s' $(seq 36))" --next $'x\ny'
 case "$(nth curl 1)" in *"B[Was: [2J a b [redacted]${NL}"*"${NL}Next: x y]") ok "2b --line and --next are cleaned: no control character, no newline, no token" ;; *) bad "2b line cleaning" "$(nth curl 1)" ;; esac
