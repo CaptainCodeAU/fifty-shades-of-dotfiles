@@ -11,7 +11,8 @@
 #
 # FIXTURES ARE REAL. tests/fixtures/zed/issue-<n>.json are saved GitHub API responses
 # (`curl https://api.github.com/repos/zed-industries/zed/issues/<n>`), captured
-# 2026-09-23: #13300 open, #40418 closed. The "changed" arm reuses the real open
+# 2026-09-23: #13300 open, #40418 closed. #13300 re-captured 2026-10-22 when its
+# updated_at moved to 2026-10-21 (the baseline arm pins the hook's date to it). The "changed" arm reuses the real open
 # fixture and varies the RECORDED date instead, so no fixture is hand-typed.
 #
 # HERMETIC. TMPDIR points at a scratch dir holding a fresh release cache, so the
@@ -86,13 +87,13 @@ for B in "${BASHES[@]}"; do
   v=$("$B" -c 'echo $BASH_VERSION')
   echo "bash $v ($B)"
 
-  run_case "$B" "13300|2026-06-08|fixture label"
+  run_case "$B" "13300|2026-10-21|fixture label"
   check "[$v] open arm: unchanged issue is quiet" \
-    "⏳ zed#13300 open, last activity 2026-06-08 (unchanged since recorded)" "UPDATED"
+    "⏳ zed#13300 open, last activity 2026-10-21 (unchanged since recorded)" "UPDATED"
 
   run_case "$B" "13300|2026-05-01|fixture label"
   check "[$v] changed arm: moved updated date flags" \
-    "🔔 zed#13300 UPDATED: last activity 2026-06-08, recorded 2026-05-01" "unchanged since recorded"
+    "🔔 zed#13300 UPDATED: last activity 2026-10-21, recorded 2026-05-01" "unchanged since recorded"
   check "[$v] changed arm: tells the assistant the new date" \
     "set #13300's recorded date in" ""
 
@@ -107,7 +108,7 @@ for B in "${BASHES[@]}"; do
 
   run_case "$B" "__DEFAULT__"
   check "[$v] committed WATCHED_ISSUES baseline matches the real #13300 fixture" \
-    "⏳ zed#13300 open, last activity 2026-06-08 (unchanged since recorded)" "UPDATED"
+    "⏳ zed#13300 open, last activity 2026-10-21 (unchanged since recorded)" "UPDATED"
 done
 
 # Leave the scratch dir for inspection only on failure; it lives under $TMPDIR.

@@ -1,7 +1,7 @@
 # Zed Preview — Changelog Tracker
 
-<!-- ZED_PREVIEW_DOC_VERSION: 1.22.0 -->
-<!-- LAST_UPDATED: 2026-09-25 -->
+<!-- ZED_PREVIEW_DOC_VERSION: 1.26.1 -->
+<!-- LAST_UPDATED: 2026-10-22 -->
 
 > **What this is.** A living record of notable **Zed Preview** changes, filtered to
 > what Gavin cares about: **user interface**, **configuration / settings**, and
@@ -30,10 +30,10 @@
 
 | Field                  | Value         |
 | ---------------------- | ------------- |
-| Latest Preview tracked | **1.22.0**    |
-| Release date           | 2026-09-23    |
-| GitHub tag             | `v1.22.0-pre` |
-| Doc last refreshed     | 2026-09-25    |
+| Latest Preview tracked | **1.26.1**    |
+| Release date           | 2026-10-21    |
+| GitHub tag             | `v1.26.1-pre` |
+| Doc last refreshed     | 2026-10-22    |
 
 ---
 
@@ -49,7 +49,7 @@ rather than buried. (Cross-references are auto-memory slugs.)
     from git because it holds private server info — leave it alone.
 - **Per-project themes are wanted; the PR that would have delivered it was CLOSED
   unmerged** (`project_zed_per_project_theme`). Tracked upstream at **zed#13300** (still
-  open, re-checked 2026-09-25). **PR #58755 was closed on 2026-09-07** by a maintainer for
+  open, re-checked 2026-10-22). **PR #58755 was closed on 2026-09-07** by a maintainer for
   suspected LLM-written replies, not because the feature was refused; see the
   2026-09-23 re-check under watch-items for the detail. No successor PR found. The
   `--user-data-dir` workaround exists, but **Gavin rejected it on 2026-06-18** (one Zed
@@ -79,6 +79,196 @@ when it visibly affects the above or Gavin's known setup.
 ---
 
 ## Release log (newest first)
+
+> **Refresh of 2026-10-22 (1.22.0 to 1.26.1, six releases).** Source: the GitHub release
+> bodies for `v1.23.1-pre`, `v1.24.1-pre`, `v1.24.2-pre`, `v1.25.0-pre`, `v1.25.1-pre` and
+> `v1.26.1-pre`, with <https://zed.dev/releases/preview/latest> cross-checked for 1.26.1
+> (same items, dated Oct 21, 2026). GitHub has **no `-pre` tag for 1.23.0, 1.24.0 or
+> 1.26.0**: the first preview of each of those was the `.1`. Settings claims ("not set in
+> yours") were checked on 2026-10-22 against `home/.config/zed/settings.json` and
+> `keymap.json`, with `detect_venv`, `window_title_format` and `theme` as the known-present
+> controls in the same run. Installed on the Mac: 1.26.1 (Gavin updated during this
+> refresh; `CFBundleShortVersionString` read 1.26.1).
+>
+> **Across all six releases: nothing on per-window or per-project themes**, and nothing
+> on `theme_overrides` at project level. The watch-items table below carries the
+> zed#13300 re-check.
+
+### 1.26.1 - 2026-10-21
+
+**Theme / appearance**
+
+- New macOS setting `use_display_p3`: draws Zed in the Display P3 colour space, which
+  can make theme colours look more saturated on a wide-gamut screen. Not set in yours.
+- Fixed: file icons now appear for stem-based filename variants.
+  - _In plain English:_ one new colour option for Mac screens, off unless you turn it
+    on. Still nothing on colour-per-window.
+
+**Configuration**
+
+- `project_panel.sort_order` gained an `extension` option, to group files by type. Not
+  set in yours.
+- Pyrefly is an optional built-in Python language server, used only when listed in the
+  Python `language_servers` setting. Not set in yours, so nothing changes.
+- Breaking, narrow: ACP agent configuration defaults now apply only to new
+  conversations; reopened ones keep their own settings.
+- Fixed: enum values now sort properly in `settings.json` completions.
+  - _In plain English:_ two new choices you do not use, and no change to your setup.
+
+**UI**
+
+- Better fuzzy ranking in the File Finder.
+- Debugger hovers show an expandable, keyboard-reachable tree of variables.
+  - _In plain English:_ finding files by name should pick the right one more often.
+
+**Fixes Gavin may feel**
+
+- **Fixed: discarding unstaged changes in the Git Panel also threw away STAGED
+  changes.** This was a data-loss bug in 1.25.x and earlier.
+- Fixed: Markdown preview tabs for files with the same name now show their folder.
+- Fixed: removing a project from the sidebar and then cancelling the save prompt still
+  dropped it from the recent projects list.
+  - _In plain English:_ a Git Panel button that could lose staged work is fixed, and
+    previews of two `README.md` files are now told apart.
+
+### 1.25.1 - 2026-10-20
+
+**UI**
+
+- Fixed window controls being misaligned in the Threads Sidebar header when no project
+  is open.
+- HTML highlighting inside `svg`, `mathml` and `raw` tagged templates, and CSS
+  highlighting in `css({ ... })`, in JavaScript and TypeScript.
+  - _In plain English:_ a small patch; nothing you need to change.
+
+### 1.25.0 - 2026-10-14
+
+**Theme / appearance**
+
+- Faster startup with custom icon themes.
+- Fixed blurred window backgrounds not blurring on macOS 27.
+- Fixed a visual glitch at the corners of scrollable code blocks on hover.
+  - _In plain English:_ small appearance fixes. Nothing on colour-per-window.
+
+**Configuration**
+
+- New `tab_switcher.show_file_preview` (default `true`): whether the editor shows each
+  file while you cycle the tab switcher. Not set in yours.
+  - _In plain English:_ one new switch you do not use; the default keeps today's
+    behaviour.
+
+**UI**
+
+- Folded code now unfolds by itself when you jump into it (go to line, go to
+  definition, outline, symbol pickers, navigation history).
+- The tab switcher no longer changes selection on mouse hover and opens without a delay.
+- "Open SVG Preview" in the Project Panel menu for SVG files; "Open Markdown Preview"
+  now also appears for a file opened on its own (`zed README.md`).
+- Zed's binary is about 33% smaller on macOS.
+  - _In plain English:_ jumping to a line inside folded code now shows it, and the tab
+    switcher stops jumping around under the mouse.
+
+**Fixes Gavin may feel**
+
+- **Fixed: environment variables, secrets included, passed to external agents and MCP
+  servers in REMOTE projects were visible in the local process list.** Your settings hold
+  SSH connections, so it may have applied to you.
+- Fixed notification sounds stopping after an audio output error.
+- Fixed wrapped links in Markdown tables being partly unclickable in previews.
+- Fixed images in centred or right-aligned HTML blocks showing left-aligned in
+  Markdown Preview.
+  - _In plain English:_ a fix stops secrets for remote agents showing up in your Mac's
+    process list, and notification sounds keep working.
+
+### 1.24.2 - 2026-10-12
+
+**Theme / appearance**
+
+- Fixed the Threads Sidebar background being see-through in some themes.
+- Fixed no fonts showing in the settings window for the Markdown preview font options.
+  - _In plain English:_ two small fixes to how things look.
+
+### 1.24.1 - 2026-10-07
+
+**Theme / appearance**
+
+- New `markdown_preview.heading_font_weight` (heading weight in the Markdown preview)
+  and `mermaid_font_family` (font in Mermaid diagrams). Neither set in yours. Relevant
+  to the Markdown preview theming section further down: these are the first new
+  preview-styling keys since it was written.
+- Font pickers in the settings window now show each font in itself.
+- Debugger variables are coloured by type (numbers, strings).
+  - _In plain English:_ you can now make Markdown preview headings bolder or lighter.
+    Still nothing on colour-per-window.
+
+**Configuration**
+
+- **The File Finder now fills its search with whatever text is selected** in the editor
+  or terminal. On by default; `file_finder.prefill_query_from_selection` turns it off.
+  Not set in yours, so it is ON.
+- New `git_panel.commit_editor` (a collapsible commit message box) and
+  `extension_suggestions` (turn off "install an extension for this file" prompts).
+  Neither set in yours.
+- `.env` files now use the Env language instead of shell, so `shellcheck` no longer
+  warns on them.
+  - _In plain English:_ if you open the file finder with text selected, that text is
+    now typed in for you. One setting turns that off if it gets in the way.
+
+**UI**
+
+- Terminal tabs can be dragged into the Agent Panel.
+- Git: `git: create tag at head`, and "Create Tag..." in Git history and Git Graph
+  (local only, never pushed by itself). File counts on Git Panel section headers.
+- "Show Source" in the Markdown preview tab's menu.
+- Finder now groups Zed as a developer tool.
+  - _In plain English:_ a few new menu items; nothing moves.
+
+**Fixes Gavin may feel**
+
+- Fixed Markdown Preview ignoring split-pane actions when focused.
+- Fixed text between two `---` lines being shown as a YAML block in Markdown Preview
+  and the Agent Panel.
+- Fixed Markdown task-list checkboxes missing or sitting above their line.
+- Fixed SSH config hosts going missing or stale in the remote projects picker.
+- Fixed bracket colours flickering during agent edits.
+  - _In plain English:_ Markdown previews draw separators and checkboxes properly now.
+
+### 1.23.1 - 2026-09-30
+
+**Theme / appearance**
+
+- Fixed Threads Sidebar selected and hover colours.
+- Fixed Markdown Preview search highlights hiding the matched text in themes with
+  opaque highlight colours.
+- Fixed completion details looking the same as completion labels.
+  - _In plain English:_ colour fixes in a few places. Nothing on colour-per-window.
+
+**Configuration**
+
+- New `soft_wrap_indent` (`"none"`, `"same"`, `"extra_one"`, `"extra_two"`): how far
+  wrapped continuation lines are indented. Not set in yours (you set `soft_wrap`, a
+  different key).
+- New `agent.max_idle_retained_threads`. Not set in yours.
+- Breaking, Linux and Windows only: title-bar menus open on click;
+  `title_bar.open_menus_on_hover` restores hover. Not your platform.
+  - _In plain English:_ wrapped lines can now be indented the way you like, if you
+    ever want to.
+
+**UI**
+
+- `alt-/` shows which keys can finish a half-typed multi-key shortcut. Your
+  `keymap.json` does not bind `alt-/`.
+- JSONL and NDJSON files open as tables next to the source with `cmd-k v`.
+- Folder context menu in the Git Panel tree view.
+  - _In plain English:_ press `alt-/` part-way through a shortcut to see how it can end.
+
+**Fixes Gavin may feel**
+
+- Fixed hover flicker after closing native menus on macOS.
+- Fixed fenced code blocks losing highlighting when extra text follows the language
+  name.
+- Fixed centred layout not applying to a zoomed pane.
+  - _In plain English:_ small fixes, nothing to change.
 
 > **Refresh of 2026-09-25 (1.21.0 to 1.22.0, one release).** Source: the GitHub release
 > body for `v1.22.0-pre` (published 2026-09-23), cross-checked against
@@ -853,12 +1043,12 @@ when it visibly affects the above or Gavin's known setup.
 
 ## Standing watch-items (open threads)
 
-| Item                               | Status as of 2026-09-25                                                                                                                                                  | Why it matters                      |
+| Item                               | Status as of 2026-10-22                                                                                                                                                  | Why it matters                      |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |
-| Per-project themes (zed#13300)     | Issue open, last updated 2026-06-08 (unchanged); hook-watched since 2026-09-23; **PR #58755 CLOSED unmerged 2026-09-07**, no successor; ruling: title aid + keep waiting | Gavin's color-per-window goal       |
-| `theme_overrides` at project level | Still user-settings only; nothing in 1.17.0 to 1.22.0 changes it                                                                                                         | zed#13300 open, nothing building it |
-| `detect_venv` default              | Not mentioned in 1.17.0 to 1.22.0; yours still pins `off`                                                                                                                | direnv double-activation            |
-| Title-bar settings surface         | `title_bar.show_worktree_name` (1.13.0); `window_title_format` (1.20.0); 1.22.0 adds only an update-check confirmation                                                   | Title text only, never colour       |
+| Per-project themes (zed#13300)     | Issue open, last updated 2026-10-21 (two user comments, 12 and 21 Oct, no maintainer, no PR); **PR #58755 CLOSED unmerged 2026-09-07**, no successor; ruling: title aid + keep waiting | Gavin's color-per-window goal       |
+| `theme_overrides` at project level | Still user-settings only; nothing in 1.17.0 to 1.26.1 changes it                                                                                                         | zed#13300 open, nothing building it |
+| `detect_venv` default              | Not mentioned in 1.17.0 to 1.26.1; yours still pins `off`                                                                                                                | direnv double-activation            |
+| Title-bar settings surface         | `title_bar.show_worktree_name` (1.13.0); `window_title_format` (1.20.0); nothing new in 1.23.1 to 1.26.1                                                   | Title text only, never colour       |
 
 **PR #58755 "Add per-window theme overrides"** (author 42piratas; opened 2026-06-06;
 open / not merged / not draft; last activity 2026-06-29; base `main`; no milestone;
@@ -951,6 +1141,24 @@ The session-start hook no longer polls #58755 (removed from `WATCHED_PRS` on
 2026-09-23; the list is empty and the hook prints that). To watch a future attempt, add
 its PR number to `WATCHED_PRS` in `.claude/hooks/zed-version-check.sh`. The issue itself,
 zed#13300, is watched through `WATCHED_ISSUES` in the same hook (ruling above).
+
+**Re-checked 2026-10-22** (GitHub API: the issue, its comments since 2026-06-01, and
+its full timeline). zed#13300 is still **open**: 37 comments, 167 reactions (35 and 161
+at the 2026-09-23 check), `updated_at` 2026-10-21. The date moved because of two user
+comments, neither from a Zed maintainer:
+
+- **zexa, 2026-10-12:** argues for per-project settings kept in the project and
+  excluded from git, over a map of project names to themes in the user settings file,
+  because a moved folder would break the map.
+- **alimoeeny, 2026-10-21:** points to VS Code's committed project override
+  (`.zed/settings.json`), shared by the team.
+
+The timeline shows no linked PR since 2026-08-27 (#63320, "VS Code-style user
+profiles", closed), so **nobody is building it**. The ruling above stands, and the
+session-start hook's recorded date was moved to 2026-10-21.
+
+- _In plain English:_ two people added their thoughts on how the feature should work,
+  but nobody from Zed replied and nobody is writing the code. Nothing changes for you.
 
 When refreshing this doc, re-check each row against the new release.
 

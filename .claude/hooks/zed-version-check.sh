@@ -57,7 +57,7 @@ WATCHED_PRS=()
 # docs/ZED_PREVIEW_CHANGELOG.md, set the date here to the new updated_at. On close,
 # record why (state_reason) and drop the entry.
 WATCHED_ISSUES=(
-  "13300|2026-06-08|per-project themes, multiple active themes (Gavin's colour-per-window goal)"
+  "13300|2026-10-21|per-project themes, multiple active themes (Gavin's colour-per-window goal)"
 )
 
 # Test mode, used only by zed-version-check-selftest. With ZED_CHECK_FIXTURE_DIR set,
