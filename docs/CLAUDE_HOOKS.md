@@ -397,6 +397,10 @@ predicted.
 
 ## `pj-question-ping.sh`: a ping at every question popup
 
+**Retired on 22 Oct 2026** with `pj-ping` (Gavin, dotfiles-main Q5: 1): its entry is in
+`retired` in `settings/claude/hooks.json`, and the file is in `~/RETIRED/2026-10-22-pj-ping/` .
+It was registered in no live settings file by then. The rest of this section is history.
+
 Added 2026-09-23 for D-20260921-A10, widened that day by Gavin to "whenever
 there is one of those Ask User Question tool popups". Registered on
 `PreToolUse` with matcher `AskUserQuestion`, project target only.

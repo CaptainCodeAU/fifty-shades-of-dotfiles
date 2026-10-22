@@ -1,8 +1,9 @@
 # `pj-ping` - the numbered attention signal
 
-**Since 19 Oct 2026, `pj-ping` is a forwarding stub of `engage-ping` (wean B13).** Every call
-goes on, unchanged, to engage-ping: one message, sent once, in five lines with no id, the sounds
-started in the background. Read `engage-ping --help`. The rest of this page is history.
+**Retired on 22 Oct 2026 (Gavin, dotfiles-main Q5: 1).** From 19 Oct `pj-ping` was a forwarding
+stub of `engage-ping` (wean B13); nothing had called it since 20 Oct, so the stub, its selftest
+and the `pj-question-ping.sh` hook moved to `~/RETIRED/2026-10-22-pj-ping/`  (see its
+`MANIFEST.tsv`). Use `engage-ping`; read `engage-ping --help`. The rest of this page is history.
 
 `pj-ping` is the one command every pj session and the `pj-question-ping.sh`
 hook use to get Gavin's attention (D-20260921-A10): four sounds, then two

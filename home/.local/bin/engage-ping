@@ -9,7 +9,7 @@
 # WHY IT EXISTS. Wean B13 (goal 16), Gavin's plan ENGAGE-PING.html (e-conductor Q28 (v2), 19 Oct
 # 2026): pj-ping sent every message twice, in two parts, each with a four-letter id, and Gavin
 # said "I don't want the codes" (6:46 PM 19 Oct). engage-ping sends one message, once, that reads
-# on its own. pj-ping is now a stub that forwards here, kept until no older session calls it.
+# on its own. pj-ping was a stub that forwarded here until it was retired on 22 Oct 2026 (no call for two days).
 #
 # THE TEXT, five lines joined by a newline:
 #   1. what happened  "<icon> <label>: <summary>"            (the ntfy title)

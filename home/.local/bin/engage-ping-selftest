@@ -10,14 +10,12 @@
 # the time), with no id; each kind on its own routes (sounds, iMessage, ntfy), the sounds started
 # in the background so nothing waits for them (Q89); a refused or
 # switched-off ntfy send goes by iMessage instead; the log holds the time, never the text.
-# And that the pj-ping and pj-ping-selftest stubs forward every call, unchanged, to engage-ping
-# and engage-ping-selftest, marking each call in engage's mousetrap first.
+# The pj-ping and pj-ping-selftest stubs that forwarded to it, and their section 14 here, were
+# retired on 22 Oct 2026 (Gavin, dotfiles-main Q5: 1): no call for two days.
 #
 # Every "nothing happened" arm is twinned with an arm in the same harness that hears a call.
 #
 # PJ_PING_TOOL=<path> tests another copy (an absolute path: the suite changes folder).
-# ENGAGE_PING_STUB / ENGAGE_PING_SELFTEST_STUB=<path> test other stub copies; the defaults
-# are pj-ping and pj-ping-selftest in the tool's own folder.
 # Exit: 0 all passed | 1 a case failed | 2 could not run (invalid trial).
 
 # Read this whole file before running any of it, so an edit saved mid-run cannot change
@@ -31,9 +29,6 @@ set -uo pipefail
 TOOL="${PJ_PING_TOOL:-$(dirname "$0")/engage-ping}"
 [ -x "$TOOL" ] || { printf 'selftest: cannot find engage-ping at %s\n' "$TOOL" >&2; exit 2; }
 TOOL="$(builtin cd "$(dirname "$TOOL")" && pwd -P)/$(basename "$TOOL")"
-TOOLDIR="$(dirname "$TOOL")"
-STUB="${ENGAGE_PING_STUB:-$TOOLDIR/pj-ping}"
-STSTUB="${ENGAGE_PING_SELFTEST_STUB:-$TOOLDIR/pj-ping-selftest}"
 # The shipped setting: home/.config/engage-ping/ntfy.conf, two folders up from home/.local/bin.
 SHIPPED="$(dirname "$0")/../../.config/engage-ping/ntfy.conf"
 ROOT="$(mktemp -d "${TMPDIR:-/tmp}/engage-ping-selftest.XXXXXX")" || {
@@ -441,47 +436,6 @@ run question "q" --decision; r1=$RC
 run waiting "w" --you x --stopped; r2=$RC
 run done "d" --stopped; r3=$RC
 [ "$r1$r2$r3" = "222" ] && [ "$(ncalls)" -eq 0 ] && ok "13 --decision off waiting, --stopped off alarm -> exit 2" || bad "13 misplaced flags" "rc=$r1$r2$r3 calls=$(ncalls)"
-
-# ---- 14. The stubs --------------------------------------------------------------------
-SD="$ROOT/stub"; mkdir -p "$SD"
-if [ -f "$STUB" ]; then
-  cp "$STUB" "$SD/pj-ping" && chmod +x "$SD/pj-ping" && ln -sf "$TOOL" "$SD/engage-ping"
-  arm stub
-  : >"$ENGAGE_PING_FAKE_TRAP"
-  OUT="$("$SD/pj-ping" done "Finished" 2>"$ROOT/err")"; RC=$?; settle
-  [ "$RC" -eq 0 ] && [ "$OUT" = "$T1" ] && [ "$(nof curl)" -eq 1 ] && ok "14 a call through the pj-ping stub reaches engage-ping (control)" || bad "14 stub forwards" "rc=$RC out=$OUT calls=$(calls) err=$(cat "$ROOT/err")"
-  grep -Eqx 'trap log --ppid [0-9]+ --stub --tool pj-ping -- done Finished' "$ENGAGE_PING_FAKE_TRAP" && [ "$(wc -l <"$ENGAGE_PING_FAKE_TRAP" | tr -d ' ')" -eq 1 ] \
-    && ok "14 the stub marks its call in the mousetrap, once" || bad "14 trap mark" "$(cat "$ENGAGE_PING_FAKE_TRAP" 2>/dev/null)"
-  arm stub2
-  "$SD/pj-ping" waiting "x" --action "do y" >/dev/null 2>&1; settle
-  case "$(nth imsg 1)" in *"${NL}You: do y${NL}"*) ok "14 pj-ping waiting --action: the You line" ;; *) bad "14 stub --action" "$(nth imsg 1)" ;; esac
-  arm stub3
-  PJ_LAUNCHED_BY=conductor-x "$SD/pj-ping" question "q" >/dev/null 2>&1
-  [ "$(ncalls)" -eq 0 ] && ok "14 PJ_LAUNCHED_BY set: nothing sent through the stub" || bad "14 stub PING-1" "calls=$(calls)"
-  arm stub4
-  ENGAGE_TRAP_GO="$ROOT/no-such-engage-go" "$SD/pj-ping" done "d" >/dev/null 2>&1; RC=$?; settle
-  [ "$RC" -eq 0 ] && [ "$(nof curl)" -eq 1 ] && ok "14 no engage-go: the call still goes through" || bad "14 no engage-go" "rc=$RC calls=$(calls)"
-  SD2="$ROOT/stub-alone"; mkdir -p "$SD2"; cp "$STUB" "$SD2/pj-ping"; chmod +x "$SD2/pj-ping"
-  arm stub5
-  OUT="$(PATH="$FAKE:/usr/bin:/bin" "$SD2/pj-ping" done "d" 2>"$ROOT/err")"; RC=$?
-  [ "$RC" -eq 127 ] && grep -q engage-ping "$ROOT/err" && [ "$(ncalls)" -eq 0 ] && ok "14 no engage-ping beside it or on PATH: exit 127, named, nothing sent" || bad "14 stub alone" "rc=$RC err=$(cat "$ROOT/err")"
-  SD3="$ROOT/stub-loop"; mkdir -p "$SD3/path"; cp "$STUB" "$SD3/pj-ping"; chmod +x "$SD3/pj-ping"; ln -sf "$SD3/pj-ping" "$SD3/path/engage-ping"
-  arm stub6
-  perl -e 'alarm 5; exec @ARGV' env PATH="$SD3/path:$FAKE:/usr/bin:/bin" "$SD3/pj-ping" done "d" >/dev/null 2>"$ROOT/err"; RC=$?
-  [ "$RC" -eq 127 ] && [ "$(ncalls)" -eq 0 ] && ok "14 the only engage-ping on PATH is a link to the stub: exit 127, no loop" || bad "14 stub loop" "rc=$RC err=$(cat "$ROOT/err")"
-else bad "14 INVALID TRIAL: no pj-ping stub at $STUB" "-"; fi
-SS="$ROOT/ststub"; mkdir -p "$SS"
-if [ -f "$STSTUB" ]; then
-  cp "$STSTUB" "$SS/pj-ping-selftest"; chmod +x "$SS/pj-ping-selftest"
-  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >"%s/fake-st.args"\necho "engage-ping-selftest (fake)"\nexit 3\n' "$SS" >"$SS/engage-ping-selftest"
-  chmod +x "$SS/engage-ping-selftest"
-  : >"$ENGAGE_PING_FAKE_TRAP"
-  OUT="$("$SS/pj-ping-selftest" a b 2>/dev/null)"; RC=$?
-  [ "$RC" -eq 3 ] && [ "$OUT" = "engage-ping-selftest (fake)" ] && [ "$(cat "$SS/fake-st.args" 2>/dev/null)" = "a b" ] \
-    && grep -Eqx 'trap log --ppid [0-9]+ --stub --tool pj-ping-selftest -- a b' "$ENGAGE_PING_FAKE_TRAP" \
-    && ok "14 the pj-ping-selftest stub runs engage-ping-selftest with a b, its output and exit 3, marked once" \
-    || bad "14 selftest stub" "rc=$RC out=$OUT args=$(cat "$SS/fake-st.args" 2>/dev/null) trap=$(cat "$ENGAGE_PING_FAKE_TRAP")"
-else bad "14 INVALID TRIAL: no pj-ping-selftest stub at $STSTUB" "-"; fi
 
 # ---- 15. Each iMessage twice, one second apart (B13 part 1b) --------------------------
 # Gavin, 20 Oct 2026: "To send the iMessage twice for it to reach me, otherwise I won't get a

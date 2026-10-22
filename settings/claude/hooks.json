@@ -268,22 +268,6 @@
       ]
     },
     {
-      "event": "PreToolUse",
-      "matcher": "AskUserQuestion",
-      "script": "pj-question-ping.sh",
-      "targets": ["project"],
-      "entry": {
-        "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/pj-question-ping.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: pj-question-ping.sh is registered but ~/.claude/hooks/pj-question-ping.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: pj-question-ping.sh is registered but ~/.claude/hooks/pj-question-ping.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
-        "timeout": 5
-      },
-      "why": "PINGS Gavin at every AskUserQuestion popup: four sounds (Ping, Glass, Glass, Glass) then two imsg messages one second apart, per D-20260921-A10 as widened 2026-09-23 ('whenever there is one of those Ask User Question tool popups'). A hook because a rule the model must remember before each popup is forgotten on exactly the popup that stalls a session. Never blocks and never delays the popup: it prints nothing, exits 0, and runs the signal in a detached worker. PJ_NO_PING=1 disables it; a second popup from the same session inside 20 s is debounced. Project target only: pj is where the ruling applies",
-      "class": "alarm",
-      "legacy_commands": [
-        "test -x \"$HOME/.claude/hooks/pj-question-ping.sh\" && \"$HOME/.claude/hooks/pj-question-ping.sh\" || true"
-      ]
-    },
-    {
       "event": "SessionStart",
       "script": "herdr-agent-state.sh",
       "script_path": "$HOME/.claude/hooks/herdr-agent-state.sh",
@@ -700,6 +684,22 @@
       "class": "alarm",
       "legacy_commands": [
         "test -x \"$HOME/.local/bin/pj-launch-check\" && \"$HOME/.local/bin/pj-launch-check\" || true"
+      ]
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "AskUserQuestion",
+      "script": "pj-question-ping.sh",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.claude/hooks/pj-question-ping.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: pj-question-ping.sh is registered but ~/.claude/hooks/pj-question-ping.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: pj-question-ping.sh is registered but ~/.claude/hooks/pj-question-ping.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
+        "timeout": 5
+      },
+      "why": "PINGS Gavin at every AskUserQuestion popup: four sounds (Ping, Glass, Glass, Glass) then two imsg messages one second apart, per D-20260921-A10 as widened 2026-09-23 ('whenever there is one of those Ask User Question tool popups'). A hook because a rule the model must remember before each popup is forgotten on exactly the popup that stalls a session. Never blocks and never delays the popup: it prints nothing, exits 0, and runs the signal in a detached worker. PJ_NO_PING=1 disables it; a second popup from the same session inside 20 s is debounced. Project target only: pj is where the ruling applies",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/pj-question-ping.sh\" && \"$HOME/.claude/hooks/pj-question-ping.sh\" || true"
       ]
     }
   ]
