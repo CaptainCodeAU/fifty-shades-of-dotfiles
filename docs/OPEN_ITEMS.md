@@ -1,5 +1,10 @@
 # open-items -- what is still open, scoped to the project you are standing in
 
+**History:** this project moved to engage on 17 Oct 2026, so its to-dos are engage records in
+`~/CODE/Scaffoldings/fifty-shades-of-dotfiles-isolinear/records/` and `engage-go add` files
+them. Every drawer `WORK/` folder this file describes went to `~/RETIRED/2026-10-18-step-d/`
+on 19 Oct 2026 (wean-off-pj step B14). Kept as the record of how open-items worked.
+
 `open-items --help` is the usage. This file is the reasoning, moved out of the tool's
 header on 2026-09-20 (P5.1) because a session was measured reading 71 lines of essay twice
 to find the flags.
@@ -179,7 +184,7 @@ Test seams: `PJ_ID_CLAIMS_DIR` moves the folder, and `pj-id` REFUSES a fixture
 fixture folder.
 
 **Every pre-P8a ID still resolves.** The 2026-09-21 migration renamed 76 files and their
-`## ` header lines, but the ~680 citations inside reports, handoffs and committed docs were
+`##` header lines, but the ~680 citations inside reports, handoffs and committed docs were
 deliberately left as history. So `open-items close|park|set|reopen|decline` accepts a bare
 `W-YYYYMMDD-NN`, resolves it to the letter form, and SAYS which ID it resolved to. Two
 items answering to one legacy ID (the same number under two letters) is REFUSED with both
@@ -204,7 +209,7 @@ that would be a guess that reads like an answer, and on a write it edits the wro
 the refusal then prints their paths. A bare pre-P8a ID resolves as it does for `close`.
 
 **`show`** prints the block on stdout and `<id> in <project> (<path>)` on stderr, so the
-block pipes clean. It works on legacy drawers too, and stops at the next `## ` section. A
+block pipes clean. It works on legacy drawers too, and stops at the next `##` section. A
 miss is exit 1 with the denominator: items searched, every status, and the drawers.
 
 **`get`** prints one field's raw value. A field that repeats (`holds-in`, `supersedes`)
