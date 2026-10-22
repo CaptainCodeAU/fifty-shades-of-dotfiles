@@ -21,8 +21,11 @@ set -uo pipefail
 # the line below names the binary under test on every run.
 DECIDED="${DECIDED:-$(dirname "$0")/decided}"
 [ -x "$DECIDED" ] || { echo "decided-selftest: no decided binary ($DECIDED) -- INVALID TRIAL" >&2; exit 2; }
+# Made absolute before any arm runs (#3399): run() cds into each fixture repo, so a relative
+# path such as ./decided-selftest's sibling stopped resolving and 238 arms failed rc 127.
+BIN="$(cd "$(dirname "$DECIDED")" && pwd -P)"; DECIDED="$BIN/$(basename "$DECIDED")"
 echo "decided-selftest: testing $DECIDED"
-BIN="$(cd "$(dirname "$DECIDED")" && pwd -P)"; export PATH="$BIN:$PATH"
+export PATH="$BIN:$PATH"
 command -v pj-id >/dev/null || { echo "decided-selftest: pj-id not on PATH -- INVALID TRIAL" >&2; exit 2; }
 
 T=$(mktemp -d "${TMPDIR:-/tmp}/decided-selftest.XXXXXX") || { echo "decided-selftest: mktemp failed -- INVALID TRIAL" >&2; exit 2; }
