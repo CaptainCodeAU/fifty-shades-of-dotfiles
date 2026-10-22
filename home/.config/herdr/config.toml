@@ -271,14 +271,12 @@ height = "70%"
 [ui.toast]
 delivery = "herdr"
 
-# Every pop-up in the top right corner (Gavin, 22 Oct: bottom left was tried the same
-# day and was harder to read). herdr's defaults are bottom right for pop-ups and bottom
-# centre for the "copied to clipboard" one. A pop-up sent with its own --position still
-# goes where it asks. herdr has no setting for the distance from the edge.
+# Pop-ups in the top right corner, not herdr's default bottom right (Gavin, 22 Oct:
+# bottom left was tried the same day and was harder to read). A pop-up sent with its own
+# --position still goes where it asks. herdr has no setting for the distance from the edge.
+# Every pop-up makes a sound, except "copied to clipboard": it stays silent and at herdr's
+# default bottom centre, on purpose (Gavin, 22 Oct, Q4), so [ui.toast.clipboard] is unset.
 [ui.toast.herdr]
-position = "top-right"
-
-[ui.toast.clipboard]
 position = "top-right"
 
 # The "needs attention" sound (Gavin, 17 Oct, dotfiles-main Q46): a short camera click
