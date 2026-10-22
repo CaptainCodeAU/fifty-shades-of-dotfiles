@@ -262,7 +262,14 @@ fi
 # where the folder is missing; never added twice. Accepted risk: anything engage
 # puts in that folder takes over a same-named tool in every shell. Remove with the
 # tools (engage plan goals 13 and 14).
-[[ -d "$HOME/CODE/CaptainCodeAU/engage/trap/bin" ]] && path=("$HOME/CODE/CaptainCodeAU/engage/trap/bin" ${path:#$HOME/CODE/CaptainCodeAU/engage/trap/bin})
+# NOT IN MAKEITSO (Gavin, dotfiles-main, 22 Oct 2026: "This is unacceptable"): a shell
+# with MAKEITSO=1 takes the folder OUT of PATH instead, since a makeitso session's
+# shells inherit a PATH that may still hold it. makeitso strips it from Claude's too.
+if [[ ${MAKEITSO-} == 1 ]]; then
+  path=(${path:#$HOME/CODE/CaptainCodeAU/engage/trap/bin})
+elif [[ -d "$HOME/CODE/CaptainCodeAU/engage/trap/bin" ]]; then
+  path=("$HOME/CODE/CaptainCodeAU/engage/trap/bin" ${path:#$HOME/CODE/CaptainCodeAU/engage/trap/bin})
+fi
 
 # Second, independent source for pnpm's minimumReleaseAge/trustPolicy, on top
 # of home/.config/pnpm/config.yaml. pnpm 11.18.0 hardened self-update to read
