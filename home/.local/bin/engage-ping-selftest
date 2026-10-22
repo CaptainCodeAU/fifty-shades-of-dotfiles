@@ -6,7 +6,7 @@
 # arm sends a message, plays a sound, reaches a gateway or writes engage's mousetrap log.
 #
 # THE CLAIM UNDER TEST (wean B13, goal 16; Gavin's plan ENGAGE-PING.html, e-conductor Q28 (v2)):
-# one message, sent once, in five lines (what happened, where, the detail, what Gavin can do,
+# one message, sent once, in labelled lines (what happened, what it means, what Gavin can do,
 # the time), with no id; each kind on its own routes (sounds, iMessage, ntfy), the sounds started
 # in the background so nothing waits for them (Q89); a refused or
 # switched-off ntfy send goes by iMessage instead; the log holds the time, never the text.
@@ -160,39 +160,99 @@ run question "Pick a delivery route"
 [ "$(calls)" = "afplay afplay afplay afplay imsg imsg curl " ] && [ "$RC" -eq 0 ] \
   && ok "1 a question: 4 sounds started, its imsg twice (B13 part 1b), then 1 curl" || bad "1 one text, once" "rc=$RC calls=$(calls) err=$ERR"
 
-# ---- 2. The five lines, for each kind -------------------------------------------------
+# ---- 2. The text, for each kind -------------------------------------------------------
+# Gavin, dotfiles-main 22 Oct 2026 (Q7 (v5), Q8: 3, Q10: 2, Q11: 1): the title is the project,
+# the icon and the summary; the lines under it are labelled; the session and the time come
+# last; nothing is said twice.
 arm lines
 run question "Pick a delivery route"
-want="$Q Question: Pick a delivery route${NL}$WHERE${NL}You: answer the question box in the st-sess tab.${NL}$T1"
-[ "$(nth imsg 1)" = "$want" ] && ok "2 question: title, Where, the default You line, the time" || bad "2 question text" "$(nth imsg 1)"
+want="st-proj $Q Pick a delivery route${NL}Do: answer the question box.${NL}Session: st-sess${NL}Time: $T1"
+[ "$(nth imsg 1)" = "$want" ] && ok "2 question: project first, the default Do line, the session and time last" || bad "2 question text" "$(nth imsg 1)"
 arm lines2
 run question "Pick a delivery route" --detail "Two routes; B is faster." --ref Q26
-want="$Q Question: Pick a delivery route${NL}$WHERE $DOT Q26${NL}Two routes; B is faster.${NL}You: answer the question box in the st-sess tab.${NL}$T1"
-[ "$(nth imsg 1)" = "$want" ] && ok "2 --ref joins the Where line; --detail is line 3" || bad "2 ref and detail" "$(nth imsg 1)"
+want="st-proj $Q Pick a delivery route${NL}Ask: Two routes; B is faster.${NL}Do: answer the question box.${NL}Ref: Q26${NL}Session: st-sess${NL}Time: $T1"
+[ "$(nth imsg 1)" = "$want" ] && ok "2 a question's --detail is its Ask line; --ref is a Ref line when opened" || bad "2 ref and detail" "$(nth imsg 1)"
 arm lines3
 run waiting "Blocked on sudo" --you "run the sudo step in the dotfiles tab"
-want="$WI Step for you: Blocked on sudo${NL}$WHERE${NL}You: run the sudo step in the dotfiles tab${NL}$T1"
-[ "$(nth imsg 1)" = "$want" ] && ok "2 waiting: Step for you, with its --you" || bad "2 waiting text" "$(nth imsg 1)"
+want="st-proj $WI Blocked on sudo${NL}Do: run the sudo step in the dotfiles tab${NL}Session: st-sess${NL}Time: $T1"
+[ "$(nth imsg 1)" = "$want" ] && ok "2 waiting: the hourglass, its --you as the Do line" || bad "2 waiting text" "$(nth imsg 1)"
 arm lines4
 run waiting "Q26 is open" --decision --you "answer Q26"
-case "$(nth imsg 1)" in "$Q Decision: Q26 is open${NL}"*) ok "2 waiting --decision: the Decision title" ;; *) bad "2 decision title" "$(nth imsg 1)" ;; esac
+case "$(nth imsg 1)" in "st-proj $Q Q26 is open${NL}"*) ok "2 waiting --decision: the question mark" ;; *) bad "2 decision title" "$(nth imsg 1)" ;; esac
 arm lines5
 run alarm "The relay stopped" --you "look at mlbox"
-case "$(nth imsg 1)" in "$OR Alarm: The relay stopped${NL}"*) ok "2 alarm: the orange title" ;; *) bad "2 alarm title" "$(nth imsg 1)" ;; esac
+case "$(nth imsg 1)" in "st-proj $OR The relay stopped${NL}"*) ok "2 alarm: the orange dot" ;; *) bad "2 alarm title" "$(nth imsg 1)" ;; esac
 arm lines6
 run alarm "The relay stopped" --stopped --you "look at mlbox"
-case "$(nth imsg 1)" in "$RD Alarm: The relay stopped${NL}"*) ok "2 alarm --stopped: the red title" ;; *) bad "2 stopped title" "$(nth imsg 1)" ;; esac
+case "$(nth imsg 1)" in "st-proj $RD The relay stopped${NL}"*) ok "2 alarm --stopped: the red dot" ;; *) bad "2 stopped title" "$(nth imsg 1)" ;; esac
 arm lines7
 run test "Ping route"
-want="$TI Test: Ping route${NL}$WHERE${NL}You: tell st-sess when you see it.${NL}$T1"
-[ "$(nth imsg 1)" = "$want" ] && ok "2 test: the Test title and its default You line" || bad "2 test text" "$(nth imsg 1)"
+want="st-proj $TI Ping route${NL}Do: tell st-sess when you see it.${NL}Session: st-sess${NL}Time: $T1"
+[ "$(nth imsg 1)" = "$want" ] && ok "2 test: its default Do line names the session" || bad "2 test text" "$(nth imsg 1)"
 arm lines8
 run done "Built B13"
-want="$GW/unsorted H[X-Title: $OKI Finished: Built B13] H[X-Priority: 2] B[$WHERE${NL}You: nothing needed.${NL}$T1]"
-[ "$(nth curl 1)" = "$want" ] && ok "2 done, by ntfy: title line 1, body lines 2 to 5, nothing needed." || bad "2 done text" "$(nth curl 1)"
+want="$GW/unsorted H[X-Title: st-proj $OKI Built B13] H[X-Priority: 2] B[Session: st-sess${NL}Time: $T1]"
+[ "$(nth curl 1)" = "$want" ] && ok "2 done, by ntfy: the title in X-Title, no Do line, the body under it" || bad "2 done text" "$(nth curl 1)"
 arm lines9
 ENGAGE_PING_NOW="$NOW2" run question "Afternoon"
-case "$(nth imsg 1)" in *"${NL}$T2") ok "2 the time is 12-hour Melbourne, no leading zeros ($T2)" ;; *) bad "2 afternoon time" "$(nth imsg 1)" ;; esac
+case "$(nth imsg 1)" in *"${NL}Time: $T2") ok "2 the time is 12-hour Melbourne, no leading zeros ($T2)" ;; *) bad "2 afternoon time" "$(nth imsg 1)" ;; esac
+arm lines10
+run question "Pick" --detail "d" --ref Q1
+t=$(nth curl 1 | perl -ne 'print $1 if /H\[X-Title: (.*?)\]/'); b=$(nth curl 1 | perl -ne 'print $1 if /B\[(.*)\]$/')
+[ -n "$t" ] && [ "$(nth imsg 1)" = "$t${NL}$b" ] && ok "2 the iMessage is the ntfy title, a newline, then the ntfy body" || bad "2 imsg and ntfy differ" "imsg=$(nth imsg 1) title=$t body=$b"
+
+# ---- 2b. The labelled lines, the opened part and Next ---------------------------------
+arm full
+run done "engage-ping fixed" --line "Was: a" --line "Now: b" --line "Proof: c" --more "Told: d" --more "Record: e" --next "the wean check" --held "nothing"
+want="st-proj $OKI engage-ping fixed${NL}Was: a${NL}Now: b${NL}Proof: c${NL}Told: d${NL}Record: e${NL}Session: st-sess${NL}Time: $T1${NL}${NL}Next: the wean check${NL}Held up: nothing"
+[ "$RC" -eq 0 ] && [ "$(nth curl 1)" = "$GW/unsorted H[X-Title: st-proj $OKI engage-ping fixed] H[X-Priority: 2] B[${want#*"${NL}"}]" ] \
+  && ok "2b 3 --line, 2 --more, the session and time, a blank line, then Next and Held up last" || bad "2b full layout" "rc=$RC $(nth curl 1)"
+arm order
+run waiting "w" --you "x" --detail "d" --line "L: 1"
+case "$(nth imsg 1)" in "st-proj $WI w${NL}L: 1${NL}Note: d${NL}Do: x${NL}Session: "*) ok "2b order: each --line, then --detail as Note, then --you as Do" ;; *) bad "2b order" "$(nth imsg 1)" ;; esac
+arm overflow
+run waiting "w" --line "A: 1" --line "B: 2" --line "C: 3" --you "x"
+case "$(nth imsg 1)" in "st-proj $WI w${NL}A: 1${NL}B: 2${NL}C: 3${NL}Do: x${NL}Session: st-sess${NL}"*) ok "2b a 4th preview line goes first in the opened part, not lost" ;; *) bad "2b overflow" "$(nth imsg 1)" ;; esac
+grep -q '4 preview lines' <<<"$ERR" && ok "2b ... and stderr says only 3 show" || bad "2b overflow note" "err=$ERR"
+arm heldonly
+run done "d" --held "the push"
+case "$(nth curl 1)" in *"B[Session: st-sess${NL}Time: $T1${NL}${NL}Held up: the push]") ok "2b --held alone: the blank line, then Held up" ;; *) bad "2b held only" "$(nth curl 1)" ;; esac
+arm nonext
+run done "d" --line "A: 1" --more "B: 2"
+c=$(nth curl 1)
+case "$c" in *"${NL}${NL}"*) bad "2b a blank line with no Next or Held up" "$c" ;; *"B[A: 1${NL}B: 2${NL}Session: st-sess${NL}Time: $T1]") ok "2b control: no --next or --held, no blank line" ;; *) bad "2b no-next body" "$c" ;; esac
+arm linebad
+run done "d" --line "A" --line "B" --line "C" --line "D"; r1=$RC
+run done "d" $(for i in 1 2 3 4 5 6 7 8 9; do printf -- '--more m%s ' "$i"; done); r2=$RC
+run done "d" --line "   "; r3=$RC
+run done "d" --next ""; r4=$RC
+run done "d" --line; r5=$RC
+run done "d" --held $'\t'; r6=$RC
+run done "d" --more " "; r7=$RC
+[ "$r1$r2$r3$r4$r5$r6$r7" = "2222222" ] && [ "$(ncalls)" -eq 0 ] \
+  && ok "2b 4 --line, 9 --more, a blank --line, --next, --held or --more, or a missing value: exit 2, nothing sent" || bad "2b bad lines" "rc=$r1$r2$r3$r4$r5$r6$r7 calls=$(ncalls)"
+arm linemax
+run done "d" --line "A: 1" --line "B: 2" --line "C: 3" $(for i in 1 2 3 4 5 6 7 8; do printf -- '--more m%s ' "$i"; done)
+[ "$RC" -eq 0 ] && [ "$(nof curl)" -eq 1 ] && ok "2b control: 3 --line and 8 --more are sent" || bad "2b max lines" "rc=$RC err=$ERR"
+arm lineclean
+run done "d" --line $'Was:\033[2J a\nb '"ghp_$(printf 'A%.0s' $(seq 36))" --next $'x\ny'
+case "$(nth curl 1)" in *"B[Was: [2J a b [redacted]${NL}"*"${NL}Next: x y]") ok "2b --line and --next are cleaned: no control character, no newline, no token" ;; *) bad "2b line cleaning" "$(nth curl 1)" ;; esac
+
+# ---- 2c. Notes when a message does not fit the lock screen: still sent -----------------
+arm fit
+run done "a summary far too long for the title"
+[ "$RC" -eq 0 ] && [ "$(nof curl)" -eq 1 ] && grep -q 'the title is 47 characters wide' <<<"$ERR" \
+  && ok "2c a 47-character title: sent, exit 0, and stderr names its width" || bad "2c long title" "rc=$RC err=$ERR"
+arm fit2
+run done "short" --line "A: $(printf 'x%.0s' $(seq 38))" --line "B: $(printf 'x%.0s' $(seq 37))"
+grep -q 'preview line 1 is 41 characters' <<<"$ERR" && ! grep -q 'preview line 2' <<<"$ERR" \
+  && ok "2c a 41-character preview line gets a note; a 40-character one does not" || bad "2c line width" "err=$ERR"
+arm fit3
+run done "engage-ping fixed" --line "Was: sandbox runs failed, no log."
+[ -z "$ERR" ] && ok "2c control: a message that fits prints nothing on stderr" || bad "2c fits" "err=$ERR"
+arm fit4
+run done "$(printf '\xc3\xa9%.0s' $(seq 14))"
+[ -z "$ERR" ] && ok "2c the width counts characters, not bytes: 14 accented letters fit" || bad "2c bytes" "err=$ERR"
 
 # ---- 3. No id anywhere; stdout is the time ---------------------------------------------
 arm noid
@@ -255,7 +315,7 @@ run done "d" --topic "$(printf 'a%.0s' $(seq 32))"; r4=$RC
 for code in 403 502 000; do
   arm "refused-$code"
   ENGAGE_PING_FAKE_HTTP="$code" run done "Built B13"
-  if [ "$RC" -eq 0 ] && [ "$(calls)" = "afplay curl imsg imsg " ] && [ "$(nth imsg 1)" = "$OKI Finished: Built B13${NL}$WHERE${NL}You: nothing needed.${NL}$T1" ] \
+  if [ "$RC" -eq 0 ] && [ "$(calls)" = "afplay curl imsg imsg " ] && [ "$(nth imsg 1)" = "st-proj $OKI Built B13${NL}Session: st-sess${NL}Time: $T1" ] \
      && grep -q "ntfy=unsorted:$code fallback=imsg:0,0" "$LOG"; then
     ok "7 ntfy answers $code: a done goes by imsg instead, twice, logged fallback=imsg:0,0"
   else bad "7 refused $code" "rc=$RC calls=$(calls) log=$(cat "$LOG" 2>/dev/null)"; fi
@@ -305,27 +365,27 @@ case "$(nth curl 1)" in "$GW/unsorted "*) ok "8 control: on: yes, the gateway on
 # ---- 9. The session name and the project ----------------------------------------------
 arm sess
 run test "t"
-case "$(nth imsg 1)" in *"${NL}st-proj $DOT st-sess${NL}"*) ok "9 by CLAUDE_PID's session file; the project from its cwd, not the calling folder" ;; *) bad "9 by pid" "$(nth imsg 1)" ;; esac
+case "$(nth imsg 1)" in "st-proj $TI t${NL}"*"${NL}Session: st-sess${NL}"*) ok "9 by CLAUDE_PID's session file; the project from its cwd, not the calling folder" ;; *) bad "9 by pid" "$(nth imsg 1)" ;; esac
 arm sess2
 CLAUDE_PID=9999 CLAUDE_CODE_SESSION_ID=sess-uuid-2 run test "t"
-case "$(nth imsg 1)" in *"${NL}other-proj $DOT st-other${NL}"*) ok "9 no file for CLAUDE_PID: found by sessionId" ;; *) bad "9 by session id" "$(nth imsg 1)" ;; esac
+case "$(nth imsg 1)" in "other-proj $TI t${NL}"*"${NL}Session: st-other${NL}"*) ok "9 no file for CLAUDE_PID: found by sessionId" ;; *) bad "9 by session id" "$(nth imsg 1)" ;; esac
 arm sess3
 CLAUDE_PID=9999 CLAUDE_CODE_SESSION_ID=nope CLAUDE_CODE_SESSION_NAME=named run test "t"
-case "$(nth imsg 1)" in *"${NL}elsewhere $DOT named${NL}You: tell named when you see it.${NL}"*) ok "9 no session file: CLAUDE_CODE_SESSION_NAME, the project from the folder" ;; *) bad "9 by env name" "$(nth imsg 1)" ;; esac
+case "$(nth imsg 1)" in "elsewhere $TI t${NL}Do: tell named when you see it.${NL}Session: named${NL}"*) ok "9 no session file: CLAUDE_CODE_SESSION_NAME, the project from the folder" ;; *) bad "9 by env name" "$(nth imsg 1)" ;; esac
 arm sess4
 CLAUDE_PID=9999 CLAUDE_CODE_SESSION_ID=nope PJ_SESSION_NAME=pjname run question "q"
-case "$(nth imsg 1)" in *"${NL}elsewhere $DOT pjname${NL}"*) ok "9 then PJ_SESSION_NAME" ;; *) bad "9 by PJ_SESSION_NAME" "$(nth imsg 1)" ;; esac
+case "$(nth imsg 1)" in "elsewhere $Q q${NL}"*"${NL}Session: pjname${NL}"*) ok "9 then PJ_SESSION_NAME" ;; *) bad "9 by PJ_SESSION_NAME" "$(nth imsg 1)" ;; esac
 arm sess5
 CLAUDE_PID=9999 CLAUDE_CODE_SESSION_ID=nope run question "q"
-want="$Q Question: q${NL}elsewhere${NL}You: answer the question box.${NL}$T1"
-[ "$(nth imsg 1)" = "$want" ] && ok "9 no name at all: the Where line is the project alone; the plain question default" || bad "9 no name" "$(nth imsg 1)"
+want="elsewhere $Q q${NL}Do: answer the question box.${NL}Time: $T1"
+[ "$(nth imsg 1)" = "$want" ] && ok "9 no name at all: no Session line; the project from the folder" || bad "9 no name" "$(nth imsg 1)"
 arm sess6
 CLAUDE_PID=9999 CLAUDE_CODE_SESSION_ID=nope run test "t"
-case "$(nth imsg 1)" in *"${NL}You: tell the session when you see it.${NL}"*) ok "9 no name: the plain test default" ;; *) bad "9 test default" "$(nth imsg 1)" ;; esac
+case "$(nth imsg 1)" in *"${NL}Do: tell the session when you see it.${NL}"*) ok "9 no name: the plain test default" ;; *) bad "9 test default" "$(nth imsg 1)" ;; esac
 mkdir -p "$ROOT/st-proj/.claude" && printf 'session-alias: stp\n' >"$ROOT/st-proj/.claude/pj-homes"
 arm sess7
 run test "t"
-case "$(nth imsg 1)" in *"${NL}stp $DOT st-sess${NL}"*) ok "9 the session's repo's session-alias names the project" ;; *) bad "9 alias" "$(nth imsg 1)" ;; esac
+case "$(nth imsg 1)" in "stp $TI t${NL}"*) ok "9 the session's repo's session-alias names the project" ;; *) bad "9 alias" "$(nth imsg 1)" ;; esac
 command mv -f "$ROOT/st-proj/.claude/pj-homes" "$ROOT/pj-homes.used"   # moved aside, never deleted
 
 # ---- 10. Cleaning and caps ------------------------------------------------------------
@@ -335,20 +395,20 @@ run question $'Hi\033[31mRED\xe2\x80\xaeevil\tx '"$tok" --detail $'line one\nlin
 m=$(nth imsg 1)
 if printf '%s' "$m" | perl -CSD -ne 'exit(/[\x00-\x1F\x7F-\x9F\x{202A}-\x{202E}]/ ? 1 : 0)'; then ok "10 no control or bidi character reaches the text"; else bad "10 control chars" "$m"; fi
 case "$m" in *ghp_*) bad "10 a token reached the text" "$m" ;; *) ok "10 token shapes become [redacted]" ;; esac
-want="$Q Question: Hi [31mRED evil x [redacted]${NL}$WHERE $DOT Q2 6${NL}line one line two [redacted]${NL}You: do it now${NL}$T1"
-[ "$m" = "$want" ] && ok "10 a newline inside a part becomes a space: still exactly five lines" || bad "10 parts stay on their lines" "$m"
+want="st-proj $Q Hi [31mRED evil x [redacted]${NL}Ask: line one line two [redacted]${NL}Do: do it now${NL}Ref: Q2 6${NL}Session: st-sess${NL}Time: $T1"
+[ "$m" = "$want" ] && ok "10 a newline inside a part becomes a space: no part adds a line" || bad "10 parts stay on their lines" "$m"
 arm caps
 run question "$(printf 's%.0s' $(seq 200))" --detail "$(printf 'd%.0s' $(seq 400))" --you "$(printf 'y%.0s' $(seq 300))" --ref "$(printf 'r%.0s' $(seq 50))"
 m=$(nth imsg 1)
-s=$(printf '%s' "$m" | perl -ne 'print $1 if /Question: (s+)/'); d=$(printf '%s' "$m" | perl -ne 'print $1 if /\\n(d+)\\n/')
-y=$(printf '%s' "$m" | perl -ne 'print $1 if /You: (y+)/'); r=$(printf '%s' "$m" | perl -ne 'print $1 if / (r+)\\n/')
+s=$(printf '%s' "$m" | perl -ne 'print $1 if /^st-proj \S+ (s+)\\n/'); d=$(printf '%s' "$m" | perl -ne 'print $1 if /Ask: (d+)\\n/')
+y=$(printf '%s' "$m" | perl -ne 'print $1 if /Do: (y+)\\n/'); r=$(printf '%s' "$m" | perl -ne 'print $1 if /Ref: (r+)\\n/')
 [ "${#s}${#d}${#y}${#r}" = "8030016020" ] && ok "10 caps: summary 80, detail 300, you 160, ref 20" || bad "10 caps" "summary ${#s}, detail ${#d}, you ${#y}, ref ${#r}"
 cat >"$ROOT/sessions/4242.json" <<EOF
 {"pid":4242,"sessionId":"sess-uuid-1","cwd":"$ROOT/st-proj","name":"evil\u001b[2Jsess$(printf 'z%.0s' $(seq 60))"}
 EOF
 arm clean-sess
 run test "t"
-w=$(nth imsg 1 | perl -ne 'print $1 if /\\nst-proj \x{00B7} (.*?)\\n/ or /\\nst-proj \xc2\xb7 (.*?)\\n/')
+w=$(nth imsg 1 | perl -ne 'print $1 if /\\nSession: (.*?)\\n/')
 [ "${#w}" -eq 40 ] && ! printf '%s' "$w" | perl -ne 'exit(/[\x00-\x1F]/ ? 0 : 1)' && ok "10 a session name from the file is cleaned and capped at 40" || bad "10 session cleaning" "$(nth imsg 1)"
 printf '{"pid":4242,"sessionId":"sess-uuid-1","cwd":"%s","name":"st-sess"}\n' "$ROOT/st-proj" >"$ROOT/sessions/4242.json"
 
@@ -400,7 +460,7 @@ sleep 0.5
   && ok "12 bad kind, blank summary, unknown option, no summary, blank or missing value -> exit 2, nothing called or logged" \
   || bad "12 refusals" "rcs=$r1$r2$r3$r4$r5$r6 calls=$(ncalls)"
 run question "-starts with a dash"
-case "$(nth imsg 1)" in "$Q Question: -starts with a dash${NL}"*) ok "12 control: a summary starting with a dash is a summary" ;; *) bad "12 dash summary" "rc=$RC $(nth imsg 1)" ;; esac
+case "$(nth imsg 1)" in "st-proj $Q -starts with a dash${NL}"*) ok "12 control: a summary starting with a dash is a summary" ;; *) bad "12 dash summary" "rc=$RC $(nth imsg 1)" ;; esac
 arm noaf
 PJ_PING_AFPLAY="$ROOT/missing/afplay" run question "q"
 [ "$RC" -eq 1 ] && [ "$(calls)" = "imsg imsg curl " ] && grep -q 'queued	afplay missing;' "$LOG" && ok "12 afplay missing: the rest goes, named, exit 1" || bad "12 afplay missing" "rc=$RC calls=$(calls) $(cat "$LOG")"
@@ -430,10 +490,10 @@ run alarm "a"; r2=$RC; e2=$ERR
 [ "$r1$r2" = "22" ] && printf '%s%s' "$e1" "$e2" | grep -q -- '--you' && [ "$(ncalls)" -eq 0 ] \
   && ok "13 waiting and alarm without --you exit 2, naming --you, nothing sent" || bad "13 --you required" "rc=$r1$r2 err=$e1 $e2"
 run waiting "w" --action "do y"
-case "$(nth imsg 1)" in *"${NL}You: do y${NL}"*) ok "13 --action is read as --you" ;; *) bad "13 --action" "rc=$RC $(nth imsg 1)" ;; esac
+case "$(nth imsg 1)" in *"${NL}Do: do y${NL}"*) ok "13 --action is read as --you" ;; *) bad "13 --action" "rc=$RC $(nth imsg 1)" ;; esac
 arm you2
 run waiting "w" --you "first" --action "second"
-case "$(nth imsg 1)" in *"${NL}You: second${NL}"*) ok "13 --you then --action: the last one wins" ;; *) bad "13 last wins" "$(nth imsg 1)" ;; esac
+case "$(nth imsg 1)" in *"${NL}Do: second${NL}"*) ok "13 --you then --action: the last one wins" ;; *) bad "13 last wins" "$(nth imsg 1)" ;; esac
 arm you3
 run question "q" --decision; r1=$RC
 run waiting "w" --you x --stopped; r2=$RC

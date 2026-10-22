@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# engage-ping -- tell Gavin something happened: one message, sent once, five lines, no id.
+# engage-ping -- tell Gavin something happened: one message, sent once, no id, the important
+# part readable on the lock screen without opening it.
 #
-#   engage-ping <question|waiting|done|alarm|test> "<what happened>" [--detail "<text>"]
-#               [--you "<what Gavin can do>"] [--ref "<Q26 or worker 16r>"] [--topic <topic>]
-#               [--decision] [--stopped] [--detach]
+#   engage-ping <question|waiting|done|alarm|test> "<what happened>"
+#               [--line "<Label: text>"]... [--more "<Label: text>"]... [--next "<text>"]
+#               [--held "<text>"] [--detail "<text>"] [--you "<what Gavin can do>"]
+#               [--ref "<Q26 or worker 16r>"] [--topic <topic>] [--decision] [--stopped] [--detach]
 #   engage-ping --help | --selftest
 #
 # WHY IT EXISTS. Wean B13 (goal 16), Gavin's plan ENGAGE-PING.html (e-conductor Q28 (v2), 19 Oct
@@ -11,20 +13,29 @@
 # said "I don't want the codes" (6:46 PM 19 Oct). engage-ping sends one message, once, that reads
 # on its own. pj-ping was a stub that forwarded here until it was retired on 22 Oct 2026 (no call for two days).
 #
-# THE TEXT, five lines joined by a newline:
-#   1. what happened  "<icon> <label>: <summary>"            (the ntfy title)
-#   2. where          "<project> . <session>[ . <ref>]"       (the dot is a middle dot)
-#   3. the detail     from --detail; left out when there is none
-#   4. what Gavin can do  "You: <you>"
-#   5. the time       12-hour Melbourne to the second, e.g. "9:56:56 AM 19 Oct"
+# THE TEXT (Gavin, dotfiles-main 22 Oct 2026: Q7 (v5) "2C, but the next comes last", Q8: 3,
+# Q10: 2, Q11: 1, and "don't waste the notification real estate"). The phone's lock screen shows
+# the title and 3 lines under it; the rest shows when the message is opened. Nothing is said twice.
+#   the title        "<project> <icon> <summary>"   about 32 characters fit; a longer one is still
+#                    sent, with a note on stderr. No session name: the project leads.
+#   3 preview lines  each "<Label>: <text>", about 40 characters each (a longer one wraps and
+#                    pushes the last line off the lock screen; a note on stderr). Made from, in
+#                    order: each --line; then --detail as "Ask: <detail>" for a question, else
+#                    "Note: <detail>"; then --you as "Do: <you>", or the kind's default Do line.
+#   when opened      any preview line past the third, each --more, "Ref: <ref>",
+#                    "Session: <session>", "Time: <9:56:56 AM 19 Oct>" (12-hour Melbourne).
+#   last, after a blank line, only when given: "Next: <next>" and "Held up: <held>".
 #
-#   kind                 label           You line when there is no --you
-#   question             ? Question      answer the question box in the <session> tab.
-#   waiting              ... Step for you   NONE: --you (or --action) is required
-#   waiting --decision   ? Decision      NONE: --you is required
-#   done                 ok Finished     nothing needed.
-#   alarm                orange Alarm    NONE: --you is required; --stopped makes it red, "work has stopped"
-#   test                 lab Test        tell <session> when you see it.
+#   kind                 icon     Do line when there is no --you
+#   question             ?        Do: answer the question box.
+#   waiting              ...      NONE: --you (or --action) is required
+#   waiting --decision   ?        NONE: --you is required
+#   done                 ok       none: a finished message needs nothing from Gavin
+#   alarm                orange   NONE: --you is required; --stopped makes it red, "work has stopped"
+#   test                 lab      Do: tell <session> when you see it.
+#
+# At most 3 --line and 8 --more. Old callers that pass only --detail and --you get the same
+# layout through the mapping above.
 #
 # WHERE EACH KIND GOES, in this order: the sounds, the iMessage, then ntfy. The sounds start in
 # the background and nothing waits for them (Gavin, 19 Oct: "it needs to be asynchronous,
@@ -35,9 +46,10 @@
 #   done                      1 sound (Ping), no iMessage, ntfy priority 2
 #   test                      1 sound, the Test iMessage, and ntfy's robot form: title
 #                             "<robot> AGENT . engage-ping self-test", priority 1, tag robot,
-#                             body "test, ignore", the Where line and the time. No real message
-#                             carries the robot or any X-Tags.
-# A real message to ntfy: X-Title line 1, X-Priority from the table, body lines 2 to 5.
+#                             body "test, ignore", "<project> . <session>" and the time. No real
+#                             message carries the robot or any X-Tags.
+# A real message to ntfy: X-Title the title, X-Priority from the table, the body every line under
+# it. The iMessage is the title, a newline, then the same body.
 # EVERY iMESSAGE GOES TWICE, one second apart, the same text (wean B13 part 1b; Gavin, 20 Oct
 # 2026: "To send the iMessage twice for it to reach me, otherwise I won't get a notification for
 # it"), as old pj-ping did. Both are tried even when the first fails.
@@ -59,15 +71,16 @@
 # THE NAMES. <session> is the "name" in the Claude session file whose sessionId is
 # $CLAUDE_CODE_SESSION_ID: first <sessions>/$CLAUDE_PID.json, then any <sessions>/*.json, where
 # <sessions> is $ENGAGE_PING_SESSIONS, else ~/.claude/sessions. Else $CLAUDE_CODE_SESSION_NAME,
-# else $PJ_SESSION_NAME, else none (the Where line is then the project alone). <project> is the
+# else $PJ_SESSION_NAME, else none (then no Session line). <project> is the
 # main repo's session-alias: from .claude/pj-homes, else its basename (a linked worktree adds
 # /<worktree>; outside git, the folder's basename), worked out from the session file's cwd when
 # there is one, else from the current folder.
 #
-# TEXT IS UNTRUSTED. Every part (summary, detail, you, ref, project, session) has its control,
-# bidi and zero-width characters turned into a space, token shapes into [redacted], whitespace
-# squeezed, and is capped: summary 80, detail 300, you 160, ref 20, project 40, session 40. A
-# newline exists only between the five lines, so no part can add a line or an ntfy header.
+# TEXT IS UNTRUSTED. Every part (summary, each line, detail, you, ref, next, held, project,
+# session) has its control, bidi and zero-width characters turned into a space, token shapes into
+# [redacted], whitespace squeezed, and is capped: summary 80, --line 120, --more 160, detail 300,
+# you 160, next 160, held 160, ref 20, project 40, session 40. A newline exists only between the
+# lines engage-ping builds, so no part can add a line or an ntfy header.
 # imsg sends to $IMSG_TO only; engage-ping cannot address anyone.
 #
 # THE LOG: $PJ_PING_LOG, else $PJ_PING_STATE_DIR/ping.log, else
@@ -218,7 +231,7 @@ session_file() {
   return 0
 }
 
-# project_label <folder>: the name in the Where line (see THE NAMES). A linked worktree is the
+# project_label <folder>: the name that starts the title (see THE NAMES). A linked worktree is the
 # one where --git-dir and --git-common-dir differ.
 project_label() {
   local d="$1" common gdir main n top
@@ -245,12 +258,17 @@ case "${1:-}" in
 esac
 
 # Positional first, so a summary that begins with a dash is still a summary.
-[ $# -ge 2 ] || die2 "usage: engage-ping <question|waiting|done|alarm|test> \"<what happened>\" [--detail ...] [--you ...] [--ref ...] [--topic ...] [--decision] [--stopped] [--detach]"
+[ $# -ge 2 ] || die2 "usage: engage-ping <question|waiting|done|alarm|test> \"<what happened>\" [--line ...] [--more ...] [--next ...] [--held ...] [--detail ...] [--you ...] [--ref ...] [--topic ...] [--decision] [--stopped] [--detach]"
 KIND="$1"; RAW_SUMMARY="$2"; shift 2
 RAW_DETAIL=""; HAVE_DETAIL=0; RAW_YOU=""; HAVE_YOU=0; RAW_REF=""; HAVE_REF=0; TOPIC="unsorted"; DECISION=0; STOPPED=0; DETACH=0
+RAW_NEXT=""; HAVE_NEXT=0; RAW_HELD=""; HAVE_HELD=0; RAW_LINES=(); RAW_MORE=()
 need() { [ "$2" -ge 2 ] || die2 "$1 needs a value"; }
 while [ $# -gt 0 ]; do
   case "$1" in
+  --line) need "$1" $#; RAW_LINES+=("$2"); shift 2 ;;
+  --more) need "$1" $#; RAW_MORE+=("$2"); shift 2 ;;
+  --next) need "$1" $#; RAW_NEXT="$2"; HAVE_NEXT=1; shift 2 ;;
+  --held) need "$1" $#; RAW_HELD="$2"; HAVE_HELD=1; shift 2 ;;
   --detail) need "$1" $#; RAW_DETAIL="$2"; HAVE_DETAIL=1; shift 2 ;;
   --you | --action) need "$1" $#; RAW_YOU="$2"; HAVE_YOU=1; shift 2 ;;
   --ref) need "$1" $#; RAW_REF="$2"; HAVE_REF=1; shift 2 ;;
@@ -263,24 +281,41 @@ while [ $# -gt 0 ]; do
 done
 
 case "$KIND" in
-question) ICON=$'\xe2\x9d\x93'; LABEL="Question"; NSOUNDS=4; HAS_IMSG=1; PRIO=4 ;;
-waiting)  ICON=$'\xe2\x8f\xb3'; LABEL="Step for you"; NSOUNDS=4; HAS_IMSG=1; PRIO=4
-          [ "$DECISION" -eq 1 ] && { ICON=$'\xe2\x9d\x93'; LABEL="Decision"; } ;;
-done)     ICON=$'\xe2\x9c\x85'; LABEL="Finished"; NSOUNDS=1; HAS_IMSG=0; PRIO=2 ;;
-alarm)    ICON=$'\xf0\x9f\x9f\xa0'; LABEL="Alarm"; NSOUNDS=4; HAS_IMSG=1; PRIO=4
+question) ICON=$'\xe2\x9d\x93'; NSOUNDS=4; HAS_IMSG=1; PRIO=4 ;;
+waiting)  ICON=$'\xe2\x8f\xb3'; NSOUNDS=4; HAS_IMSG=1; PRIO=4
+          [ "$DECISION" -eq 1 ] && ICON=$'\xe2\x9d\x93' ;;
+done)     ICON=$'\xe2\x9c\x85'; NSOUNDS=1; HAS_IMSG=0; PRIO=2 ;;
+alarm)    ICON=$'\xf0\x9f\x9f\xa0'; NSOUNDS=4; HAS_IMSG=1; PRIO=4
           [ "$STOPPED" -eq 1 ] && { ICON=$'\xf0\x9f\x94\xb4'; PRIO=5; } ;;
-test)     ICON=$'\xf0\x9f\xa7\xaa'; LABEL="Test"; NSOUNDS=1; HAS_IMSG=1; PRIO=1 ;;
+test)     ICON=$'\xf0\x9f\xa7\xaa'; NSOUNDS=1; HAS_IMSG=1; PRIO=1 ;;
 *) die2 "kind must be question, waiting, done, alarm or test (got: $(printf '%s' "$KIND" | clean 20))" ;;
 esac
 [ "$DECISION" -eq 0 ] || [ "$KIND" = waiting ] || die2 "--decision is for waiting only"
 [ "$STOPPED" -eq 0 ] || [ "$KIND" = alarm ] || die2 "--stopped is for alarm only"
 [[ $TOPIC =~ ^[a-z0-9_-]{1,32}$ ]] || die2 "--topic must be one word of a-z, 0-9, _ or -, at most 32 characters"
 
-{ IFS= read -r -d '' SUMMARY; IFS= read -r -d '' DETAIL; IFS= read -r -d '' REF; IFS= read -r -d '' YOU; } \
-  < <(clean_many 80 "$RAW_SUMMARY" 300 "$RAW_DETAIL" 20 "$RAW_REF" 160 "$RAW_YOU")
+[ "${#RAW_LINES[@]}" -le 3 ] || die2 "at most 3 --line: the lock screen shows 3 lines under the title"
+[ "${#RAW_MORE[@]}" -le 8 ] || die2 "at most 8 --more"
+
+# Every part cleaned in one perl: the six fixed parts, then each --line, then each --more.
+# The ${a[@]+...} form keeps an empty array from tripping set -u on bash 3.2.
+CL=(80 "$RAW_SUMMARY" 300 "$RAW_DETAIL" 20 "$RAW_REF" 160 "$RAW_YOU" 160 "$RAW_NEXT" 160 "$RAW_HELD")
+for x in ${RAW_LINES[@]+"${RAW_LINES[@]}"}; do CL+=(120 "$x"); done
+for x in ${RAW_MORE[@]+"${RAW_MORE[@]}"}; do CL+=(160 "$x"); done
+CLEANED=()
+while IFS= read -r -d '' x; do CLEANED+=("$x"); done < <(clean_many "${CL[@]}")
+SUMMARY="${CLEANED[0]-}"; DETAIL="${CLEANED[1]-}"; REF="${CLEANED[2]-}"; YOU="${CLEANED[3]-}"
+NEXT="${CLEANED[4]-}"; HELD="${CLEANED[5]-}"
+LINES=(); MORE=(); i=6
+for x in ${RAW_LINES[@]+"${RAW_LINES[@]}"}; do LINES+=("${CLEANED[i]-}"); i=$((i + 1)); done
+for x in ${RAW_MORE[@]+"${RAW_MORE[@]}"}; do MORE+=("${CLEANED[i]-}"); i=$((i + 1)); done
 [ -n "$SUMMARY" ] || die2 "the summary is empty"
 [ "$HAVE_DETAIL" -eq 0 ] || [ -n "$DETAIL" ] || die2 "--detail is empty"
 [ "$HAVE_REF" -eq 0 ] || [ -n "$REF" ] || die2 "--ref is empty"
+[ "$HAVE_NEXT" -eq 0 ] || [ -n "$NEXT" ] || die2 "--next is empty"
+[ "$HAVE_HELD" -eq 0 ] || [ -n "$HELD" ] || die2 "--held is empty"
+for x in ${LINES[@]+"${LINES[@]}"}; do [ -n "$x" ] || die2 "--line is empty"; done
+for x in ${MORE[@]+"${MORE[@]}"}; do [ -n "$x" ] || die2 "--more is empty"; done
 if [ "$HAVE_YOU" -eq 1 ]; then
   [ -n "$YOU" ] || die2 "--you is empty"
 else
@@ -337,20 +372,50 @@ fold_pending
 PROJECT="${PROJECT:-engage}"
 if [ "$HAVE_YOU" -eq 0 ]; then
   case "$KIND" in
-  done) YOU="nothing needed." ;;
-  question) if [ -n "$SESSION" ]; then YOU="answer the question box in the $SESSION tab."; else YOU="answer the question box."; fi ;;
+  question) YOU="answer the question box." ;;
   test) if [ -n "$SESSION" ]; then YOU="tell $SESSION when you see it."; else YOU="tell the session when you see it."; fi ;;
   esac
 fi
 
-L1="$ICON $LABEL: $SUMMARY"
-L2="$PROJECT${SESSION:+ $DOT $SESSION}${REF:+ $DOT $REF}"
-BODY="$L2${DETAIL:+$NL$DETAIL}${NL}You: $YOU${NL}$TTIME"
+# THE TEXT (see the header): the title, the preview lines, what shows when opened, then Next.
+SHOWN=(${LINES[@]+"${LINES[@]}"})
+if [ -n "$DETAIL" ]; then
+  if [ "$KIND" = question ]; then SHOWN+=("Ask: $DETAIL"); else SHOWN+=("Note: $DETAIL"); fi
+fi
+[ -n "$YOU" ] && SHOWN+=("Do: $YOU")
+BODY=""
+add() { BODY="${BODY:+$BODY$NL}$1"; }
+for x in ${SHOWN[@]+"${SHOWN[@]}"}; do add "$x"; done
+for x in ${MORE[@]+"${MORE[@]}"}; do add "$x"; done
+[ -n "$REF" ] && add "Ref: $REF"
+[ -n "$SESSION" ] && add "Session: $SESSION"
+add "Time: $TTIME"
+if [ -n "$NEXT$HELD" ]; then
+  BODY="$BODY$NL"
+  [ -n "$NEXT" ] && add "Next: $NEXT"
+  [ -n "$HELD" ] && add "Held up: $HELD"
+fi
+L1="$PROJECT $ICON $SUMMARY"
 TEXT="$L1$NL$BODY"
+
+# Notes, never a refusal: a message that does not fit is still sent. The emoji counts 2.
+fit_notes() {
+  local LC_ALL=en_US.UTF-8 w n=0 x
+  w=$(( ${#PROJECT} + ${#SUMMARY} + 4 ))
+  [ "$w" -le 32 ] || printf 'engage-ping: note: the title is %d characters wide and about 32 show on the lock screen; shorten the summary\n' "$w" >&2
+  for x in ${SHOWN[@]+"${SHOWN[@]}"}; do
+    n=$((n + 1)); [ "$n" -le 3 ] || break
+    [ "${#x}" -le 40 ] || printf 'engage-ping: note: preview line %d is %d characters and about 40 fit before it wraps: "%s"\n' "$n" "${#x}" "$x" >&2
+  done
+  [ "${#SHOWN[@]}" -le 3 ] || printf 'engage-ping: note: %d preview lines; the lock screen shows 3, the rest show when opened\n' "${#SHOWN[@]}" >&2
+  return 0
+}
+fit_notes
+
 TAGS=""
 if [ "$KIND" = test ]; then
   TITLE=$'\xf0\x9f\xa4\x96'" AGENT $DOT engage-ping self-test"
-  NBODY="test, ignore$NL$L2$NL$TTIME"
+  NBODY="test, ignore$NL$PROJECT${SESSION:+ $DOT $SESSION}$NL$TTIME"
   TAGS="robot"
 else
   TITLE="$L1"; NBODY="$BODY"
