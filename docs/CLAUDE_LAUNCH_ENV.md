@@ -87,6 +87,20 @@ codebox's settings source took most of the Macs' settings and the install's code
 began placing Herdr's own skill text (`_place_codebox_herdr_skill`); see
 `settings/codebox/claude-settings.json` and `docs/INSTALL_PROFILES.md`.
 
+Also since 2026-10-23 (dotfiles-main Q50: 1) codebox has guards, so the "none of the Mac's
+guards" above no longer holds once the codebox profile has run. They are makeitso's guards that
+fit the box, as copies in `settings/codebox/hooks/` (`hooks.json` lists them, `build-rows.py`
+writes their rows into the settings source, `_place_codebox_hooks` copies them to
+`~/.claude/hooks/codebox/` before the settings are placed): the secret guard, the Trash-only
+delete guard, the folder-reset and worktree-discard guards, the command rules with the live-file
+lock (which on codebox also locks `~/.claude/settings.json`, where they are registered), the zsh
+word-split and install telemetry warnings, the warehouse watch and the session id at start. Left
+out: the GitHub SSH-only guard, which blocks the credential helper codebox's token broker uses;
+the question box ping, which needs the Mac's sounds and iMessage; the CI watch; Herdr's pop-ups.
+Tests: `settings/codebox/hooks/tests/run-selftests.sh` (every hook's own selftest) and
+`codebox-hooks-test.sh` (installed into a made-up home, each registered command run with a real
+payload); both passed on the Mac and on codebox.
+
 Blind spot: only a `claude` typed in zsh reaches the function. A launch that skips the shell
 starts bare. Claude's own settings file (`env`) would cover every start path, but whether it
 can empty `DISABLE_TELEMETRY` early enough for feature flags is not measured.

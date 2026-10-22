@@ -5810,6 +5810,48 @@ _place_codebox_statusline() {
     return 0
 }
 
+# codebox's hooks (Gavin, dotfiles-main Q50: 1, 23 Oct 2026): makeitso's guards that fit codebox,
+# kept as copies in settings/codebox/hooks/ (hooks.json lists them; build-rows.py writes their rows
+# into settings/codebox/claude-settings.json). Copied whole into ~/.claude/hooks/codebox/, all but
+# tests/ and build-rows.py. It runs BEFORE the settings are placed, so the rows never point at a
+# script that is not there yet (a guard whose script is missing denies every call). The new copy
+# is built beside the live one and swapped in; a different old copy is kept beside it as
+# codebox.pre-dotfiles.<time>. Nothing is written when the live copy already matches.
+_place_codebox_hooks() {
+    [[ "$PLACE_CODEBOX_SETTINGS" == true ]] || return 0
+    local src="$REPO_DIR/settings/codebox/hooks"
+    local dst="$HOME/.claude/hooks/codebox"
+    local new bak f
+    step "codebox: Claude Code hooks"
+    if [[ ! -f "$src/hooks.json" ]]; then
+        warn "The source $(pretty_path "$src") has no hooks.json; no hooks placed."
+        return 0
+    fi
+    new="$dst.new.$$"
+    bak="$dst.pre-dotfiles.$(date +%Y%m%d-%H%M%S)"
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] Would copy $(pretty_path "$src") (all but tests/ and build-rows.py) to $(pretty_path "$dst")."
+        return 0
+    fi
+    mkdir -p "$new" || { warn "Could not make $(pretty_path "$new"); no hooks placed."; return 0; }
+    for f in "$src"/*; do
+        [[ -f "$f" ]] || continue
+        [[ "$(basename "$f")" == build-rows.py ]] && continue
+        cp -p "$f" "$new/" || { warn "Could not copy $(basename "$f"); the live hooks are unchanged."; "$SAFE_RM" -rf "$new" >/dev/null 2>&1; return 0; }
+    done
+    if [[ -d "$dst" ]] && diff -rq "$new" "$dst" >/dev/null 2>&1; then
+        "$SAFE_RM" -rf "$new" >/dev/null 2>&1
+        success "The hooks already match the source; nothing written."
+        return 0
+    fi
+    if [[ -e "$dst" || -L "$dst" ]]; then
+        mv "$dst" "$bak" || { warn "Could not move the old hooks aside; the live hooks are unchanged."; "$SAFE_RM" -rf "$new" >/dev/null 2>&1; return 0; }
+    fi
+    mv "$new" "$dst" && success "Hooks placed in $(pretty_path "$dst")$([[ -e "$bak" ]] && echo " (old copy kept as $(pretty_path "$bak"))")" \
+        || warn "Could not put the new hooks in place; they are at $(pretty_path "$new")."
+    return 0
+}
+
 # codebox's Herdr skill (Gavin, dotfiles-main Q25: 1, 23 Oct 2026): Herdr's own skill text, the
 # copy this repo keeps beside the Mac's merged skill (home/.claude/skills/herdr/UPSTREAM.md, its
 # version in UPSTREAM.version), as makeitso uses it; not the merged SKILL.md, which names engage's
@@ -6083,6 +6125,7 @@ main() {
     _claude_post_stow
 
     # --- codebox profile only: Claude Code's settings.json and status line, placed as copies ---
+    _place_codebox_hooks
     _place_codebox_claude_settings
     _place_codebox_statusline
     _place_codebox_herdr_skill

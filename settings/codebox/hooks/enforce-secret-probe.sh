@@ -1,0 +1,986 @@
+#!/bin/bash
+# CODEBOX'S COPY (23 Oct 2026, Gavin, dotfiles-main Q50: 1), from makeitso's hooks/enforce-secret-probe.sh at 38bf349; it shares nothing with that file. Changed: its logs are under ~/.local/state/codebox-hooks; the shell snapshots it reads, and the home it reads, are codebox's own ~/.claude; repair hints name this repo's settings/codebox/hooks (fifty-shades-of-dotfiles), placed by ./install.sh --profile codebox. The makeitso lines about ~/.claude_v2 stay and do nothing on codebox, which has no such folder. Its history before that: MAKEITSO'S OWN COPY (14 Oct 2026, Gavin Q16: 1), from fifty-shades-of-dotfiles home/.claude/hooks at ca2fec4; it shares nothing with that file. Changed: the deny states the rule itself instead of pointing at LifeOS's and engage's rule files; transcripts named under ~/.claude_v2. It still reads its shell lexer from enforce-no-permanent-delete.sh beside it (makeitso's copy).
+# Block the shell probe that prints a secret while looking like it hides one.
+# PreToolUse on Bash. Sibling of enforce-census.sh: same payload contract, same
+# jq-must-shout rule, but this one DENIES instead of reminding.
+#
+# WHY IT EXISTS -- measured, not felt
+#   Audited ~/.claude/projects on 2026-09-17. Two real credentials were sitting in
+#   local transcripts, one for three months. Neither was written there by a tool.
+#   Agents typed them, in commands written to be CAREFUL:
+#
+#     echo "GH_TOKEN set? ${GH_TOKEN:+yes}${GH_TOKEN:-no}"   -> yes<the whole token>
+#     echo "interactive-shell sees it: ${V:+SET}${V:-unset}" -> SET<the whole token>
+#     env | grep -i git                                      -> GH_TOKEN=<the whole token>
+#
+#   `${V:-word}` does NOT mean "print word instead of the value". It means "use word
+#   ONLY if V is empty", so when V IS set it expands to the value. The author wanted
+#   yes/no and got yes-plus-secret. It reads as a redaction and is an expansion, which
+#   is why nobody reviewing those commands looked twice.
+#
+#   Prose alone does not stop this: the rule now lives in OPERATIONAL_RULES.md, but the
+#   two leaks were written by sessions that had every count-and-absence rule loaded and
+#   still typed the probe. This fires at the only moment that helps.
+#
+# 🔴 WHY IT BLOCKS RATHER THAN WARNS
+#   A warning arrives in the same breath as the output. By then the secret is in the
+#   transcript and the transcript is append-only. There is no "undo" for a printed key,
+#   so the only useful intervention is BEFORE the command runs.
+#
+# 🔴 AND WHY A MISSING jq MUST SHOUT
+#   `command -v jq || exit 0` would make this hook silent in every project forever, and
+#   silence here is indistinguishable from a clean bill of health. Same reasoning as
+#   enforce-census.sh, same remedy: say so, loudly, every time.
+#
+# SINCE 2026-09-29 (W-20260929-A34, red team row H4) it also reads the command with
+#   the shell lexer of enforce-no-permanent-delete.sh (see "the shell lexer" below) and
+#   denies the printers that name no ${...}: printenv NAME, bare env/printenv/set/
+#   export -p/declare -x/typeset -p, gh auth token|status, security ... -w|-g,
+#   git credential fill, reading a .env / private key / .netrc, ps with environments,
+#   infisical export, python -c / node -e dumping the whole environment. A `sh -c`,
+#   `eval`, `env -S` body, and a heredoc or pipe fed to a shell, are classified again
+#   with every rule. Words inside a message, a pattern or a heredoc for a non-shell
+#   stay DATA: the lexer keeps a quoted span as one word, it does not delete it.
+#   A printer inside $(...) is denied too: the lexer cannot tell whether the captured
+#   value is printed later, and the pinned rule is caution.
+#
+# WHAT IT DELIBERATELY DOES NOT CATCH
+#   A printer hidden in a script, an alias or a function; a name held in a variable
+#   (`$cmd`); a key-name search OUTSIDE the secret folders (rg API_KEY src/ is ordinary
+#   code search); inline code in a file rather than -c/-e. The ${...} rules still skip
+#   heredoc bodies, for the reason the sibling hooks do: prose must not fire a gate.
+#
+# SINCE 2026-09-29 (W-20260929-A46, Gavin's rulings D-20260929-A20, A21, A22) it also
+#   denies: github-agent-token token|pat printed (RULE 14; captured into NAME=$(...) or
+#   piped into a 4-to-8-character check or a hash passes); inline code reading ONE
+#   credential variable (os.environ["X"], os.getenv, process.env.X, perl $ENV{X} / %ENV,
+#   ruby ENV["X"] / ENV.to_h); security export; infisical secrets; ${(P)name} inside
+#   echo/printf/print (RULE 15); DATABASE_URL, *_DSN and connection-string names; and a
+#   grep/rg/ag rooted in ~/.config, ~/.aws, ~/.ssh, ~/.gnupg, ~/.netrc or the Keychains
+#   folder for a credential word, unless it prints file names only (RULE 16).
+#
+#   `--selftest` proves every arm, positive AND negative. A block rule with no negative
+#   arm cannot tell "correctly silent" from "broken and silent".
+
+set -uo pipefail
+
+# A variable whose NAME says it holds a credential. Kept deliberately narrow: this must
+# not fire on TMPDIR, EDITOR or PATH, or the block becomes something to route around.
+# PAT counts only as a whole _-separated part (GH_PAT, PAT_RO): until 2026-09-29 it
+# matched inside PATH, so `echo "$PATH"` was denied. Where the pattern is not followed
+# by a fixed character it is used with SECRET_END, so $PATH cannot match as $PAT + H.
+SECRETY='([A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|_KEY|CREDENTIAL|PRIVKEY)[A-Za-z0-9_]*|([A-Za-z0-9]+_)*PAT(_[A-Za-z0-9]+)*|[A-Za-z0-9_]*(DATABASE_URL|_DSN|DSN_|CONNECTION_STRING|CONN_STR|REDIS_URL|MONGO_URI|MONGODB_URI|POSTGRES_URL|POSTGRESQL_URL|AMQP_URL)[A-Za-z0-9_]*)'
+# W-20260929-A46 (S23): a DATABASE_URL, *_DSN or connection string carries a password in
+# its value although its name is not credential-shaped. A plain *_URL does not match.
+SECRET_END='([^A-Za-z0-9_]|$)'
+RE_SECRET_NAME="^${SECRETY}\$"
+
+# Commands that print a credential with no ${...} in sight (W-20260929-A34). The
+# crude text form, for when the payload or the lexer cannot be read.
+CRUDE='(^|[^A-Za-z0-9_.-])(printenv|gh[[:space:]]+auth|find-(generic|internet)-password|credential[[:space:]]+fill|eval|infisical[[:space:]]+export)([^A-Za-z0-9_-]|$)|(^|[;&|(])[[:space:]]*(env|set|export|declare|typeset)[[:space:]]*($|[;&|)])|(^|[^A-Za-z0-9_.-])(ba|z|da|k)?sh[[:space:]]+-[A-Za-z]*c|\.env([[:space:]"'"'"']|$)|os\.environ|process\.env'
+
+# The crude match on the RAW payload, used ONLY when the payload cannot be read
+# (jq missing, invalid JSON, no tool_input.command; D-20260925-A03). Any
+# expansion of a credential-named variable, ${#V} included (it cannot be told
+# apart here), an env/printenv piped anywhere, or a CRUDE hit. A hit DENIES by name.
+RAW_TRIGGER='\$\{?#?'"$SECRETY$SECRET_END"'|(^|[^A-Za-z0-9_.-])(env|printenv)([[:space:]]+-[A-Za-z0-9]+)*[[:space:]]*\||'"$CRUDE"
+
+# A VALUE-STRIPPER in the command: `env | cut -d= -f1` prints names, not values.
+STRIPPER='cut[[:space:]]+-d[[:space:]]*['"'"'"]?=['"'"'"]?[[:space:]]+-f[[:space:]]*1|awk[[:space:]]+-F[[:space:]]*['"'"'"]?=|s/=\.\*//'
+
+# ---------------------------------------------------------------- the shell lexer
+# NOT a copy. The awk lexer in enforce-no-permanent-delete.sh (the block between
+# `read -r -d '' LEXER <<'AWK'` and `AWK`) is read from that file at run time, so
+# there is one lexer on this machine. It splits a command into simple commands the
+# way zsh does: quotes removed, heredoc bodies and here-strings set aside as stdin
+# data, every $(...) and `...` body emitted as a command of its own. Records:
+#   C <pid> <word>...   a simple command (redirection operators are OPM-prefixed words)
+#   H <pid> <text>      stdin data for pipeline <pid> (heredoc, here-string, echo data)
+#   E <maxpid>          always last; its absence means the lexer failed
+# Both files are stowed side by side into ~/.claude/hooks. When the block cannot be
+# read, the CRUDE text match stands in (deny by name) and the hook SHOUTS.
+US=$'\037'; RSC=$'\036'; OPM=$'\002'
+case "$0" in */*) _here="${0%/*}" ;; *) _here=. ;; esac
+LEXER_FROM="${SECRET_PROBE_LEXER_FROM:-$_here/enforce-no-permanent-delete.sh}"
+LEXER="$(sed -n "/^read -r -d '' LEXER <<'AWK'\$/,/^AWK\$/p" "$LEXER_FROM" 2>/dev/null | sed '1d;$d')"
+case "$LEXER" in *'function emitcmd('*'function lex('*) ;; *) LEXER="" ;; esac
+
+# ---------------------------------------------------------------- matching engine
+# Returns the reason on stdout, or nothing. Never echoes the command back, and never
+# echoes a value: a guard that quotes the secret in its own refusal is the bug again.
+_classify() { # $1 = shell text, $2 = nesting depth (sh -c / eval / stdin shell)
+  local cmd="$1" depth="${2:-0}" bare reason=""
+
+  # Strip heredoc bodies, then quoted spans, then comments -- identical order to
+  # enforce-census.sh, for the identical reason (prose must not fire a gate).
+  local hd='BEGIN{inhd=0}
+inhd==0{
+  if (match($0, /<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*["\047]?/)) {
+    tag=substr($0,RSTART,RLENGTH); sub(/^<<-?[ \t]*/,"",tag); gsub(/["\047]/,"",tag)
+    inhd=1; hd=tag
+  }
+  print; next
+}
+{ t=$0; sub(/^[ \t]+/,"",t); if (t==hd) { inhd=0; hd="" } ; next }'
+  # A comment starts at a word boundary only. Until 2026-09-29 every `#` cut the line,
+  # so `echo "${#GH_TOKEN} $GH_TOKEN"` lost its second half and printed the token.
+  bare="$(printf '%s' "$cmd" | awk "$hd" | sed -E 's/(^|[[:space:]])#.*$/\1/')"
+
+  # RULE 1 -- the default-substitution leak. `${V:-word}` / `${V-word}` on a secret-named
+  # variable, where word is NON-EMPTY. `${V:-}` is excluded on purpose: an empty default
+  # is the standard set -u guard and prints nothing extra.
+  if [[ "$bare" =~ \$\{$SECRETY:?-[^\}\"\'][^\}]*\} ]]; then
+    reason="RULE 1: \${VAR:-word} on a credential variable"
+  fi
+
+  # RULE 2 -- dumping the whole environment. `env` or `printenv` with no variable named,
+  # piped anywhere. This is how the second real token reached a transcript.
+  if [ -z "$reason" ] && [[ "$bare" =~ (^|[|;\&\(]|\&\&)[[:space:]]*(env|printenv)([[:space:]]+-[a-zA-Z0-9]+)*[[:space:]]*\| ]]; then
+    # ...unless a VALUE-STRIPPER is in the pipeline. `env | cut -d= -f1 | grep -i token`
+    # is the form this hook's own advice recommends, and blocking the recommended fix is
+    # how a gate teaches people to route around it. Checked across the whole command
+    # rather than strictly the next stage: over-permissive by a hair, and the hair is
+    # cheaper than refusing the safe answer.
+    if ! [[ "$bare" =~ $STRIPPER ]]; then
+      reason="RULE 2: env/printenv dumped and filtered -- prints every matching VALUE"
+    fi
+  fi
+
+  # RULE 3 -- a bare secret variable inside echo/printf/print. `${#V}` (length) is
+  # allowed, and so is `${V:+literal}` on its own, because neither can expand to the
+  # value. So is a stage piped straight into a hash or a byte count: that is the
+  # fingerprint this hook's own advice recommends, and it was denied until 2026-09-29.
+  if [ -z "$reason" ] && _echo_leak "$bare" "$SECRETY"; then
+    reason="RULE 3: a credential variable expanded inside echo/printf/print"
+  fi
+
+  # RULE 15 (W-20260929-A46, S34) -- ${(P)name} expands the variable NAMED BY name, so the
+  # name this hook would judge is out of sight. Denied inside echo/printf/print.
+  RE_PFLAG='(^|[|;&(])[[:space:]]*(echo|printf|print)[^|;&]*[$][{][(][^)]*P[^)]*[)]'
+  if [ -z "$reason" ] && [[ "$bare" =~ $RE_PFLAG ]]; then
+    reason="RULE 15: \${(P)name} expands a variable chosen at run time, which this hook cannot judge. SAFE: name the variable literally, or print \${#name}"
+  fi
+
+  # RULES 4+ -- commands that print a secret without naming a ${...}: read by the lexer.
+  # CAPT holds the names a printer was captured into (D-20260929-A07); a nested
+  # sh -c / eval body inherits it, because it runs in a subshell of this one.
+  if [ -z "$reason" ]; then
+    R=""; BARE="$bare"
+    [ "$depth" -eq 0 ] && CAPT=" "
+    _lexed "$cmd" "$depth"
+    reason="$R"
+  fi
+
+  printf '%s' "$reason"
+}
+
+# True when an echo/printf/print stage in $1 expands a variable whose name matches the
+# pattern $2 (SECRETY, or the captured names). Shared by RULE 3 and RULE 13.
+_echo_leak() {
+  local echoes stripped
+  local hashers='(shasum|sha1sum|sha256sum|sha512sum|md5|md5sum|b2sum|openssl[[:space:]]+dgst|wc[[:space:]]+-[cm])'
+  echoes="$(printf '%s' "$1" | grep -oE '(^|[|;&(]|&&)[[:space:]]*(echo|printf|print)[^|;&]*(\|[[:space:]]*'"$hashers"')?' 2>/dev/null | grep -vE '\|[[:space:]]*'"$hashers"'$' || true)"
+  [ -n "$echoes" ] || return 1
+  stripped="$(printf '%s' "$echoes" | sed -E "s/\\\$\{#$2\}//g; s/\\\$\{$2:\+[^\}]*\}//g")"
+  [[ "$stripped" =~ \$\{?$2$SECRET_END ]]
+}
+CAPT=" "; BARE=""
+
+# ---------------------------------------------------------------- lexer-based rules
+# Each sets R to the reason, which names the SAFE form, and returns.
+SAFE_NAMES='SAFE: names only, no values: env | cut -d= -f1 | grep -i token'
+RE_ASSIGN='^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?='
+RE_ENVDUMP='(os\.environ|process\.env)([^].[A-Za-z0-9_]|$)'
+# W-20260929-A46: inline code reading ONE credential-named variable, not just dumping all.
+RE_ENVREAD="(os\\.environ(\\.get)?[[:space:]]*[[(][[:space:]]*[\"']|os\\.getenv[[:space:]]*\\([[:space:]]*[\"']|process\\.env(\\.|\\[[[:space:]]*[\"']))$SECRETY$SECRET_END"
+# A search that prints matching lines, rooted in a folder that holds secrets (A22, S14).
+RE_CREDWORD='(key|token|secret|passw|dsn|credential|private|ghs_|ghp_|gho_|github_pat|sk-|akia)'
+MAX_DEPTH=4
+
+# The CRUDE stand-in, when the lexer is missing or failed on this text.
+_crude() { # $1 = text, $2 = why the lexer could not be used
+  [[ $1 =~ $CRUDE ]] || return 0
+  R="the shell lexer could not be used ($2), and this command mentions a secret printer (printenv, env, gh auth, security -w, credential fill, a .env file, sh -c, eval). Denied by name. Check that enforce-no-permanent-delete.sh sits beside this hook, then run enforce-secret-probe.sh --selftest."
+}
+
+_lexed() { # $1 = text, $2 = depth. Sets R.
+  local text="$1" depth="$2" recs line rest pid k
+  if [ "$depth" -ge "$MAX_DEPTH" ]; then
+    R="RULE 12: shell text nested $MAX_DEPTH deep (sh -c inside eval inside ...) is not read further. SAFE: run the inner command directly."
+    return 0
+  fi
+  [ -n "$LEXER" ] || { _crude "$text" "not found in $LEXER_FROM"; return 0; }
+  recs="$(printf '%s' "$text" | LC_ALL=C awk -v base=0 -v snap= -v nofilter=1 "$LEXER" 2>/dev/null)" \
+    || { _crude "$text" "it exited non-zero"; return 0; }
+  [[ $recs == *"E$US"* ]] || { _crude "$text" "it gave no end record"; return 0; }
+  CUR_TEXT="$text"; STDIN_SH=" "
+  local -a kd=() pd=() rs=() hp=() hb=() words=() a=() xs=()
+  local i n
+  while IFS= read -r line; do
+    case "$line" in
+      C"$US"*|H"$US"*)
+        kd[${#kd[@]}]="${line%%"$US"*}"; rest="${line#?"$US"}"
+        pd[${#pd[@]}]="${rest%%"$US"*}"; rs[${#rs[@]}]="${rest#*"$US"}" ;;
+      X"$US"*) rest="${line#?"$US"}"; xs[${#xs[@]}]="${rest#*"$US"}" ;;   # A118: text run as code
+    esac
+  done <<< "$recs"
+  n=${#kd[@]}; i=0
+  while [ "$i" -lt "$n" ]; do
+    if [ "${kd[$i]}" = H ]; then
+      hp[${#hp[@]}]="${pd[$i]}"; hb[${#hb[@]}]="${rs[$i]}"; i=$((i + 1)); continue
+    fi
+    CUR_PID="${pd[$i]}"
+    IFS="$US" read -r -a words <<< "${rs[$i]}"
+    a=(); k=0
+    while [ "$k" -lt "${#words[@]}" ]; do
+      if [[ ${words[$k]} == "$OPM"* ]]; then k=$((k + 2)); continue; fi   # an operator and its target
+      a[${#a[@]}]="${words[$k]//$RSC/$'\n'}"; k=$((k + 1))
+    done
+    if [ "${#a[@]}" -gt 0 ]; then
+      _argv "$depth" "${a[@]}"
+      # D-20260929-A07: a printer whose output is captured into a variable passes,
+      # and that variable's name is remembered for RULE 13.
+      [ -n "$R" ] && _captured "$i" && R=""
+      [ -n "$R" ] && return 0
+    fi
+    i=$((i + 1))
+  done
+  # stdin data (a heredoc, a here-string, echo piped in) read by a shell as commands
+  k=0
+  while [ -z "$R" ] && [ "$k" -lt "${#hp[@]}" ]; do
+    case "$STDIN_SH" in *" ${hp[$k]} "*) _sub "$depth" "${hb[$k]//$RSC/$'\n'}" "a shell reading stdin" ;; esac
+    k=$((k + 1))
+  done
+  # W-20260929-A118: a <( ) body given to source or a shell, and $( ) in an unquoted heredoc
+  k=0
+  while [ -z "$R" ] && [ "$k" -lt "${#xs[@]}" ]; do
+    _sub "$depth" "${xs[$k]//$RSC/$'\n'}" "text run as code"
+    k=$((k + 1))
+  done
+  # RULE 13 -- a captured name printed later in this text (or in an sh -c inside it)
+  if [ -z "$R" ] && [ "$CAPT" != " " ]; then
+    local names="${CAPT# }"; names="${names% }"
+    if _echo_leak "$BARE" "(${names// /|})"; then
+      R="RULE 13: a variable that captured a secret from \$(...) (${names// /, }) is printed later in the same command. SAFE: print a fact about it, echo \"len=\${#NAME}\", or printf %s \"\$NAME\" | shasum -a 256 | cut -c1-8"
+    fi
+  fi
+  return 0
+}
+
+# Record $1 (an index into kd/pd/rs of the caller) is a $(...) body when a LATER record
+# has a LOWER pipeline number: the lexer numbers a body after its parent but emits it
+# first (measured 2026-09-29). The first such record is the parent. True, with the names
+# added to CAPT, when the parent is a simple command whose every $(...) word is an
+# assignment (VAR=$(...), an env prefix, export VAR=$(...)). An echo parent (an H
+# record), an argument, or a mix of the two is not a capture: which body fills which
+# $(...) cannot be told apart, so a mix is refused rather than guessed.
+_captured() {
+  local i="$1" j=$(($1 + 1)) w nm got=""
+  local -a pw=()
+  while [ "$j" -lt "$n" ] && [ "${pd[$j]}" -ge "${pd[$i]}" ]; do j=$((j + 1)); done
+  [ "$j" -lt "$n" ] && [ "${kd[$j]}" = C ] || return 1
+  IFS="$US" read -r -a pw <<< "${rs[$j]}"
+  for w in "${pw[@]}"; do
+    case "$w" in "$OPM"*) continue ;; *'$(...)'*) ;; *) continue ;; esac
+    [[ $w =~ $RE_ASSIGN ]] || return 1
+    nm="${w%%=*}"; nm="${nm%+}"; nm="${nm%%\[*}"
+    got="$got$nm "
+  done
+  [ -n "$got" ] || return 1
+  CAPT="$CAPT$got"
+}
+
+_sub() { # $1 = depth, $2 = shell text, $3 = where it came from. Sets R.
+  local r
+  r="$(_classify "$2" $(($1 + 1)))"
+  [ -n "$r" ] && R="inside $3: $r"
+  return 0
+}
+
+_dump() { # $1 = what. A whole-environment listing, unless a value-stripper is in play.
+  [[ $CUR_TEXT =~ $STRIPPER ]] && return 0
+  R="RULE 4: $1 lists every variable WITH its value, tokens included. $SAFE_NAMES"
+}
+
+_secret_file() { # $1 = a word. True when it names a file that holds secrets.
+  local p="$1" b t
+  b="${p##*/}"
+  case "$b" in
+    .env.example|.env.sample|.env.template|.env.dist|.env.defaults) return 1 ;;
+    .env|.env.*|*.env|.netrc|.pgpass|credentials|*.pem|*.key|*.p12|*.pfx) return 0 ;;
+    id_*.pub) return 1 ;;
+  esac
+  case "$p" in */.ssh/id_*|id_rsa|id_dsa|id_ecdsa|id_ed25519) return 0 ;; esac
+  # a symlink whose TARGET is one (~/.claude/.env is caught by its own name above)
+  case "$p" in '~/'*) p="$HOME/${p#'~/'}" ;; '$HOME/'*) p="$HOME/${p#'$HOME/'}" ;; esac
+  if [ -L "$p" ]; then
+    t="$(readlink "$p" 2>/dev/null)"; t="${t##*/}"
+    case "$t" in .env.example|.env.sample|.env.template) return 1 ;; .env|.env.*|*.env|*.pem|*.key) return 0 ;; esac
+  fi
+  return 1
+}
+
+_argv() { # $1 = depth, then one simple command's words. Sets R.
+  local depth="$1"; shift
+  while [ $# -gt 0 ] && [[ $1 =~ $RE_ASSIGN ]]; do shift; done
+  [ $# -gt 0 ] || return 0
+  local c="${1#=}"; shift
+  local base="${c##*/}" w opts names joined first
+  case "$base" in
+    # ---- look past precommands, as enforce-no-permanent-delete.sh does
+    '{'|'!'|if|then|else|elif|do|while|until|-|nohup|noglob|nocorrect|builtin|unbuffer|chronic)
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    command)
+      while [ $# -gt 0 ]; do case "$1" in -*[vV]*) return 0 ;; -*) shift ;; *) break ;; esac; done
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    exec)
+      while [ $# -gt 0 ]; do case "$1" in -a) shift 2 || set -- ;; -c|-l|-cl|-lc) shift ;; --) shift; break ;; *) break ;; esac; done
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    time)
+      while [ $# -gt 0 ]; do case "$1" in -o) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    sudo|doas)
+      while [ $# -gt 0 ]; do case "$1" in --) shift; break ;; -u|-g|-h|-p|-C|-D|-r|-t|-T|-U|-c) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    nice)
+      while [ $# -gt 0 ]; do case "$1" in -n) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    timeout|gtimeout)
+      while [ $# -gt 0 ]; do case "$1" in -s|-k) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
+      [ $# -gt 0 ] && shift
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    xargs|gxargs)
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --) shift; break ;;
+          -I|-n|-P|-L|-s|-d|-E|-a|-J|-R|-S) shift 2 || set -- ;;
+          -*) shift ;;
+          *) break ;;
+        esac
+      done
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    eval)
+      [ $# -gt 0 ] && _sub "$depth" "$*" "eval"; return 0 ;;
+    function)   # W-20260929-A134: function NAME [()] { BODY
+      [ $# -gt 0 ] && shift
+      [ "${1:-}" = "()" ] && shift
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    *'()')   # W-20260929-A134: NAME() { BODY
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    caffeinate|stdbuf|gstdbuf|watch)   # W-20260929-A134: prefixes that run the command after their options
+      while [ $# -gt 0 ]; do
+        case "$base:$1" in
+          caffeinate:-t|caffeinate:-w|stdbuf:-i|stdbuf:-o|stdbuf:-e|gstdbuf:-i|gstdbuf:-o|gstdbuf:-e|watch:-n|watch:--interval) shift 2 || set -- ;;
+          *:--) shift; break ;;
+          *:-*) shift ;;
+          *) break ;;
+        esac
+      done
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    script)   # W-20260929-A118: script [opts] [file [cmd ...]] runs cmd; Linux: script -c CMD
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -c|--command) [ $# -ge 2 ] && _sub "$depth" "$2" "script -c"; return 0 ;;
+          -F|-t|-T|-I|-O|-B|-E) shift 2 || set -- ;;
+          --) shift; break ;;
+          -*) shift ;;
+          *) break ;;
+        esac
+      done
+      [ $# -gt 0 ] && shift
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    source|.)   # W-20260929-A118: sourcing stdin reads it as shell code
+      for w in "$@"; do case "$w" in /dev/stdin|/dev/fd/0|-) STDIN_SH="$STDIN_SH$CUR_PID " ;; esac; done
+      return 0 ;;
+    sh|bash|zsh|dash|ksh|mksh|yash|fish)
+      local want=0 stdin=0
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --) shift; break ;;
+          -o|+o|-O|+O) shift 2 || set --; continue ;;
+          -) stdin=1; shift; continue ;;
+          --*) shift; continue ;;
+          -*|+*) [[ $1 == *c* ]] && want=1; [[ $1 == *s* ]] && stdin=1; shift; continue ;;
+        esac
+        break
+      done
+      if [ "$want" -eq 1 ]; then [ $# -gt 0 ] && _sub "$depth" "$1" "$base -c"; return 0; fi
+      [ $# -eq 0 ] && stdin=1
+      [ "$stdin" -eq 1 ] && STDIN_SH="$STDIN_SH$CUR_PID "
+      return 0 ;;
+
+    # ---- RULE 4: the whole environment
+    env)
+      local cleared=0
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --) shift; break ;;
+          -u|-C|-P|--unset|--chdir) shift 2 || set -- ;;
+          -S|--split-string) _sub "$depth" "${2:-}" "env -S"; [ -n "$R" ] && return 0; shift 2 || set -- ;;
+          --split-string=*) _sub "$depth" "${1#*=}" "env -S"; [ -n "$R" ] && return 0; shift ;;
+          -i|--ignore-environment|-) cleared=1; shift ;;
+          -*) shift ;;
+          *) if [[ $1 =~ $RE_ASSIGN ]]; then shift; else break; fi ;;
+        esac
+      done
+      if [ $# -gt 0 ]; then _argv "$depth" "$@"; return 0; fi   # env sets, then runs a command
+      [ "$cleared" -eq 1 ] || _dump "env with no command"
+      return 0 ;;
+    set)
+      [ $# -eq 0 ] && _dump "set with no arguments"
+      return 0 ;;
+    export|declare|typeset|readonly)
+      opts=""; names=0
+      for w in "$@"; do case "$w" in -*|+*) opts="$opts${w#[-+]}" ;; *) names=1 ;; esac; done
+      if [ "$names" -eq 0 ]; then
+        case "$opts" in *[fF]*) return 0 ;; esac        # functions, not variables
+        _dump "$base${opts:+ -$opts} with no names"; return 0
+      fi
+      case "$opts" in
+        *m*) _dump "$base -m (a pattern listing)"; return 0 ;;
+        *p*) for w in "$@"; do
+               case "$w" in -*|+*) continue ;; esac
+               if [[ ${w%%=*} =~ $RE_SECRET_NAME ]]; then
+                 R="RULE 5: $base -p ${w%%=*} prints the value of a credential variable. SAFE: [ -n \"\${${w%%=*}-}\" ] && echo \"SET len=\${#${w%%=*}}\""; return 0
+               fi
+             done ;;
+      esac
+      return 0 ;;
+
+    # ---- RULE 5: one named variable
+    printenv)
+      names=0
+      for w in "$@"; do
+        case "$w" in -*) continue ;; esac
+        names=1
+        if [[ $w =~ $RE_SECRET_NAME ]]; then
+          R="RULE 5: printenv $w prints the value of a credential variable. SAFE: [ -n \"\${$w-}\" ] && echo \"$w: SET len=\${#$w}\" || echo \"$w: unset\""; return 0
+        fi
+        case "$CAPT" in *" $w "*) R="RULE 13: printenv $w prints a variable that captured a secret from \$(...) earlier in this command. SAFE: echo \"len=\${#$w}\""; return 0 ;; esac
+        case "$w" in *'$'*) R="RULE 5: printenv of a name held in a variable (${w}) cannot be judged here. SAFE: name the variable literally, or print its length: \${#NAME}"; return 0 ;; esac
+      done
+      [ "$names" -eq 0 ] && _dump "printenv with no name"
+      return 0 ;;
+
+    # ---- RULE 6: the gh CLI's own token (also "$(whence -p gh)" auth ...)
+    gh|'$(...)')
+      [ "${1:-}" = auth ] || return 0
+      case "${2:-}" in
+        token)  R="RULE 6: gh auth token prints a GitHub token. SAFE: pass one without printing it, GH_TOKEN=\"\$(github-agent-token token)\" <cmd>; to check one exists, github-agent-token token | cut -c1-4" ;;
+        status) R="RULE 6: gh auth status prints part of the token (23 characters of a PAT). SAFE: gh api user --jq .login names who answers; gh api -i user 2>&1 | grep -i '^x-oauth-scopes' shows the scopes; [ -n \"\${GH_TOKEN-}\" ] && echo \"SET len=\${#GH_TOKEN}\" shows whether one is set" ;;
+      esac
+      return 0 ;;
+
+    # ---- RULE 14 (W-20260929-A46, D-20260929-A20): github-agent-token prints a live token.
+    # Captured into $(...) it passes (_captured); piped into a 4-to-8-character check or a
+    # hash it passes; anything else that would show it is denied.
+    github-agent-token)
+      case "${1:-}" in
+        token|pat)
+          RE_GATCHECK='github-agent-token[[:space:]]+(token|pat)[^|;&]*[|][[:space:]]*(cut[[:space:]]+-c[[:space:]]*(1-)?[1-8]([^0-9]|$)|head[[:space:]]+-c[[:space:]]*[1-8]([^0-9]|$)|wc[[:space:]]+-[cm]|shasum|sha1sum|sha256sum|sha512sum|md5|md5sum|b2sum)'
+          [[ $CUR_TEXT =~ $RE_GATCHECK ]] && return 0
+          # Captured into NAME=$(...) passes when EVERY call in the command is one (the App-token
+          # form puts a second $(...) in the command word, which _captured will not guess at).
+          # The names join CAPT, so a later echo of them is still RULE 13.
+          RE_GATASSIGN='([A-Za-z_][A-Za-z0-9_]*)=["'"'"']?[$][(][[:space:]]*github-agent-token[[:space:]]+(token|pat)'
+          local g_all g_cap g_rest="$CUR_TEXT"
+          g_all="$(printf '%s' "$CUR_TEXT" | grep -oE 'github-agent-token[[:space:]]+(token|pat)' | wc -l | tr -d ' ')"
+          g_cap=0
+          while [[ $g_rest =~ $RE_GATASSIGN ]]; do
+            CAPT="$CAPT${BASH_REMATCH[1]} "; g_cap=$((g_cap + 1)); g_rest="${g_rest#*"${BASH_REMATCH[0]}"}"
+          done
+          [ "$g_cap" -ge "$g_all" ] && [ "$g_all" -gt 0 ] && return 0
+          R="RULE 14: github-agent-token $1 prints a live GitHub token. SAFE: pass it without printing, GH_TOKEN=\"\$(github-agent-token token)\" <cmd>; to check one comes back, github-agent-token token | cut -c1-4" ;;
+      esac
+      return 0 ;;
+
+    # ---- RULE 7: the macOS keychain
+    security)
+      case "${1:-}" in
+        find-generic-password|find-internet-password)
+          for w in "$@"; do
+            if [[ $w =~ ^-[A-Za-z]+$ ]] && [[ $w == *[gw]* ]]; then
+              R="RULE 7: security $1 $w prints the keychain secret. SAFE: drop -w/-g to confirm the item exists (attributes only); let the tool that owns it read it (github-agent-token), or ask Gavin"; return 0
+            fi
+          done ;;
+        export)
+          R="RULE 7: security export writes keychain items, private keys included, out of the keychain. SAFE: ask Gavin"; return 0 ;;
+        dump-keychain)
+          for w in "$@"; do [[ $w =~ ^-[A-Za-z]*d ]] && { R="RULE 7: security dump-keychain -d prints every secret in the keychain. SAFE: drop -d, or ask Gavin"; return 0; }; done ;;
+      esac
+      return 0 ;;
+
+    # ---- RULE 8: git's credential store
+    git)
+      while [ $# -gt 0 ]; do
+        case "$1" in -C|-c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix) shift 2 || set -- ;; -*) shift ;; *) break ;; esac
+      done
+      case "${1:-}" in
+        credential) [ "${2:-}" = fill ] && R="RULE 8: git credential fill prints the password field. SAFE: git ls-remote origin HEAD >/dev/null && echo auth-ok proves auth without printing it" ;;
+        credential-*) [ "${2:-}" = get ] && R="RULE 8: git $1 get prints the stored password. SAFE: git ls-remote origin HEAD >/dev/null && echo auth-ok" ;;
+      esac
+      return 0 ;;
+
+    # ---- RULE 9: reading a secrets file (.env, private key, .netrc)
+    cat|gcat|bat|batcat|head|ghead|tail|gtail|less|more|most|nl|tac|strings|xxd|od|hexdump|grep|egrep|fgrep|ggrep|rg|ag|awk|gawk|sed|gsed|sort|uniq|diff|column|jq|yq|base64|cut)
+      if [ "$base" = cut ]; then
+        joined=" $* "
+        [[ $joined =~ [[:space:]]-d[[:space:]]?=[[:space:]] ]] && [[ $joined =~ [[:space:]]-f[[:space:]]?1[[:space:]] ]] && return 0
+      fi
+      if [ "$base" = jq ]; then
+        # W-20261006-A47: jq's first non-option word is the FILTER, so '.env' there is the
+        # JSON key "env", not a file. Later words are files, unless --args/--jsonargs made
+        # them strings. -f/--from-file reads the filter from a file (jq 1.8: the first
+        # word; jq 1.7: its value), so with it every word is a file. --slurpfile and
+        # --rawfile read their second value.
+        local jf=0 jprog=0 jstr=0 jend=0 jn=0
+        local -a jfiles=()
+        while [ $# -gt 0 ]; do
+          w="$1"; shift
+          if [ "$jend" -eq 0 ]; then
+            case "$w" in
+              --) jend=1; continue ;;
+              --arg|--argjson) shift 2 || set --; continue ;;
+              --slurpfile|--rawfile) [ $# -ge 2 ] && jfiles[${#jfiles[@]}]="$2"; shift 2 || set --; continue ;;
+              --indent|--library-path|-L) [ $# -gt 0 ] && shift; continue ;;
+              --from-file) jf=1; continue ;;
+              --from-file=*) jf=1; jfiles[${#jfiles[@]}]="${w#*=}"; continue ;;
+              --args|--jsonargs) jstr=1; continue ;;
+              --*|-L*) continue ;;
+              -?*) [[ $w == *f* ]] && jf=1; continue ;;
+            esac
+          fi
+          if [ "$jprog" -eq 0 ]; then
+            jprog=1; [ "$jf" -eq 1 ] && jfiles[${#jfiles[@]}]="$w"; continue
+          fi
+          [ "$jstr" -eq 1 ] || jfiles[${#jfiles[@]}]="$w"
+        done
+        while [ "$jn" -lt "${#jfiles[@]}" ]; do
+          if _secret_file "${jfiles[$jn]}"; then
+            w="${jfiles[$jn]}"
+            R="RULE 9: jq reads $w, a file that holds secrets. SAFE: cut -d= -f1 $w (names only), or [ -s $w ] && echo present"; return 0
+          fi
+          jn=$((jn + 1))
+        done
+        return 0
+      fi
+      for w in "$@"; do
+        if _secret_file "$w"; then
+          R="RULE 9: $base reads $w, a file that holds secrets. SAFE: cut -d= -f1 $w (names only), or [ -s $w ] && echo present"; return 0
+        fi
+      done
+      # RULE 16 (W-20260929-A46, D-20260929-A22, S14): a search rooted in a secret-bearing
+      # folder for a credential-shaped word prints the values. File names only (-l) passes.
+      case "$base" in
+        grep|egrep|fgrep|ggrep|rg|ag)
+          local s_root=0 s_word=0 s_names=0 lw sp
+          for w in "$@"; do
+            case "$w" in -l|-L|-c|--files-with-matches|--files-without-match|--count|--files|--count-matches) s_names=1; continue ;; esac
+            sp="$w"
+            case "$sp" in '~/'*) sp="$HOME/${sp#'~/'}" ;; '$HOME/'*) sp="$HOME/${sp#'$HOME/'}" ;; '${HOME}/'*) sp="$HOME/${sp#'${HOME}/'}" ;; esac
+            case "$sp" in
+              "$HOME"/.config|"$HOME"/.config/*|"$HOME"/.aws|"$HOME"/.aws/*|"$HOME"/.ssh|"$HOME"/.ssh/*|"$HOME"/.gnupg|"$HOME"/.gnupg/*|"$HOME"/.netrc|"$HOME"/Library/Keychains|"$HOME"/Library/Keychains/*) s_root=1 ;;
+            esac
+            lw="$(printf '%s' "$w" | tr '[:upper:]' '[:lower:]')"
+            [[ $lw =~ $RE_CREDWORD ]] && s_word=1
+          done
+          if [ "$s_root" -eq 1 ] && [ "$s_word" -eq 1 ] && [ "$s_names" -eq 0 ]; then
+            R="RULE 16: $base searches a folder that holds secrets for a credential word, and prints the matching lines, values included. SAFE: $base -l (file names only), then read a name with cut -d= -f1"; return 0
+          fi ;;
+      esac
+      return 0 ;;
+
+    # ---- RULE 10: other processes' environments, and secret managers
+    ps)
+      first=1
+      for w in "$@"; do
+        if { [[ $w =~ ^-[A-Za-z]+$ ]] && [[ $w == *E* ]]; } || { [ "$first" -eq 1 ] && [[ $w =~ ^[A-Za-z]+$ ]] && [[ $w == *[eE]* ]]; }; then
+          R="RULE 10: ps $w shows each process's environment, tokens included. SAFE: ps -A -o pid,command (no E / BSD e)"; return 0
+        fi
+        first=0
+      done
+      return 0 ;;
+    infisical)
+      [ "${1:-}" = export ] && R="RULE 10: infisical export prints every secret in the environment. SAFE: infisical run -- <cmd> passes them without printing"
+      [ "${1:-}" = secrets ] && R="RULE 10: infisical secrets prints the secrets it lists (W-20260929-A46). SAFE: infisical run -- <cmd> passes them without printing"
+      return 0 ;;
+
+    # ---- RULE 11: an interpreter dumping the whole environment
+    uv)
+      [ "${1:-}" = run ] || return 0
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --) shift; break ;;
+          --with|--with-editable|--with-requirements|--python|-p|--project|--directory|--package|--extra|--group|--env-file|--index|--cache-dir|--config-file) shift 2 || set -- ;;
+          -*) shift ;;
+          *) break ;;
+        esac
+      done
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    perl|ruby)   # W-20260929-A46: $ENV{NAME} / %ENV and ENV["NAME"] / ENV.to_h in inline code
+      RE_RBDUMP='ENV[.](to_h|to_a|to_s|each|inspect|keys|values|map|select|sort)'
+      RE_PLREAD="ENV[{[][[:space:]]*[\"']?$SECRETY$SECRET_END"
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -e|-E)
+            if [[ ${2:-} =~ %ENV ]] || [[ ${2:-} =~ $RE_RBDUMP ]]; then
+              R="RULE 11: $base $1 prints the whole environment, tokens included. $SAFE_NAMES"
+            elif [[ ${2:-} =~ $RE_PLREAD ]]; then
+              R="RULE 11: $base $1 reads a credential variable in inline code (W-20260929-A46). SAFE: [ -n \"\${NAME-}\" ] && echo \"SET len=\${#NAME}\""
+            fi
+            return 0 ;;
+        esac
+        shift
+      done
+      return 0 ;;
+    python|python[0-9]*|pypy|pypy[0-9]*|node|nodejs|deno|bun)
+      [ "$base" = deno ] && [ "${1:-}" = eval ] && shift && set -- -e "$@"
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -c|-e|-p|--eval|--print)
+            if [[ ${2:-} =~ $RE_ENVDUMP ]]; then
+              R="RULE 11: $base $1 prints the whole environment (os.environ / process.env), tokens included. $SAFE_NAMES"
+            fi
+            if [ -z "$R" ] && [[ ${2:-} =~ $RE_ENVREAD ]]; then
+              R="RULE 11: $base $1 reads a credential variable in inline code (W-20260929-A46). SAFE: let the tool that needs it read it; to check it is set, [ -n \"\${NAME-}\" ] && echo \"SET len=\${#NAME}\""
+            fi
+            return 0 ;;
+        esac
+        shift
+      done
+      return 0 ;;
+  esac
+  return 0
+}
+
+_advice='Print a FACT ABOUT the secret, never the secret:
+
+    [ -n "${V-}" ] && echo "V: SET len=${#V}" || echo "V: unset"
+    printf %s "$V" | shasum -a 256 | cut -c1-8     # a fingerprint you can compare
+    env | cut -d= -f1 | grep -i token              # names only, no values
+
+${V:-word} returns the VALUE when V is set -- it is an expansion, not a redaction.
+Transcripts under ~/.claude/projects are append-only, so no later scan can clean them:
+a secret printed here is a secret with no way back.
+The rule: never print, write down or send a secret (a hard line, kept by the codebox guard).'
+
+# ---------------------------------------------------------------- selftest
+if [ "${1:-}" = "--selftest" ]; then
+  fails=0
+  _must() { # $1 = expect-hit(1)/expect-miss(0), $2 = label, $3 = command
+    local got; got="$(_classify "$3")"
+    local hit=0; [ -n "$got" ] && hit=1
+    if [ "$hit" -eq "$1" ]; then printf 'ok    %s\n' "$2"
+    else printf 'FAIL  %s  (expected hit=%s, got hit=%s)\n' "$2" "$1" "$hit"; fails=$((fails+1)); fi
+  }
+  echo "=== POSITIVE arms: these MUST be blocked ==="
+  _must 1 'the real 2026-09-15 leak'      'echo "GH_TOKEN set? ${GH_TOKEN:+yes}${GH_TOKEN:-no}"'
+  _must 1 'the real 2026-06-20 leak'      'echo "shell sees it: ${GITHUB_PERSONAL_ACCESS_TOKEN:+SET}${GITHUB_PERSONAL_ACCESS_TOKEN:-unset}"'
+  _must 1 'env dump, the other real leak' 'env | grep -i git'
+  _must 1 'printenv dump'                 'printenv | grep -iE "token|pat"'
+  _must 1 'bare echo of a secret'         'echo "$ANTHROPIC_API_KEY"'
+  _must 1 'no-colon default form'         'echo "${NVD_API_KEY-none}"'
+  echo "=== NEGATIVE arms: these MUST NOT be blocked ==="
+  _must 0 'length only'                   'echo "GH_TOKEN len=${#GH_TOKEN}"'
+  _must 0 'set-test only'                 'echo "GH_TOKEN: ${GH_TOKEN:+SET}"'
+  _must 0 'the recommended safe form'     '[ -n "${GH_TOKEN-}" ] && echo "SET len=${#GH_TOKEN}" || echo unset'
+  _must 0 'empty default, set -u guard'   'foo="${GH_TOKEN:-}"; [ -n "$foo" ] && echo yes'
+  _must 0 'non-secret default'            'echo "${TMPDIR:-/tmp}/x"'
+  _must 0 'env names only'                'env | cut -d= -f1 | grep -i token'
+  _must 0 'secret passed, not printed'    'GH_TOKEN="$T" gh api user --jq .login'
+  _must 0 'prose in a heredoc'            $'git commit -F - <<EOF\necho "${GH_TOKEN:-no}" is the bug\nEOF'
+
+  # W-20260929-A34 (red team 2026-09-28, section 1 "Secrets", row H4). S-numbers are
+  # that report's rows; E-numbers are edge cases from the worker brief.
+  echo "=== the lexer, read from $LEXER_FROM ==="
+  if [ -n "$LEXER" ]; then printf 'ok    %s\n' 'lexer block loaded'
+  else printf 'FAIL  %s\n' 'lexer block NOT loaded: every arm below ran on the crude fallback'; fails=$((fails+1)); fi
+  echo "=== POSITIVE arms, H4: printers that name no \${...} at all ==="
+  _must 1 'S07 printenv a credential'      'printenv GH_TOKEN'
+  _must 1 'S05 bare env'                   'env'
+  _must 1 'S06 bare printenv'              'printenv'
+  _must 1 'S09 set | grep'                 'set | grep TOKEN'
+  _must 1 'S16 gh auth token'              'gh auth token'
+  _must 1 'S17 gh auth status'             'gh auth status'
+  _must 1 'S15 security -w'                'security find-generic-password -s infisical-gap-cc-high-value-shared -w'
+  _must 1 'S12 cat ~/.claude/.env'         'cat ~/.claude/.env'
+  _must 1 'S20 git credential fill'        "printf 'protocol=https\\nhost=github.com\\n' | git credential fill"
+  _must 1 'S24 bash -c single-quoted'      "bash -c 'echo \$GH_TOKEN'"
+  _must 1 'S10 export -p | grep'           'export -p | grep KEY'
+  _must 1 'S11 typeset -p a credential'    'typeset -p GITHUB_TOKEN'
+  _must 1 'S13 cat the PAI .env'           'cat ~/.config/PAI/.env'
+  _must 1 'S21 python print(os.environ)'   'uv run python -c "import os; print(os.environ)"'
+  _must 1 'S22 node process.env'           'node -e "console.log(process.env)"'
+  _must 1 'S26 declare -x'                 'declare -x'
+  _must 1 'S27 ps with environments'       'ps eww -A'
+  _must 1 'S28 cat a private key'          'cat ~/.ssh/id_ed25519'
+  _must 1 'S29 infisical export'           'infisical export --env prod'
+  _must 1 'E02 env | grep, as before'      'env | grep TOKEN'
+  _must 1 'E08 security -g'                'security find-generic-password -s some-item -g'
+  _must 1 'E10 cat .env.local'             'cat .env.local'
+  _must 1 'E13 bare git credential fill'   'git credential fill'
+  _must 1 'E15 bash -c double-quoted'      'bash -c "echo \$GH_TOKEN"'
+  _must 1 'E16 sh -c printenv'             "sh -c 'printenv GH_TOKEN'"
+  _must 1 'E17 zsh -c gh auth token'       "zsh -c 'gh auth token'"
+  _must 1 'E18 eval single-quoted'         "eval 'echo \$GH_TOKEN'"
+  _must 1 'E19 eval double-quoted'         'eval "printenv GITHUB_TOKEN"'
+  _must 1 'E20 gh auth status -t'          'gh auth status --show-token'
+  _must 1 'E21 gh by path, auth status'    '"$(whence -p gh)" auth status'
+  _must 1 'E22 heredoc fed to bash'        $'bash <<\'EOF\'\nprintenv GH_TOKEN\nEOF'
+  _must 1 'E23 echo piped to sh'           "echo 'gh auth token' | sh"
+  _must 1 'E24 sudo printenv'              'sudo printenv GH_TOKEN'
+  _must 1 'E25 env -u with no command'     'env -u GH_TOKEN'
+  _must 1 'E32 length then the value'      'echo "${#GH_TOKEN} $GH_TOKEN"'
+  _must 1 'E46 grep a .env'                'grep KEY .env'
+  _must 1 'E48 git -C x credential fill'   'git -C /tmp credential fill'
+  _must 1 'E52 token captured then echoed' 'X="$(gh auth token)"; echo "$X"'
+  _must 1 'E55 zsh print'                  'print -r -- $GH_TOKEN'
+  _must 1 'E57 security -gs bundled'       'security find-internet-password -gs github.com'
+  _must 1 'E59 printenv of a $variable'    'printenv "$name"'
+  _must 1 'E60 xargs printenv'             'echo GH_TOKEN | xargs printenv'
+  echo "=== NEGATIVE arms, H4: the safe forms and look-alikes ==="
+  _must 0 'S35 env names only'             'env | cut -d= -f1'
+  _must 0 'S31 length only, bare'          'echo ${#GH_TOKEN}'
+  _must 0 'S41 token passed via $(...)'    'GH_TOKEN="$(github-agent-token token)" gh api user --jq .login'
+  _must 0 'S42 token prefix only'          'github-agent-token token | cut -c1-4'
+  _must 0 'E03 env sets and runs'          'env FOO=1 somecmd --flag'
+  _must 0 'E04 env -u then a command'      'env -u GH_TOKEN -u GITHUB_TOKEN gh api user'
+  _must 0 'E05 printenv HOME'              'printenv HOME'
+  _must 0 'E06 printenv PATH'              'printenv PATH'
+  _must 0 'E07 security without -w/-g'     'security find-generic-password -s some-item'
+  _must 0 'E12 cat .env.example'           'cat .env.example'
+  _must 0 'E14 git credential-cache exit'  'git credential-cache exit'
+  _must 0 'E26 set -euo pipefail'          'set -euo pipefail'
+  _must 0 'E27 export an assignment'       'export FOO=bar'
+  _must 0 'E31 declare -p HOME'            'declare -p HOME'
+  _must 0 'E33 echo $PATH (PAT inside)'    'echo "$PATH"'
+  _must 0 'E34 the advised fingerprint'    'printf %s "$GH_TOKEN" | shasum -a 256 | cut -c1-8'
+  _must 0 'E37 os.environ.get'             "uv run python3 -c \"import os; print(os.environ.get('HOME'))\""
+  _must 0 'E38 the words in a message'     'git commit -m "block printenv GH_TOKEN and gh auth token"'
+  _must 0 'E39 the words in a pattern'     "rg -n 'printenv|gh auth token' docs/"
+  _must 0 'E41 ps -ef (macOS -e is -A)'    'ps -ef'
+  _must 0 'E44 cat a public key'           'cat ~/.ssh/id_ed25519.pub'
+  _must 0 'E45 .env names only'            'cut -d= -f1 ~/.claude/.env'
+  _must 0 'E47 credential helper erase'    'git credential-osxkeychain erase'
+  _must 0 'E51 gh by path, App token'      'GH_TOKEN="$(github-agent-token token)" "$(whence -p gh)" api /installation/repositories'
+  _must 0 'E53 env -i ... sh -c lookup'    "env -i PATH=\"\$PATH\" sh -c 'command -v gh'"
+  _must 0 'E54 the words in a heredoc'     $'git commit -F - <<\'EOF\'\nprintenv GH_TOKEN is now blocked\nEOF'
+  _must 0 'E56 security, other flags'      'security find-generic-password -s x -a me -l label'
+  _must 0 'E58 printenv names only'        'printenv | cut -d= -f1'
+  _must 0 'E61 typeset -f functions'       'typeset -f'
+  _must 0 'E62 gh auth, other verb'        'gh auth switch'
+  _must 0 'E63 env | cut -d "=" -f 1'      'env | cut -d "=" -f 1'
+
+  # D-20260929-A07 (Gavin, option C): a printer captured into an assignment or an env
+  # prefix passes; the captured NAME printed later in the same command is denied.
+  echo "=== A46 arms (W-20260929-A46, Gavin 2026-09-29, D-20260929-A20/A21/A22) ==="
+  # A20: github-agent-token prints a live token; capture and a 4-character check pass
+  _must 1 'A46 github-agent-token token (S18)'              'github-agent-token token'
+  _must 1 'A46 github-agent-token pat public-read (S19)'    'github-agent-token pat public-read'
+  _must 1 'A46 github-agent-token token | cat'              'github-agent-token token | cat'
+  _must 0 'A46 GH_TOKEN="$(github-agent-token token)" gh'   'GH_TOKEN="$(github-agent-token token)" gh api user --jq .login'
+  _must 0 'A46 github-agent-token token | cut -c1-4'        'github-agent-token token | cut -c1-4'
+  _must 0 'A46 github-agent-token --help'                   'github-agent-token --help'
+  _must 1 'A46 a capture AND a bare print in one command'   'X="$(github-agent-token token)"; github-agent-token token'
+  _must 1 'A46 captured, then echoed (RULE 13)'             'T="$(github-agent-token token)"; echo "$T"'
+  # A21: inline code, keychain export, infisical secrets, ${(P)}, DATABASE_URL-style names
+  _must 1 'A46 python -c os.environ["GH_TOKEN"]'            "python3 -c 'import os; print(os.environ[\"GH_TOKEN\"])'"
+  _must 1 'A46 python -c os.getenv("API_KEY")'              "python3 -c 'import os; print(os.getenv(\"API_KEY\"))'"
+  _must 1 'A46 node -e process.env.GH_TOKEN'                "node -e 'console.log(process.env.GH_TOKEN)'"
+  _must 1 'A46 perl -e $ENV{GH_TOKEN}'                      "perl -e 'print \$ENV{GH_TOKEN}'"
+  _must 1 'A46 perl -e %ENV dump'                           "perl -e 'print \"\$_=\$ENV{\$_}\\n\" for keys %ENV'"
+  _must 1 'A46 ruby -e ENV["GH_TOKEN"]'                     "ruby -e 'puts ENV[\"GH_TOKEN\"]'"
+  _must 1 'A46 security export'                             'security export -k login.keychain -t allItems'
+  _must 1 'A46 infisical secrets'                           'infisical secrets --env=prod'
+  _must 1 'A46 echo ${(P)name} (S34)'                       'echo ${(P)name}'
+  _must 1 'A46 echo ${DATABASE_URL:-none} (S23)'            'echo ${DATABASE_URL:-none}'
+  _must 1 'A46 echo $SENTRY_DSN'                            'echo "$SENTRY_DSN"'
+  _must 0 'A46 python -c os.environ["HOME"] (near miss)'    "python3 -c 'import os; print(os.environ[\"HOME\"])'"
+  _must 0 'A46 node -e process.env.PATH (near miss)'        "node -e 'console.log(process.env.PATH)'"
+  _must 0 'A46 echo ${SITE_URL:-none} (a URL, no credential)' 'echo ${SITE_URL:-none}'
+  _must 0 'A46 echo ${(j: :)arr} (flags without P)'         'echo ${(j: :)arr}'
+  _must 0 'A46 security find-generic-password, no -w'       'security find-generic-password -s github-agent'
+  _must 0 'A46 infisical run -- cmd'                        'infisical run -- make test'
+  # A22: a credential-name search rooted in a secret folder prints values
+  _must 1 'A46 rg -uuu API_KEY ~/.config (S14)'             'rg -uuu API_KEY ~/.config'
+  _must 1 'A46 grep -r TOKEN ~/.aws'                        'grep -r TOKEN ~/.aws'
+  _must 1 'A46 rg -i password $HOME/.ssh'                   'rg -i password $HOME/.ssh'
+  _must 0 'A46 rg API_KEY src/ (a code search)'             'rg API_KEY src/'
+  _must 0 'A46 rg -l API_KEY ~/.config (names only)'        'rg -l API_KEY ~/.config'
+  _must 0 'A46 rg theme ~/.config (not a credential word)'  'rg theme ~/.config'
+  # W-20260929-A118: the four shapes, through the secret guard's rules
+  _must 1 'A118 script -q /dev/null printenv GH_TOKEN'       'script -q /dev/null printenv GH_TOKEN'
+  _must 1 'A118 source <(echo printenv GH_TOKEN)'            "source <(echo 'printenv GH_TOKEN')"
+  _must 1 'A118 . /dev/stdin <<< printenv GH_TOKEN'          ". /dev/stdin <<< 'printenv GH_TOKEN'"
+  _must 1 'A118 $(printenv GH_TOKEN) in unquoted heredoc'    $'cat <<EOF\n$(printenv GH_TOKEN)\nEOF'
+  _must 0 'A118 source <(echo printenv HOME)'                "source <(echo 'printenv HOME')"
+  _must 0 'A118 script -q /dev/null ls'                      'script -q /dev/null ls'
+  # W-20260929-A134: function bodies, eval of a substitution, and three prefixes
+  _must 1 'A134 f() { printenv GH_TOKEN; }; f (S20)'         'f() { printenv GH_TOKEN; }; f'
+  _must 1 'A134 function f { printenv GH_TOKEN; }; f (S21)'  'function f { printenv GH_TOKEN; }; f'
+  _must 1 'A134 eval "$(echo printenv GH_TOKEN)" (S69)'      'eval "$(echo printenv GH_TOKEN)"'
+  _must 1 'A134 caffeinate -i (S43)'                         'caffeinate -i printenv GH_TOKEN'
+  _must 1 'A134 stdbuf -oL (S44)'                            'stdbuf -oL printenv GH_TOKEN'
+  _must 1 'A134 watch -n 1 (S45)'                            'watch -n 1 printenv GH_TOKEN'
+  _must 0 'A134 f() { printenv HOME; }; f (near miss)'       'f() { printenv HOME; }; f'
+  _must 0 'A134 caffeinate -i printenv HOME (near miss)'     'caffeinate -i printenv HOME'
+  echo "=== CAPTURE arms (D-20260929-A07): into a variable passes, printed later denied ==="
+  _must 0 'C01 recipe: GH_TOKEN=$(security -w) ci-watch' 'GH_TOKEN="$(security find-generic-password -a "$USER" -s github-api-readonly -w)" ci-watch'
+  _must 0 'C02 recipe: T=$(security -w 2>/dev/null)'     'T=$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)'
+  _must 0 'C03 recipe: credential fill, captured, trace to a file' \
+    $'printf \'protocol=https\\nhost=github.com\\nusername=x-access-token\\n\\n\' > "$TMPDIR/cred.req"\npw=$(GIT_TERMINAL_PROMPT=0 GIT_TRACE="$TMPDIR/cred.trace.$$" git credential fill < "$TMPDIR/cred.req" 2>/dev/null); unset pw\ngrep run_command "$TMPDIR/cred.trace.$$"'
+  _must 0 'C04 export T=$(...), then its length'         'export T="$(gh auth token)"; echo "len=${#T}"'
+  _must 0 'C05 captured, then fingerprinted'             'T=$(gh auth token); printf %s "$T" | shasum -a 256 | cut -c1-8'
+  _must 0 'C06 captured, then passed on'                 'T=$(gh auth token); GH_TOKEN="$T" gh api user --jq .login'
+  _must 1 'C07 E52 again: captured, then echoed'         'X="$(gh auth token)"; echo "$X"'
+  _must 1 'C08 captured, then printf'                    'T=$(security find-generic-password -s x -w); printf "%s\n" "$T"'
+  _must 1 'C09 captured, then ${T:-none}'                'T=$(gh auth token); echo ${T:-none}'
+  _must 1 'C10 captured, then printenv T'                'export T=$(printenv GH_TOKEN); printenv T'
+  _must 1 'C11 env prefix, then sh -c echoes it'         "T=\"\$(gh auth token)\" sh -c 'echo \$T'"
+  _must 1 'C12 echo "$(printer)"'                        'echo "$(gh auth token)"'
+  _must 1 'C13 printer as an argument'                   'curl -H "Authorization: token $(gh auth token)" https://api.github.com/user'
+  _must 1 'C14 capture of an echo of a printer'          'X=$(echo "$(gh auth token)")'
+  _must 1 'C15 <(printer) read by diff'                  'diff <(printenv GH_TOKEN) x'
+  _must 1 'C16 recipe line 100 still: gh auth status'    $'T=$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)\nGH_TOKEN="$T" gh auth status'
+  _must 1 'C17 mixed: an argument $(...) beside it'      'GH_TOKEN="$(security find-generic-password -s x -w)" cmd "$(date)"'
+  # W-20261006-A47: jq's first non-option word is a FILTER, so '.env' there is the JSON
+  # key "env", not a file. Only jq's file arguments are RULE 9 reads.
+  echo "=== JQ arms (W-20261006-A47): a .env filter is a key, a .env file is a read ==="
+  _must 0 'J01 jq -c .env settings.json'                 "jq -c '.env' settings.json"
+  _must 0 'J02 jq -r .env // {} | keys[]'                "jq -r '.env // {} | keys[]' f.json"
+  _must 0 'J03 jq del(.env)'                             "jq 'del(.env)' a.json"
+  _must 0 'J04 jq -r .permissions, .env'                 "jq -r '.permissions, .env' s.json"
+  _must 0 'J05 jq .env from stdin'                       'cat s.json | jq .env'
+  _must 0 'J06 jq -n --arg k .env'                       "jq -n --arg k .env '\$k'"
+  _must 0 'J07 jq --arg x .env.local .a f.json'          "jq --arg x .env.local '.a' f.json"
+  _must 0 'J08 jq --indent 2 .env f.json'                "jq --indent 2 '.env' f.json"
+  _must 0 'J21 jq .env|keys (no slash in the filter)'    "jq '.env|keys' f.json"
+  _must 0 'J22 jq -n --args (.env is a string)'          "jq -n --args '\$ARGS' .env"
+  _must 0 'J23 env -u X jq .env f.json'                  "env -u GH_TOKEN jq '.env' f.json"
+  _must 1 'J09 jq . .env'                                'jq . .env'
+  _must 1 'J10 jq -r .X ./.env.local'                    'jq -r .X ./.env.local'
+  _must 1 'J11 jq . ~/.env'                              "jq '.' ~/.env"
+  _must 1 'J12 cat .env (control)'                       'cat .env'
+  _must 1 'J13 jq -f prog.jq .env'                       'jq -f prog.jq .env'
+  _must 1 'J14 jq --from-file=p.jq .env'                 'jq --from-file=p.jq .env'
+  _must 1 'J15 jq -n --rawfile s .env'                   "jq -n --rawfile s .env '\$s'"
+  _must 1 'J16 jq --slurpfile s .env .'                  "jq --slurpfile s .env '.'"
+  _must 1 'J17 jq --args .a .env (filter, then a file)'  "jq '.a' .env --args x"
+  _must 1 'J18 xargs jq . .env'                          'echo x | xargs jq . .env'
+  _must 1 'J19 jq -- . .env'                             'jq -- . .env'
+  _must 1 'J20 jq -L lib . .env'                         'jq -L lib . .env'
+
+  # The arms above test _classify in THIS file. These run the whole hook, payload
+  # on stdin, so SECRET_PROBE_UNDER_TEST=<path> runs them on another copy.
+  echo "=== HOOK arms: the payload read, or not (D-20260925-A03) ==="
+  _hook="${SECRET_PROBE_UNDER_TEST:-$0}"
+  echo "hook under test: $_hook"
+  _pl() { jq -nc --arg c "$1" '{session_id:"selftest", transcript_path:"/dev/null", cwd:"/tmp",
+    permission_mode:"default", hook_event_name:"PreToolUse", tool_name:"Bash",
+    tool_input:{command:$c, description:"selftest arm", timeout:120000}, tool_use_id:"toolu_selftest"}'; }
+  _mv() { printf '%s' "$1" | jq -c '.tool_input.cmd = .tool_input.command | del(.tool_input.command)'; }
+  # A PATH with every tool in /bin and /usr/bin EXCEPT jq (macOS ships /usr/bin/jq).
+  _nojq="$(mktemp -d "${TMPDIR:-/tmp}/secret-probe-nojq.XXXXXX")"
+  for f in /bin/* /usr/bin/*; do
+    case "${f##*/}" in jq) continue ;; esac
+    [ -e "$_nojq/${f##*/}" ] || ln -s "$f" "$_nojq/${f##*/}"
+  done
+  _hk() { # $1 blocked|unreadable|shout|quiet, $2 label, $3 raw payload, [$4 nojq]
+    local out rc got ok=0 path="$PATH"
+    if [ "${4:-}" = nojq ]; then
+      if PATH="$_nojq" command -v jq >/dev/null 2>&1 || ! PATH="$_nojq" command -v grep >/dev/null 2>&1; then
+        printf 'FAIL  %s  (the no-jq PATH is not one: invalid trial)\n' "$2"; fails=$((fails+1)); return
+      fi
+      path="$_nojq"
+    fi
+    out="$(printf '%s' "$3" | PATH="$path" "$_hook" 2>/dev/null)"; rc=$?
+    got="$(printf '%s' "$out" | jq -r '.hookSpecificOutput | "\(.permissionDecision) \(.permissionDecisionReason) \(.additionalContext)"' 2>/dev/null || true)"
+    case "$1" in
+      blocked)    [[ $got == "deny 🔴 BLOCKED"* ]] && ok=1 ;;
+      unreadable) [[ $got == "deny enforce-secret-probe: cannot read the tool payload"* ]] && ok=1 ;;
+      shout)      [[ $got == "null null 🔴 THE SECRET-PROBE GUARD IS BROKEN"* ]] && ok=1 ;;
+      halfbroken) [[ $got == "null null 🔴 THE SECRET-PROBE GUARD IS HALF BROKEN"* ]] && ok=1 ;;
+      rulefiles)  [[ $got == "deny 🔴 BLOCKED"*"never print, write down or send a secret"* && $got != *"LIFEOS"* && $got != *"engage:"* ]] && ok=1 ;;
+      unreadable_lexer) [[ $got == "deny 🔴 BLOCKED"*"the shell lexer could not be used"* ]] && ok=1 ;;
+      quiet)      [ -z "$out" ] && ok=1 ;;
+    esac
+    [ "$rc" -eq 0 ] || ok=0
+    if [ "$ok" -eq 1 ]; then printf 'ok    %s\n' "$2"
+    else printf 'FAIL  %s  (expected %s, rc=%s, got: %s)\n' "$2" "$1" "$rc" "$(printf '%s' "${got:-$out}" | head -c 200)"; fails=$((fails+1)); fi
+  }
+  W_T='echo "GH_TOKEN set? ${GH_TOKEN:+yes}${GH_TOKEN:-no}"'
+  W_O='ls -la'
+  _hk blocked    'control: valid payload, the real leak is blocked as before'   "$(_pl "$W_T")"
+  _hk quiet      'control: valid payload, harmless, no output as before'        "$(_pl "$W_O")"
+  p="$(_pl "$W_T")"; _hk unreadable 'truncated JSON, with the trigger'           "${p%??????????}"
+  p="$(_pl "$W_O")"; _hk quiet      'truncated JSON, without the trigger'        "${p%??????????}"
+  _hk unreadable 'command under another key, with the trigger'                  "$(_mv "$(_pl "$W_T")")"
+  _hk quiet      'command under another key, without the trigger'               "$(_mv "$(_pl "$W_O")")"
+  _hk unreadable 'PATH without jq, with the trigger'                            "$(_pl "$W_T")" nojq
+  _hk shout      'PATH without jq, without the trigger: the jq warning as before' "$(_pl "$W_O")" nojq
+  _hk unreadable 'PATH without jq, an env dump'                                 "$(_pl 'env | grep -i git')" nojq
+  _hk unreadable 'PATH without jq, ${#V} too: it cannot be told apart unread'   "$(_pl 'echo "len=${#GH_TOKEN}"')" nojq
+  p="$(_pl $'cd /tmp\necho "$ANTHROPIC_API_KEY"')"
+  _hk unreadable 'truncated, the variable after an escaped newline'             "${p%??????????}"
+  _hk quiet      'a real, EMPTY command stays quiet, trigger in the description' \
+    "$(_pl '' | jq -c '.tool_input.description = "echo $GH_TOKEN"')"
+  _hk blocked    'H4 through the hook: printenv a credential'                   "$(_pl 'printenv GH_TOKEN')"
+  _hk blocked    'H4 through the hook: bash -c body'                            "$(_pl "bash -c 'echo \$GH_TOKEN'")"
+  _hk quiet      'H4 through the hook: a safe form stays quiet'                 "$(_pl 'env | cut -d= -f1')"
+  _hk rulefiles  'the deny states the rule, and names no other setup'               "$(_pl 'printenv GH_TOKEN')"
+  # The lexer missing: the crude match denies by name, a harmless command SHOUTS.
+  _lk() { SECRET_PROBE_LEXER_FROM=/nonexistent/enforce-no-permanent-delete.sh _hk "$@"; }
+  _lk unreadable_lexer 'lexer missing: printenv a credential still denied'      "$(_pl 'printenv GH_TOKEN')"
+  _lk halfbroken 'lexer missing: harmless command, the shout'                   "$(_pl "$W_O")"
+  _lk blocked    'lexer missing: the ${V:-x} rule is untouched'                 "$(_pl "$W_T")"
+  echo
+  [ "$fails" -eq 0 ] && { echo "ALL ARMS PASS"; exit 0; } || { echo "$fails ARM(S) FAILED"; exit 1; }
+fi
+
+# ---------------------------------------------------------------- hook body
+payload="$(cat 2>/dev/null || true)"
+[ -n "$payload" ] || exit 0
+
+# The payload cannot be read. $1 = why. When the RAW text mentions a trigger,
+# DENY by name, built without jq; otherwise return and go on as before. The
+# common JSON escapes are undone first (\n \r \t to a space, \" to "). Matched
+# with [[ =~ ]], not a pipe into grep -q: under pipefail an early grep exit can
+# turn a hit into a miss. The matched text is never printed.
+_unreadable() {
+  local raw
+  raw="$(printf '%s' "$payload" | sed -e 's/\\[nrt]/ /g' -e 's/\\"/"/g')"
+  [[ $raw =~ $RAW_TRIGGER ]] || return 0
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"enforce-secret-probe: cannot read the tool payload (%s); denying because it mentions a credential-named variable or an env dump. Install jq (brew install jq) or check the payload shape, then run enforce-secret-probe.sh --selftest."}}\n' "$1"
+  exit 0
+}
+
+if ! command -v jq >/dev/null 2>&1; then
+  _unreadable "jq is not on PATH"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"},"suppressOutput":true}\n' \
+    "🔴 THE SECRET-PROBE GUARD IS BROKEN: jq is not on PATH, so this hook cannot read the tool payload. It has been SILENT for every command until now, and silence here is not a clean bill of health. Install jq (brew install jq). Until then, check by hand that nothing prints a credential value."
+  exit 0
+fi
+
+cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)"; rc=$?
+if [ -z "$cmd" ]; then
+  if [ "$rc" -ne 0 ]; then
+    _unreadable "jq could not parse it, rc=$rc"
+  elif ! printf '%s' "$payload" | jq -e '.tool_input | has("command")' >/dev/null 2>&1; then
+    _unreadable "it has no tool_input.command"
+  fi
+  exit 0   # a real, empty command: nothing to check, as before
+fi
+
+reason="$(_classify "$cmd")"
+if [ -z "$reason" ]; then
+  # Nothing matched, but the lexer rules never ran: say so, like a missing jq.
+  [ -n "$LEXER" ] || printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"},"suppressOutput":true}\n' \
+    "🔴 THE SECRET-PROBE GUARD IS HALF BROKEN: its shell lexer could not be read from $LEXER_FROM, so printenv, env, gh auth, security -w, credential fill, .env reads and sh -c bodies are checked only by a crude text match. Restow the hooks (both files sit side by side in ~/.claude/hooks), then run enforce-secret-probe.sh --selftest."
+  exit 0
+fi
+
+jq -n --arg r "$reason" --arg a "$_advice" \
+  '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
+    permissionDecisionReason: ("🔴 BLOCKED -- this command would print a credential into the transcript.\n\n" + $r + "\n\n" + $a)}}'
+exit 0

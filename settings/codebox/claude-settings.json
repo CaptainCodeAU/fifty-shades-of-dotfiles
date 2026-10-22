@@ -557,5 +557,163 @@
     "anthropic-skills:docx": "off",
     "anthropic-skills:xlsx": "off",
     "anthropic-skills:pptx": "off"
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$HOME/.claude/hooks/codebox/enforce-secret-probe.sh\"; if [ ! -x \"$h\" ]; then sleep 0.005; fi; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK CRASHED, DENYING: enforce-secret-probe.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-secret-probe.sh).\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK MISSING, DENYING: enforce-secret-probe.sh is registered but ~/.claude/hooks/codebox/enforce-secret-probe.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-secret-probe.sh).\"}}'; fi",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Monitor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$HOME/.claude/hooks/codebox/enforce-secret-probe.sh\"; if [ ! -x \"$h\" ]; then sleep 0.005; fi; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK CRASHED, DENYING: enforce-secret-probe.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-secret-probe.sh).\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK MISSING, DENYING: enforce-secret-probe.sh is registered but ~/.claude/hooks/codebox/enforce-secret-probe.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-secret-probe.sh).\"}}'; fi",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$HOME/.claude/hooks/codebox/enforce-no-permanent-delete.sh\"; if [ ! -x \"$h\" ]; then sleep 0.005; fi; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK CRASHED, DENYING: enforce-no-permanent-delete.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-no-permanent-delete.sh).\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK MISSING, DENYING: enforce-no-permanent-delete.sh is registered but ~/.claude/hooks/codebox/enforce-no-permanent-delete.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-no-permanent-delete.sh).\"}}'; fi",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Monitor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$HOME/.claude/hooks/codebox/enforce-no-permanent-delete.sh\"; if [ ! -x \"$h\" ]; then sleep 0.005; fi; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK CRASHED, DENYING: enforce-no-permanent-delete.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-no-permanent-delete.sh).\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK MISSING, DENYING: enforce-no-permanent-delete.sh is registered but ~/.claude/hooks/codebox/enforce-no-permanent-delete.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-no-permanent-delete.sh).\"}}'; fi",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "ExitWorktree",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$HOME/.claude/hooks/codebox/enforce-no-worktree-discard.sh\"; if [ ! -x \"$h\" ]; then sleep 0.005; fi; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK CRASHED, DENYING: enforce-no-worktree-discard.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-no-worktree-discard.sh).\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK MISSING, DENYING: enforce-no-worktree-discard.sh is registered but ~/.claude/hooks/codebox/enforce-no-worktree-discard.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-no-worktree-discard.sh).\"}}'; fi",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$HOME/.claude/hooks/codebox/enforce-no-reset-by-name.sh\"; if [ ! -x \"$h\" ]; then sleep 0.005; fi; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK CRASHED, DENYING: enforce-no-reset-by-name.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-no-reset-by-name.sh).\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK MISSING, DENYING: enforce-no-reset-by-name.sh is registered but ~/.claude/hooks/codebox/enforce-no-reset-by-name.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-no-reset-by-name.sh).\"}}'; fi",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Monitor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$HOME/.claude/hooks/codebox/enforce-no-reset-by-name.sh\"; if [ ! -x \"$h\" ]; then sleep 0.005; fi; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK CRASHED, DENYING: enforce-no-reset-by-name.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-no-reset-by-name.sh).\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK MISSING, DENYING: enforce-no-reset-by-name.sh is registered but ~/.claude/hooks/codebox/enforce-no-reset-by-name.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-no-reset-by-name.sh).\"}}'; fi",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$HOME/.claude/hooks/codebox/validate-bash.sh\"; if [ ! -x \"$h\" ]; then sleep 0.005; fi; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK CRASHED, DENYING: validate-bash.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/validate-bash.sh).\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK MISSING, DENYING: validate-bash.sh is registered but ~/.claude/hooks/codebox/validate-bash.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/validate-bash.sh).\"}}'; fi",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Monitor",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$HOME/.claude/hooks/codebox/validate-bash.sh\"; if [ ! -x \"$h\" ]; then sleep 0.005; fi; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK CRASHED, DENYING: validate-bash.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/validate-bash.sh).\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK MISSING, DENYING: validate-bash.sh is registered but ~/.claude/hooks/codebox/validate-bash.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/validate-bash.sh).\"}}'; fi",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$HOME/.claude/hooks/codebox/enforce-live-file-edit.sh\"; if [ ! -x \"$h\" ]; then sleep 0.005; fi; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK CRASHED, DENYING: enforce-live-file-edit.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-live-file-edit.sh).\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"HOOK MISSING, DENYING: enforce-live-file-edit.sh is registered but ~/.claude/hooks/codebox/enforce-live-file-edit.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/enforce-live-file-edit.sh).\"}}'; fi",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$HOME/.claude/hooks/codebox/warn-zsh-word-split.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"systemMessage\": \"HOOK MISSING: warn-zsh-word-split.sh is registered but ~/.claude/hooks/codebox/warn-zsh-word-split.sh is missing or not executable, so it did not run. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/warn-zsh-word-split.sh).\", \"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"additionalContext\": \"HOOK MISSING: warn-zsh-word-split.sh is registered but ~/.claude/hooks/codebox/warn-zsh-word-split.sh is missing or not executable, so it did not run. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/warn-zsh-word-split.sh).\"}}'; fi",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$HOME/.claude/hooks/codebox/warn-install-telemetry.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"systemMessage\": \"HOOK MISSING: warn-install-telemetry.sh is registered but ~/.claude/hooks/codebox/warn-install-telemetry.sh is missing or not executable, so it did not run. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/warn-install-telemetry.sh).\", \"hookSpecificOutput\": {\"hookEventName\": \"PostToolUse\", \"additionalContext\": \"HOOK MISSING: warn-install-telemetry.sh is registered but ~/.claude/hooks/codebox/warn-install-telemetry.sh is missing or not executable, so it did not run. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/warn-install-telemetry.sh).\"}}'; fi",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$HOME/.claude/hooks/codebox/warn-install-telemetry.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"systemMessage\": \"HOOK MISSING: warn-install-telemetry.sh is registered but ~/.claude/hooks/codebox/warn-install-telemetry.sh is missing or not executable, so it did not run. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/warn-install-telemetry.sh).\", \"hookSpecificOutput\": {\"hookEventName\": \"PostToolUseFailure\", \"additionalContext\": \"HOOK MISSING: warn-install-telemetry.sh is registered but ~/.claude/hooks/codebox/warn-install-telemetry.sh is missing or not executable, so it did not run. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/warn-install-telemetry.sh).\"}}'; fi",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$HOME/.claude/hooks/codebox/ccw-watch\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\": \"HOOK MISSING: ccw-watch is registered but ~/.claude/hooks/codebox/ccw-watch is missing or not executable, so it did not run. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/ccw-watch).\", \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"HOOK MISSING: ccw-watch is registered but ~/.claude/hooks/codebox/ccw-watch is missing or not executable, so it did not run. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/ccw-watch).\"}}'; fi",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "h=\"$HOME/.claude/hooks/codebox/claude-session-env\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\": \"HOOK MISSING: claude-session-env is registered but ~/.claude/hooks/codebox/claude-session-env is missing or not executable, so it did not run. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/claude-session-env).\", \"hookSpecificOutput\": {\"hookEventName\": \"SessionStart\", \"additionalContext\": \"HOOK MISSING: claude-session-env is registered but ~/.claude/hooks/codebox/claude-session-env is missing or not executable, so it did not run. Fix it: restore settings/codebox/hooks in fifty-shades-of-dotfiles and run ./install.sh --profile codebox on codebox, which copies the hooks into place (~/.claude/hooks/codebox/claude-session-env).\"}}'; fi",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
   }
 }

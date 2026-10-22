@@ -1,0 +1,2335 @@
+#!/bin/bash
+# CODEBOX'S COPY (23 Oct 2026, Gavin, dotfiles-main Q50: 1), from makeitso's hooks/enforce-no-permanent-delete.sh at 38bf349; it shares nothing with that file. Changed: its logs are under ~/.local/state/codebox-hooks; the shell snapshots it reads, and the home it reads, are codebox's own ~/.claude; repair hints name this repo's settings/codebox/hooks (fifty-shades-of-dotfiles), placed by ./install.sh --profile codebox. The makeitso lines about ~/.claude_v2 stay and do nothing on codebox, which has no such folder. Its history before that: MAKEITSO'S OWN COPY (14 Oct 2026, Gavin Q16: 1), from fifty-shades-of-dotfiles home/.claude/hooks at ca2fec4; it shares nothing with that file. Changed: it reads Claude's shell snapshots from ~/.claude_v2 (makeitso's home), and logs to ~/.local/state/makeitso; its block message states the rule instead of pointing at the old setup's rule documents.
+# enforce-no-permanent-delete.sh -- DENY agent Bash commands that destroy data
+# without going through the Trash, and name the safe route in the denial.
+# PreToolUse on Bash. Registered for BOTH targets (user and project) in
+# settings/claude/hooks.json, because the rule it enforces is machine-wide:
+# OPERATIONAL_RULES.md "Deletion" and CLAUDE.md "Deletion safety".
+#
+# WHY IT EXISTS. Ruled by Gavin 2026-09-23 (option A). The trigger: an agent was
+# one step from `git worktree remove`, which unlinks a whole tree outside the
+# Trash, and no rm wrapper can see it because it never calls rm. The rm PATH
+# shim covers `rm`; it cannot cover `git clean`, `find -delete`, `unlink`,
+# `rsync --delete`, `> file`, an absolute `/bin/rm`, or `os.remove` inside a
+# `python3 -c`. docs/DELETION_SAFETY.md lists those under "What the rm wrappers
+# do NOT protect against"; this hook turns most of that list into a refusal.
+#
+# HOW IT READS A COMMAND. Not a regex over the text. A small shell lexer (awk,
+# below) splits the command into SIMPLE COMMANDS the way zsh would: quotes are
+# removed and their contents stay inside one word, heredoc bodies are set aside,
+# comments are dropped, and every $(...), `...`, <(...), >(...) and =(...) body
+# is emitted as a command of its own. The rules then look at argv[0] of each
+# simple command, after seeing through prefixes (VAR=1, sudo, command, env,
+# nohup, time, nice, timeout, xargs, noglob, nocorrect, builtin, exec, -,
+# repeat N, uv run, git -C/-c/--git-dir, find -exec, fd -x). So a banned word
+# inside a commit message, an echo, an rg pattern or a heredoc is DATA and is
+# allowed, while the same word as a command is denied wherever it sits.
+#
+# THE BASH TOOL IS ZSH. The lexer covers zsh shapes too: &! and &| (disown),
+# |&, =(...), glob qualifiers like *(.) (kept inside the word), ${(f)...},
+# >! and >>! (clobber), precommands noglob / nocorrect / -, repeat N.
+# Unquoted $var does not word-split in zsh, so `x="git clean -fd"; $x` runs a
+# command literally named "git clean -fd" and fails: not a deletion, allowed.
+#
+# ALIASES. Agent shells source Claude Code's shell snapshot, which defines
+# ~300 aliases that DO expand. A hook sees the text before expansion, so each
+# command word is looked up in the newest snapshot's alias table and the
+# expansion is classified too (recursively, as zsh does). Functions in the
+# snapshot are NOT expanded: a wrapper's body may name /bin/rm (the selftest's
+# fixture rm() does), so expanding functions would deny every bare rm.
+#
+# WHAT STAYS INVISIBLE (docs/DELETION_SAFETY.md has the full table): a script
+# or Makefile target that deletes internally, a compiled program, a command
+# name held in a variable ($RM x, $=x), git aliases, ssh to another host,
+# `mv`/`cp` over an existing file, and code piped in from a file.
+#
+# LOGS every denial to ${XDG_STATE_HOME:-~/.local/state}/dotfiles/hooks-security.log,
+# the same shape as validate-bash.sh / enforce-uv.sh. The logged command is
+# capped at 400 chars and token-shaped strings and credential-named
+# assignments are redacted first: a guard must not become the leak.
+#
+# FAILS CLOSED when it cannot finish: the verdict is computed in a child, and
+# no verdict within 3 s (guard-timeout) or a child that exits without one
+# (guard-no-verdict) is a DENY that says it is not a match. The harness allows
+# the command once this hook passes its 5 s timeout, so a stall used to be an
+# allow (W-20260923-A54).
+#
+# FAILS CLOSED WHEN ITS CLASSIFIER IS GUTTED (guard-broken, W-20260929-A186).
+# An empty verdict is an allow, so a classifier that still PARSES but no
+# longer recognises anything allowed /bin/rm x with exit 0 and no message
+# (measured 2026-09-29: a copy with the one call in _classify replaced by `:`).
+# So the child must first deny a canary, `/bin/rm x`, as rm-path before its
+# verdict on the real command counts. A SYNTAX error is already closed: bash
+# stops parsing the file and exits 2, which Claude Code treats as a block
+# (measured the same day on two broken copies; the selftest keeps that arm).
+#
+# AN UNREADABLE PAYLOAD (jq missing, malformed JSON, tool_input.command moved)
+# is DENIED by name when its raw text mentions a trigger, and passes otherwise
+# (D-20260925-A03, 2026-09-25; before that it always passed): denying every
+# call would block every Bash call. An empty command passes. jq missing, or the
+# lexer failing, still SHOUTS through additionalContext when nothing matched.
+#
+# `--selftest` proves every arm, deny AND allow. `--mutants [text]` removes each
+# `#M:` line (or only those whose tag holds text) in turn from a copy and shows
+# the selftest catch it.
+
+# No `set -u`: /bin/bash is 3.2 on macOS, where an EMPTY array expanded as
+# "${a[@]}" is an unbound-variable error. Globbing is off for the whole run
+# (words are split on US and must never glob); _snapshot_file turns it back on
+# for its one glob.
+set -f
+
+HOOK_NAME="enforce-no-permanent-delete"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/codebox-hooks"
+LOG_FILE="${DEL_GUARD_LOG:-$STATE_DIR/hooks-security.log}"
+SNAP_DIR="${DEL_GUARD_SNAPSHOT_DIR:-$HOME/.claude/shell-snapshots}"
+MAX_DEPTH=4
+
+US=$'\037'   # field separator in lexer records
+RSC=$'\036'  # stands for a newline inside a word
+OPM=$'\002'  # marks a redirection operator word
+
+# ---------------------------------------------------------------- the lexer
+# Input: the command on stdin. Output, one record per line, fields split by US:
+#   C <pid> <word>...   a simple command; redirection ops are OPM-prefixed words
+#                       followed by their target word
+#   X <pid> <text>      text that RUNS as shell code (A118): a <( ) body given to
+#                       source, . or a shell, or a $( ) / backtick span in an unquoted
+#                       heredoc body
+#   H <pid> <text>      stdin data for pipeline <pid>: a heredoc body or a
+#                       here-string (<<<)
+#   E <maxpid>          last line, always; its absence means the lexer failed
+# <pid> numbers a pipeline: it changes at ; & && || newline, not at |.
+# enforce-secret-probe.sh reads this block from this file at run time, by its two
+# marker lines (`read -r -d '' LEXER <<'AWK'` and `AWK`). Keep both lines as they
+# are, and after changing the lexer run enforce-secret-probe.sh --selftest as well.
+read -r -d '' LEXER <<'AWK'
+BEGIN { US = sprintf("%c", 31); RSC = sprintf("%c", 30); OPM = sprintf("%c", 2); Q = sprintf("%c", 39)
+        HEX = "0123456789abcdef"; buf = ""; first = 1
+        # Command names the bash rules act on. A simple command that contains none
+        # of them, no alias, no SAFE_RM_OFF and no truncating redirection cannot be
+        # denied, so it is not emitted: bash 3.2 costs ~0.15 ms per command it sees.
+        # nofilter=1 emits everything; the selftest runs every arm both ways.
+        nt = split("sudo doas env command exec time repeat nice timeout gtimeout caffeinate stdbuf gstdbuf watch xargs gxargs eval sh bash zsh dash ksh mksh yash fish rm grm unlink gunlink shred gshred srm wipe truncate gtruncate dd gdd cp gcp find gfind fd fdfind git rsync rimraf del-cli docker podman docker-compose brew pnpm bun bunx npx pnpx uv node nodejs deno perl ruby osascript diskutil wipefs tmutil trash trash-empty trash-rm herdr crontab tee gtee script source . export declare typeset local readonly unset hash grhh gwipe gpristine", TL, " ")
+        for (k = 1; k <= nt; k++) TRIG[TL[k]] = 1
+        hasal = 0
+        if (snap != "") loadaliases() }
+function loadaliases(   line, l, k, v) {
+  while ((getline line < snap) > 0) {
+    if (index(line, "alias ") != 1) continue
+    l = line; sub(/^alias (-- )?/, "", l)
+    k = index(l, "="); if (k < 2) continue
+    v = substr(l, k + 1)
+    if (length(v) >= 2 && substr(v, 1, 1) == Q && substr(v, length(v), 1) == Q) {
+      v = substr(v, 2, length(v) - 2); gsub(Q "\\\\" Q Q, Q, v)
+    }
+    AV[substr(l, 1, k - 1)] = v; hasal = 1   #M: alias table loaded
+  }
+  close(snap)
+}
+function trig(w,   b) {
+  if (index(w, "SAFE_RM_OFF") == 1) return 1
+  if (w ~ /^(PATH|path)\+?=/) return 1   #M: prefilter: PATH assignment
+  if (w ~ /^HOME\+?=/) return 1   #M: prefilter: HOME assignment (W-20260929-A171: ~/.local/bin after it is not the shim)
+  b = w; sub(/^=/, "", b); sub(/.*\//, "", b)
+  if (b in TRIG) return 1
+  if (b ~ /^(python|pypy)[0-9.]*$/ || b ~ /^mkfs/ || b ~ /^newfs/) return 1
+  return 0
+}
+{ if (first) { buf = $0; first = 0 } else buf = buf "\n" $0 }
+END {
+  s = buf; n = length(s); P = base + 0; maxp = P; hn = 0; hstart = 1; d = 0
+  lex(1, "")
+  print "E" US maxp
+}
+function newstate() {
+  d++; nw[d] = 0; cur[d] = ""; inw[d] = 0; pd[d] = 0; hdp[d] = 0; hst[d] = 0; hsp[d] = 0; wq[d] = 0; ps[d] = ""; es[d] = ""
+  P++; if (P > maxp) maxp = P; pid[d] = P
+}
+function newpipe() { P++; if (P > maxp) maxp = P; pid[d] = P }
+function enc(x) { gsub(/\n/, RSC, x); return x }
+function flushword() {
+  if (inw[d]) {
+    nw[d]++; W[d, nw[d]] = cur[d]
+    if (hdp[d]) { hn++; HD[hn] = cur[d]; HT[hn] = hst[d]; HP[hn] = pid[d]; HQ[hn] = wq[d]; hdp[d] = 0 }   # A118: HQ = quoted marker
+    else if (hsp[d]) { hsp[d] = 0; print "H" US pid[d] US enc(cur[d]) }
+  }
+  cur[d] = ""; inw[d] = 0; wq[d] = 0
+}
+function emitcmd(   k, out, w, op, intr, nop, fw, data, al, safe, trd) {
+  flushword()
+  if (nw[d] > 0) {
+    intr = nofilter + 0; nop = 0; fw = ""; data = ""; al = 0; safe = 0; trd = 0
+    for (k = 1; k <= nw[d]; k++) {
+      w = W[d, k]
+      if (substr(w, 1, 1) == OPM) {
+        op = substr(w, 2); if (op == ">" || op == "&>" || op == ">&") { intr = 1; trd = 1 }   #M: prefilter: truncating redirect
+        k++; continue
+      }
+      nop++
+      if (fw == "" && w !~ /^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=/) fw = w
+      else if (fw != "") data = (data == "") ? w : data " " w
+      if (trig(w)) intr = 1   #M: prefilter: trigger words
+      if (index(w, "SAFE_RM_OFF") == 1) safe = 1
+      if (hasal && (w in AV)) { intr = 1; al = 1 }
+    }
+    if (nop == 0) intr = 1
+    if (ps[d] != "" && (fw == "source" || fw == "." || fw ~ /^(bash|sh|zsh|dash|ksh)$/)) print "X" US pid[d] US enc(ps[d] " | sh")   #M: A118 source <( ) body is code
+    ps[d] = ""
+    if (es[d] != "" && fw == "eval") print "X" US pid[d] US enc(es[d] " | sh")   #M: A134 eval of a substitution is code
+    es[d] = ""
+    # echo/printf/print is DATA: emitted as stdin for its pipeline, which only
+    # matters when an interpreter reads it (echo code | python3)
+    if (!al && (fw == "echo" || fw == "printf" || fw == "print") && !(fw in AV) && !trd) {
+      if (!safe) { print "H" US pid[d] US enc(data); nw[d] = 0; return }   #M: echo is data for its pipeline
+    }
+    if (intr) {
+      if (al) for (k = 1; k <= nw[d]; k++) {
+        w = W[d, k]
+        if ((w in AV) && !(w in EA)) { EA[w] = 1; print "A" US w US enc(AV[w]) }   #M: alias records sent
+      }
+      out = "C" US pid[d]
+      for (k = 1; k <= nw[d]; k++) out = out US enc(W[d, k])
+      print out
+    }
+  }
+  nw[d] = 0
+}
+function addop(op) { flushword(); nw[d]++; W[d, nw[d]] = OPM op }
+# A118: every $( ) (not $(( ))) and backtick span in t, sent as code (X records)
+function xsubs(t, p,   i, m, c, dd, st) {
+  m = length(t); i = 1
+  while (i <= m) {
+    c = substr(t, i, 1)
+    if (c == "\\") { i += 2; continue }
+    if (c == "$" && substr(t, i + 1, 1) == "(" && substr(t, i + 2, 1) != "(") {
+      dd = 1; st = i + 2; i += 2
+      while (i <= m && dd > 0) { c = substr(t, i, 1); if (c == "(") dd++; else if (c == ")") dd--; i++ }
+      print "X" US p US enc(substr(t, st, i - 1 - st)); continue
+    }
+    if (c == "`") {
+      st = i + 1; i++
+      while (i <= m && substr(t, i, 1) != "`") i++
+      print "X" US p US enc(substr(t, st, i - st)); i++; continue
+    }
+    i++
+  }
+}
+function readheredocs(i,   k, j, line, t, body, rest) {
+  for (k = hstart; k <= hn; k++) {
+    body = ""
+    while (i < n) {
+      rest = substr(s, i + 1); j = index(rest, "\n")
+      if (j == 0) { line = rest; i = n } else { line = substr(rest, 1, j - 1); i = i + j }
+      t = line; if (HT[k]) sub(/^\t+/, "", t)   #M: lexer: <<- strips tabs
+      if (t == HD[k]) break
+      body = body line "\n"
+    }
+    print "H" US HP[k] US enc(body)
+    if (!HQ[k]) xsubs(body, HP[k])   #M: A118 unquoted heredoc substitutions
+  }
+  hstart = hn + 1
+  return i
+}
+function matchparen(i,   depth, c) {
+  depth = 0
+  while (i <= n) {
+    c = substr(s, i, 1)
+    if (c == "\\") { i += 2; continue }
+    if (c == "(") depth++
+    else if (c == ")") { depth--; if (depth == 0) return i }
+    i++
+  }
+  return n
+}
+function brace(i,   depth, c) {
+  depth = 1
+  while (i <= n) {
+    c = substr(s, i, 1)
+    if (c == "\\") { i += 2; continue }
+    if (c == "$" && substr(s, i + 1, 1) == "(") { i = lex(i + 2, ")"); continue }   #M: lexer: $( ) inside ${ }
+    if (c == "{") depth++
+    else if (c == "}") { depth--; if (depth == 0) return i + 1 }
+    i++
+  }
+  return n + 1
+}
+function hexval(h,   a, b) {
+  a = index(HEX, tolower(substr(h, 1, 1))) - 1; b = index(HEX, tolower(substr(h, 2, 1))) - 1
+  if (a < 0) return -1
+  if (b < 0) return a
+  return a * 16 + b
+}
+function ansic(i,   c, c2, v) {
+  while (i <= n) {
+    c = substr(s, i, 1)
+    if (c == "'") return i + 1
+    if (c == "\\") {
+      c2 = substr(s, i + 1, 1)
+      if (c2 == "n") cur[d] = cur[d] "\n"
+      else if (c2 == "t") cur[d] = cur[d] "\t"
+      else if (c2 == "x") {
+        v = hexval(substr(s, i + 2, 2))
+        if (v >= 0) { cur[d] = cur[d] sprintf("%c", v); i += (index(HEX, tolower(substr(s, i + 3, 1))) > 0) ? 4 : 3; continue }   #M: lexer: $'\\xHH'
+        cur[d] = cur[d] c2
+      }
+      else cur[d] = cur[d] c2
+      i += 2; continue
+    }
+    cur[d] = cur[d] c; i++
+  }
+  return i
+}
+function dq(i,   c, c2, j) {
+  while (i <= n) {
+    c = substr(s, i, 1)
+    if (c == "\"") return i + 1
+    if (c == "\\") {
+      c2 = substr(s, i + 1, 1)
+      if (c2 == "\n") { i += 2; continue }
+      if (c2 == "\"" || c2 == "\\" || c2 == "$" || c2 == "`") { cur[d] = cur[d] c2; i += 2; continue }
+      cur[d] = cur[d] c; i++; continue
+    }
+    if (c == "$" && substr(s, i + 1, 1) == "(") { j = i + 2; i = lex(i + 2, ")"); es[d] = substr(s, j, i - 1 - j); cur[d] = cur[d] "$(...)"; continue }   #M: lexer: $( ) inside double quotes
+    if (c == "$" && substr(s, i + 1, 1) == "{") { j = brace(i + 2); cur[d] = cur[d] substr(s, i, j - i); i = j; continue }
+    if (c == "`") { j = i + 1; i = lex(i + 1, "`"); es[d] = substr(s, j, i - 1 - j); cur[d] = cur[d] "$(...)"; continue }   #M: lexer: backticks inside double quotes
+    cur[d] = cur[d] c; i++
+  }
+  return i
+}
+function redirop(i,   t3, t2) {
+  t3 = substr(s, i, 3); t2 = substr(s, i, 2)
+  if (t3 == "<<<" || t3 == "<<-" || t3 == ">>!" || t3 == ">>|") return t3
+  if (t2 == "<<" || t2 == "<>" || t2 == "<&" || t2 == ">>" || t2 == ">&" || t2 == ">|" || t2 == ">!") return t2
+  return substr(s, i, 1)
+}
+function lex(i, term,   c, c2, j, op) {
+  newstate()
+  while (i <= n) {
+    c = substr(s, i, 1)
+    if (c == "\\") {
+      c2 = substr(s, i + 1, 1)
+      if (c2 == "\n") { i += 2; continue }
+      cur[d] = cur[d] c2; inw[d] = 1; wq[d] = 1; i += 2; continue
+    }
+    if (c == "'") {
+      j = index(substr(s, i + 1), "'")
+      if (j == 0) { cur[d] = cur[d] substr(s, i + 1); inw[d] = 1; wq[d] = 1; i = n + 1; continue }
+      cur[d] = cur[d] substr(s, i + 1, j - 1); inw[d] = 1; wq[d] = 1; i = i + j + 1; continue   #M: lexer: single quotes
+    }
+    if (c == "\"") { inw[d] = 1; wq[d] = 1; i = dq(i + 1); continue }   #M: lexer: double quotes
+    if (c == "$") {
+      c2 = substr(s, i + 1, 1)
+      if (c2 == "'") { inw[d] = 1; i = ansic(i + 2); continue }
+      if (c2 == "(") { j = i + 2; i = lex(i + 2, ")"); es[d] = substr(s, j, i - 1 - j); cur[d] = cur[d] "$(...)"; inw[d] = 1; continue }   #M: lexer: $( ) unquoted
+      if (c2 == "{") { j = brace(i + 2); cur[d] = cur[d] substr(s, i, j - i); inw[d] = 1; i = j; continue }
+      cur[d] = cur[d] c; inw[d] = 1; i++; continue
+    }
+    if (c == "`") {
+      if (term == "`") { emitcmd(); d--; return i + 1 }
+      j = i + 1; i = lex(i + 1, "`"); es[d] = substr(s, j, i - 1 - j); cur[d] = cur[d] "$(...)"; inw[d] = 1; continue
+    }
+    if ((c == "<" || c == ">" || c == "=") && substr(s, i + 1, 1) == "(" && (c != "=" || !inw[d])) {
+      if (c != "=") flushword()
+      j = i + 2; i = lex(i + 2, ")"); if (c == "<") ps[d] = substr(s, j, i - 1 - j)   # A118: <( ) body
+      cur[d] = cur[d] "$(...)"; inw[d] = 1; continue   #M: lexer: <( ) >( ) =( )
+    }
+    if (c == " " || c == "\t") { flushword(); i++; continue }
+    if (c == "\n") {
+      emitcmd(); newpipe()   #M: lexer: newline separates
+      if (hstart <= hn) i = readheredocs(i)   #M: lexer: heredoc bodies set aside
+      i++; continue
+    }
+    if (c == "#" && !inw[d]) { j = index(substr(s, i), "\n"); i = (j == 0) ? n + 1 : i + j - 1; continue }   #M: lexer: comments
+    if (c == ";") {
+      emitcmd(); newpipe(); i++   #M: lexer: ; separates
+      while (substr(s, i, 1) == ";" || substr(s, i, 1) == "&" || substr(s, i, 1) == "|") i++
+      continue
+    }
+    if (c == "&") {
+      c2 = substr(s, i + 1, 1)
+      if (c2 == ">") {
+        op = "&>"; i += 2
+        if (substr(s, i, 1) == ">") { op = "&>>"; i++ }
+        if (substr(s, i, 1) == "!" || substr(s, i, 1) == "|") i++
+        addop(op); continue
+      }
+      emitcmd(); newpipe(); i++
+      if (c2 == "&" || c2 == "!" || c2 == "|") i++
+      continue
+    }
+    if (c == "|") {
+      c2 = substr(s, i + 1, 1)
+      emitcmd(); i++
+      if (c2 == "|") { newpipe(); i++ } else if (c2 == "&") i++
+      continue
+    }
+    if (c == "(") {
+      if (inw[d]) { j = matchparen(i); cur[d] = cur[d] substr(s, i, j - i + 1); i = j + 1; continue }   #M: lexer: ( inside a word
+      emitcmd(); pd[d]++; i++; continue
+    }
+    if (c == ")") {
+      if (pd[d] > 0) { emitcmd(); pd[d]--; i++; continue }
+      if (term == ")") { emitcmd(); d--; return i + 1 }
+      emitcmd(); i++; continue
+    }
+    if (c == "<" || c == ">") {
+      if (inw[d] && cur[d] ~ /^[0-9]+$/) { cur[d] = ""; inw[d] = 0 } else flushword()   #M: lexer: fd number before >
+      op = redirop(i); i += length(op)
+      gsub(/[!|]/, "", op)   #M: lexer: zsh >! and >|
+      addop(op)
+      if (op == "<<" || op == "<<-") { hdp[d] = 1; hst[d] = (op == "<<-") }   #M: lexer: heredoc start
+      if (op == "<<<") hsp[d] = 1   #M: lexer: here-string
+      continue
+    }
+    cur[d] = cur[d] c; inw[d] = 1; i++
+  }
+  emitcmd(); d--; return i
+}
+AWK
+
+# ---------------------------------------------------------------- messages
+FOOTER='A permanent delete is Gavin'"'"'s call: stop and ask. The rule: delete only through the Trash.
+If the banned words are DATA here (a message, a pattern, prose), put them inside quotes or a heredoc and they are not read as a command.'
+
+_msg() { # $1 = rule id -> what it does, then the safe route
+  case "$1" in
+    rm-path)        echo "rm called by path runs the real deleter and skips the Trash. SAFE ROUTE: bare rm (it resolves to the Trash-routed wrapper)." ;;
+    rm-lookup)      echo "rm looked up through a changed PATH (env, env -i, a PATH= prefix, unset/export PATH, command -p, sudo -i, hash rm=) can resolve to /bin/rm and skip the Trash; env -i finds /bin tools with PATH wiped. SAFE ROUTE: bare rm, with PATH left alone." ;;
+    rm-P)           echo "rm -P overwrites the bytes before unlinking; nothing recovers it. SAFE ROUTE: bare rm without -P." ;;
+    safe-rm-off)    echo "SAFE_RM_OFF was the bypass of the Trash wrapper; Gavin removed it on 2026-09-29 and it now does nothing, so setting it only shows an attempt to delete permanently. SAFE ROUTE: bare rm, or ask Gavin." ;;
+    grm)            echo "grm is GNU rm; it bypasses the Trash shim. SAFE ROUTE: bare rm." ;;
+    unlink)         echo "unlink deletes outside the Trash. SAFE ROUTE: bare rm." ;;
+    shred)          echo "shred/srm/wipe overwrite and delete; nothing recovers it. SAFE ROUTE: bare rm, or ask Gavin." ;;
+    truncate)       echo "truncate empties a file in place; no Trash copy. SAFE ROUTE: move it aside first (command mv f f.bak) or ask Gavin." ;;
+    dd-of)          echo "dd of= overwrites its target. SAFE ROUTE: write to a new file, or ask Gavin." ;;
+    redir-trunc)    echo "a redirection with no command (> f, : > f, cat /dev/null > f) empties the file; no Trash copy. SAFE ROUTE: move it aside first, or ask Gavin." ;;
+    find-delete)    echo "find -delete unlinks outside the Trash. SAFE ROUTE: find . -name PATTERN -print to list, then the same command with -exec rm {} + in place of -print (bare rm, a test such as -name before it, no -depth)." ;;
+    find-exec-untested) echo "find runs left to right, so an -exec rm (or rmdir, trash) with no test before it in its AND-chain runs on EVERY file find reaches: ahead of -name, or right after a -o, it sends the whole tree to the Trash. SAFE ROUTE: put a test such as -name before the action, and run the same command with -print in place of the action first." ;;
+    find-depth-prune) echo "find -depth (BSD -d) makes -prune do nothing, so a folder you pruned is no longer protected from the -exec rm. SAFE ROUTE: drop -depth (and -d) when using -prune; run the same command with -print in place of the action first." ;;
+    git-worktree-remove) echo "git worktree remove unlinks the whole worktree outside the Trash. SAFE ROUTE: rm -r <dir> (Trash-routed), then git worktree prune." ;;
+    herdr-worktree-remove) echo "herdr worktree remove deletes the git worktree AND its checkout folder outside the Trash. SAFE ROUTE: commit, rm -r <repo>/.worktree/<branch> (Trash-routed), then git -C <repo> worktree prune." ;;
+    git-clean)      echo "git clean deletes untracked files outside the Trash. SAFE ROUTE: git clean -n to list, then rm the files (bare rm)." ;;
+    git-reset-hard) echo "git reset --hard discards uncommitted work. SAFE ROUTE: git stash push -u (recoverable), or ask Gavin." ;;
+    git-checkout-discard) echo "git checkout on paths (-- <path>, ., or a file) or with -f discards uncommitted work. SAFE ROUTE: git stash push -u (recoverable), or ask Gavin; for a branch use git switch <branch>." ;;
+    git-restore)    echo "git restore without --staged overwrites the working tree. SAFE ROUTE: git stash push -u (recoverable), or ask Gavin; git restore --staged <f> only unstages." ;;
+    git-switch-discard) echo "git switch -f / --discard-changes throws away uncommitted work. SAFE ROUTE: git stash push -u first, or ask Gavin." ;;
+    git-branch-force) echo "git branch -D / --delete --force / -M / -C deletes or overwrites a branch even when unmerged. SAFE ROUTE: git branch -d (refuses unmerged work)." ;;
+    git-stash-drop) echo "git stash drop / clear destroys stashed work. SAFE ROUTE: ask Gavin." ;;
+    git-rm-force)   echo "git rm -f removes files AND their uncommitted changes, which are in neither the Trash nor git. SAFE ROUTE: commit or stash first, git rm --cached to keep the file, or ask Gavin." ;;
+    git-filter-repo) echo "git filter-repo / filter-branch rewrites history; the old commits are gone once their refs expire. SAFE ROUTE: ask Gavin." ;;
+    crontab-remove) echo "crontab -r deletes the whole crontab with no copy. SAFE ROUTE: crontab -l > a backup file first, or ask Gavin." ;;
+    git-history-prune) echo "git reflog expire/delete, git gc --prune=now and git prune destroy the recovery trail. SAFE ROUTE: ask Gavin." ;;
+    rsync-delete)   echo "rsync --delete* / --remove-source-files deletes outside the Trash. SAFE ROUTE: rsync without them (-n to preview), then rm extras (bare rm), or ask Gavin." ;;
+    inline-code)    echo "inline code deletes files (os.remove, shutil.rmtree, Path.unlink, fs.rm, unlink, /bin/rm...) outside the Trash. SAFE ROUTE: delete with bare rm in the shell, or ask Gavin." ;;
+    prune)          echo "docker/podman prune or volume rm, compose down -v, brew cleanup or --zap, pnpm store prune, uv cache clean/prune and bun pm cache rm destroy data or caches. SAFE ROUTE: ask Gavin." ;;
+    rimraf)         echo "rimraf deletes outside the Trash. SAFE ROUTE: bare rm -r." ;;
+    disk)           echo "diskutil erase/partition, mkfs, newfs and wipefs destroy whole volumes. SAFE ROUTE: ask Gavin." ;;
+    tmutil)         echo "tmutil delete* removes backups or snapshots. SAFE ROUTE: ask Gavin." ;;
+    guard-timeout)  echo "the guard gave NO VERDICT within ${DEADLINE:-3} s (a timeout, not a match). SAFE ROUTE: split the command into smaller pieces, or ask Gavin." ;;
+    guard-no-verdict) echo "the guard exited without a verdict (a crash, not a match). SAFE ROUTE: ask Gavin; the guard's --selftest shows what broke." ;;
+    guard-broken) echo "the guard's classifier is broken (it no longer denies /bin/rm), so it cannot judge anything (not a match). SAFE ROUTE: ask Gavin; run the hook's --selftest, or revert the last change to it." ;;
+    trash-path)     echo "trash called by path (/usr/bin/trash, or a copy anywhere but ~/.local/bin), through command/env, or after a PATH change (PATH=..., export/unset PATH, hash trash=, sudo -i) skips the trash guard (it refuses a blank argument, the current folder, ~, ~/CODE and repo roots; an empty trash '' moved a whole repo to the Trash on 2026-09-29). SAFE ROUTE: plain trash, which goes through the guard." ;;
+    trash-empty)    echo "emptying the Trash (trash-empty, trash-rm, Finder empty trash) makes every earlier delete permanent. SAFE ROUTE: ask Gavin." ;;
+    *)              echo "this command destroys data outside the Trash. SAFE ROUTE: ask Gavin." ;;
+  esac
+}
+
+# ---------------------------------------------------------------- unreadable payload
+# D-20260925-A03 (W-20260924-A76). When the payload cannot be read (jq missing,
+# invalid JSON, no tool_input.command) nothing above can run, so a crude match
+# on the RAW text decides: one pattern per rule id, first hit wins, and a hit
+# DENIES naming that rule. No hit: exit 0 (or the no-jq shout) as before.
+# Deliberately NOT triggers, each with an arm: bare rm (the safe route; every
+# cleanup would be refused), a > redirection (in most commands, and the rule
+# needs the file on disk), `git checkout <branch-or-file>` (cannot tell which
+# unread). Aliases from the snapshot cannot be seen either, except the three
+# oh-my-zsh ones the lexer's word list already names (grhh gwipe gpristine).
+# The selftest's coverage arms hold every rule id in _msg to a sample here.
+_RL='(^|[^A-Za-z0-9_-])'                                   # a word starts
+_RR='([^A-Za-z0-9_-]|$)'                                   # a word ends
+_RG="${_RL}git([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+"   # git, -C/-c/... options
+RAW_TRIG_ID=(); RAW_TRIG_RE=()
+_rt() { RAW_TRIG_ID[${#RAW_TRIG_ID[@]}]="$1"; RAW_TRIG_RE[${#RAW_TRIG_RE[@]}]="$2"; }
+_rt safe-rm-off         'SAFE_RM_OFF'
+_rt rm-path             '(^|[^A-Za-z0-9_-])[A-Za-z0-9_./~-]*/g?rm([^A-Za-z0-9_.-]|$)'
+_rt rm-lookup           "${_RL}(env|command[[:space:]]+-[A-Za-z]*p[A-Za-z]*|sudo[[:space:]]([^|;&]*[[:space:]])?(-i|--login)|(PATH|path)\\+?=[^[:space:]]*)[[:space:]]([^|;&]*[[:space:]])?rm${_RR}|${_RL}hash[[:space:]][^|;&]*rm="
+_rt rm-P                "${_RL}g?rm([[:space:]]+-[A-Za-z]+)*[[:space:]]+-[A-Za-z]*P"
+_rt grm                 "${_RL}grm${_RR}"
+_rt unlink              "${_RL}g?unlink${_RR}"
+_rt shred               "${_RL}(g?shred|srm|wipe)${_RR}"
+_rt truncate            "${_RL}g?truncate${_RR}"
+_rt dd-of               "${_RL}g?dd[[:space:]]([^|;&]*[[:space:]])?of="
+_rt find-delete         "[[:space:]]-delete${_RR}"
+_FX="[[:space:]]+-(exec|execdir|ok|okdir)[[:space:]]+(command[[:space:]]+)?[\\\\]*(g?rm|rmdir|trash|safe-rm)${_RR}"   # an -exec of a Trash-routed deleter
+_rt find-exec-untested  "${_RL}g?find([[:space:]]+-[EXdsxHLP]+|[[:space:]]+[^-[:space:]][^[:space:]]*)*${_FX}"
+_rt find-depth-prune    "${_RL}g?find[[:space:]]([^|&]*[[:space:]])?-(depth|[EXsxHLP]*d[EXsxHLP]*)[[:space:]]([^|&]*[[:space:]])?-prune[[:space:]][^|&]*${_FX}|${_RL}g?find[[:space:]]([^|&]*[[:space:]])?-prune[[:space:]]([^|&]*[[:space:]])?-(depth|d)[[:space:]][^|&]*${_FX}"
+_rt git-worktree-remove "${_RG}worktree[[:space:]]+remove${_RR}"
+_rt herdr-worktree-remove "${_RL}herdr([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+worktree[[:space:]]+remove${_RR}"
+_rt git-clean           "${_RG}clean${_RR}"
+_rt git-reset-hard      "${_RG}reset[[:space:]][^|;&]*--hard|${_RL}(grhh|gwipe|gpristine)${_RR}"
+_rt git-checkout-discard "${_RG}checkout[[:space:]]([^|;&]*[[:space:]])?(-f|--force|--|\\.)([[:space:]]|$)"
+_rt git-restore         "${_RG}restore${_RR}"
+_rt git-switch-discard  "${_RG}switch[[:space:]][^|;&]*(-f|--force|--discard-changes)${_RR}"
+_rt git-branch-force    "${_RG}branch[[:space:]][^|;&]*(-D|-M|-C|--force)${_RR}"
+_rt git-stash-drop      "${_RG}stash[[:space:]]+(drop|clear)${_RR}"
+_rt git-rm-force        "${_RG}rm[[:space:]]([^|;&]*[[:space:]])?(-[A-Za-z]*f[A-Za-z]*|--force)${_RR}"
+_rt git-filter-repo     "${_RG}filter-(repo|branch)${_RR}"
+_rt crontab-remove      "${_RL}crontab[[:space:]]([^|;&]*[[:space:]])?-[A-Za-z]*r"
+_rt git-history-prune   "${_RG}(reflog[[:space:]]+(expire|delete)|prune|gc[[:space:]][^|;&]*--prune)"
+_rt rsync-delete        "${_RL}rsync[[:space:]][^|;&]*--(delete|remove-source-files)"
+_rt inline-code         '(os\.(remove|unlink|rmdir|removedirs)|shutil\.rmtree|\.unlink\(|unlinkSync|rmSync|rmdirSync|fs\.(rm|unlink|rmdir)|File\.delete|FileUtils\.rm)'
+_rt prune               "(docker|podman)[^|;&]*[[:space:]](prune|volume[[:space:]]+rm)|compose[^|;&]*[[:space:]]down[^|;&]*[[:space:]]-v|brew[[:space:]]+cleanup|--zap|store[[:space:]]+prune|uv[[:space:]]+cache[[:space:]]+(clean|prune)|pm[[:space:]]+cache[[:space:]]+rm"
+_rt rimraf              "${_RL}(rimraf|del-cli)${_RR}"
+_rt disk                "${_RL}(diskutil[[:space:]]+[A-Za-z]*([Ee]rase|[Pp]artition|[Zz]ero)|mkfs|newfs|wipefs)"
+_rt tmutil              "${_RL}tmutil[[:space:]]+delete"
+_rt trash-empty         "${_RL}(trash-empty|trash-rm)${_RR}|[Ee]mpty([[:space:]]+the)?[[:space:]]+[Tt]rash"
+_rt trash-path          "(^|[^A-Za-z0-9_-])[A-Za-z0-9_./~-]*/trash([^A-Za-z0-9_.-]|\$)|${_RL}(command|env)[[:space:]]([^|;&]*[[:space:]])?trash${_RR}"
+
+_raw_trigger() { # $1 = raw payload -> RAW_HIT = the first rule id it mentions; 0 on a hit
+  local t r i=0
+  # undo the common JSON string escapes, crudely: \n \r \t to a space, \" to "
+  t="$(printf '%s' "$1" | sed -e 's/\\[nrt]/ /g' -e 's/\\"/"/g')"
+  RAW_HIT=""
+  while [ "$i" -lt "${#RAW_TRIG_RE[@]}" ]; do
+    r="${RAW_TRIG_RE[$i]}"
+    if [[ $t =~ $r ]]; then RAW_HIT="${RAW_TRIG_ID[$i]}"; return 0; fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# ---------------------------------------------------------------- state
+REASON=""; REASON_ID=""; REASON_WHERE=""
+PIDBASE=0
+SI_KIND=()        # SI_KIND[pid] = shell|code : an interpreter in that pipeline reads stdin
+AL_N=(); AL_V=(); ALIAS_VAL=""; SNAP_FILE=""; SNAP_DONE=0
+CWD=""            # the payload's cwd; used to tell a path from a branch name
+DEPTH=0
+# rm-lookup (W-20260925-A25). Bare rm is safe only because PATH finds the Trash
+# shim first. PATH_TOUCHED names an earlier statement in this command that changed
+# PATH (unset PATH; export PATH=..; PATH=/bin alone) and stays set for the rest of
+# it. RM_LOOKUP (a dynamic local in _argv) names a prefix that changes the lookup
+# of the command after it (env, PATH=.., command -p, sudo -i). Either one makes a
+# bare rm a deny. Since 2026-09-29 (W-20260929-A158) the same two make a bare
+# trash a deny too: the trash shim is found the same way, so the same holes applied.
+PATH_TOUCHED=""
+# HOME_TOUCHED names an earlier statement that changed HOME (HOME=x; export HOME=x;
+# unset HOME). After it, ~/.local/bin/rm and ~/.local/bin/trash no longer name the
+# shims, so by path they are denied like any other copy (W-20260929-A171). A prefix
+# (HOME=x ~/...) is left alone: the ~ there still expands to the old home.
+HOME_TOUCHED=""
+# SAW_DELETER names the Trash-routed deleter (rm, rmdir, trash, safe-rm) the last
+# classified argv reached and ALLOWED. _find_cmd clears it before an -exec body and
+# reads it after, to hold that body to the find ordering rules (W-20261001-A72).
+SAW_DELETER=""
+
+# The one place a Trash shim may be named by path: ~/.local/bin/<name> in this
+# account's home, spelled with ~, $HOME, ${HOME} or the home written out. Any
+# other folder called .local/bin (/tmp/x/.local/bin/trash) was allowed before
+# 2026-09-29 (W-20260929-A171); a copy there is not the shim.
+_home_shim() { # $1 = the command word as typed, $2 = rm | trash -> 0 when it IS the shim
+  [ -n "$HOME_TOUCHED" ] && return 1                                          #M: HOME changed, shim path distrusted
+  case "$1" in "~/.local/bin/$2"|'$HOME/.local/bin/'"$2"|'${HOME}/.local/bin/'"$2") return 0 ;; esac
+  [ -n "${HOME-}" ] && [ "$1" = "$HOME/.local/bin/$2" ] && return 0
+  return 1
+}
+
+_deny() { # $1 = rule id, $2 = where it was found (optional)
+  [ -n "$REASON_ID" ] && return 0
+  REASON_ID="$1"; REASON_WHERE="${2:-}"; REASON="$(_msg "$1")"
+}
+
+# The newest shell snapshot: its alias table is what an agent's zsh expands.
+# The lexer reads it (awk getline) and sends A records for aliases it meets.
+_snapshot_file() {
+  SNAP_DONE=1
+  local f newest=""
+  set +f
+  for f in "$SNAP_DIR"/snapshot-*.sh; do
+    [ -f "$f" ] || continue
+    if [ -z "$newest" ] || [ "$f" -nt "$newest" ]; then newest="$f"; fi
+  done
+  set -f
+  SNAP_FILE="$newest"
+}
+
+# Sets ALIAS_VAL, rc 0 when $1 is an alias the lexer reported.
+_alias_of() {
+  ALIAS_VAL=""
+  local k=0
+  while [ $k -lt ${#AL_N[@]} ]; do
+    if [ "${AL_N[$k]}" = "$1" ]; then ALIAS_VAL="${AL_V[$k]}"; return 0; fi
+    k=$((k + 1))
+  done
+  return 1
+}
+
+# Deletion calls in inline code (python, node, perl, ruby, osascript, and the
+# heredoc bodies fed to them). Word boundaries are spelled out: macOS regex has
+# no \b.
+_code_deletes() {
+  local code="${1//$RSC/$'\n'}"
+  local nb='(^|[^A-Za-z0-9_$])'
+  local re1="${nb}(unlink|rmtree|rmdir|removedirs|remove_tree|unlinkSync|rmSync|rmdirSync)([^A-Za-z0-9_]|\$)"
+  local re2="${nb}rm[[:space:]]*\\("
+  local re3='os\.remove[[:space:]]*\(|os\.truncate|\.truncate[[:space:]]*\(|File\.delete|Dir\.delete|FileUtils\.(rm|remove)'
+  local re4='/bin/rm|/usr/bin/rm|(^|[^A-Za-z0-9_])(shred|srm)[[:space:]]'
+  local re5='[eE][mM][pP][tT][yY][[:space:]]+([tT][hH][eE][[:space:]]+)?[tT][rR][aA][sS][hH]'
+  [[ $code =~ $re5 ]] && { _deny trash-empty "inline code"; return 0; }                              #M: empty-trash in code
+  [[ $code =~ $re1 || $code =~ $re2 || $code =~ $re3 || $code =~ $re4 ]] && _deny inline-code "inline code"   #M: inline-code patterns
+  return 0
+}
+
+# Lex and classify a piece of shell text (the top-level command, or an
+# `sh -c` / eval / env -S string, or a heredoc fed to a shell).
+_shell_text() { # $1 = text
+  [ -n "$REASON_ID" ] && return 0
+  [ "$DEPTH" -ge "$MAX_DEPTH" ] && return 0
+  DEPTH=$((DEPTH + 1))
+  local recs rc
+  [ "$SNAP_DONE" -eq 1 ] || _snapshot_file
+  recs="$(printf '%s' "$1" | LC_ALL=C awk -v base="$PIDBASE" -v snap="$SNAP_FILE" -v nofilter="${DEL_GUARD_NOFILTER:-0}" "$LEXER" 2>/dev/null)"; rc=$?
+  if [ $rc -ne 0 ] || [[ $recs != *"E$US"* ]]; then
+    LEXER_FAILED=1; DEPTH=$((DEPTH - 1)); return 0
+  fi
+  local -a lines hpids hbodies xcodes
+  local line oldifs="$IFS"
+  IFS=$'\n'; lines=($recs); IFS="$oldifs"
+  local -a f
+  for line in "${lines[@]}"; do
+    IFS="$US"; f=($line); IFS="$oldifs"
+    case "${f[0]}" in
+      C) CUR_PID="${f[1]}"; _simple "${f[@]:2}" ;;
+      A) AL_N[${#AL_N[@]}]="${f[1]}"; AL_V[${#AL_V[@]}]="${f[2]//$RSC/$'\n'}" ;;   #M: alias records
+      H) hpids[${#hpids[@]}]="${f[1]}"; hbodies[${#hbodies[@]}]="${f[2]:-}" ;;
+      X) xcodes[${#xcodes[@]}]="${f[2]:-}" ;;   # A118: text that runs as code
+      E) [ "${f[1]}" -gt "$PIDBASE" ] 2>/dev/null && PIDBASE="${f[1]}" ;;
+    esac
+    [ -n "$REASON_ID" ] && break
+  done
+  # stdin data (heredocs, here-strings, echo piped in) reaching an interpreter
+  local k=0 kind
+  while [ -z "$REASON_ID" ] && [ $k -lt ${#hpids[@]} ]; do
+    kind="${SI_KIND[${hpids[$k]}]:-}"
+    case "$kind" in
+      shell) _shell_text "${hbodies[$k]//$RSC/$'\n'}" ;;       #M: heredoc to a shell
+      code)  _code_deletes "${hbodies[$k]}" ;;                  #M: heredoc to an interpreter
+    esac
+    k=$((k + 1))
+  done
+  k=0
+  while [ -z "$REASON_ID" ] && [ $k -lt ${#xcodes[@]} ]; do
+    _shell_text "${xcodes[$k]//$RSC/$'\n'}"   #M: A118 text run as code
+    k=$((k + 1))
+  done
+  DEPTH=$((DEPTH - 1))
+}
+
+# One simple command: split its redirections out, then classify argv.
+_simple() {
+  [ -n "$REASON_ID" ] && return 0
+  local -a a=()
+  local w expect="" trunc="" devin=0
+  for w in "$@"; do
+    if [ -n "$expect" ]; then
+      case "$expect" in
+        '>'|'&>')
+          case "$w" in
+            /dev/null|/dev/stdout|/dev/stderr|/dev/tty|/dev/fd/*|'$(...)'*) ;;
+            *) trunc="$w" ;;   #M: truncation target
+          esac ;;
+        '>&')
+          case "$w" in
+            [0-9]|-|/dev/null|/dev/stdout|/dev/stderr|/dev/tty|'$(...)'*) ;;
+            *) trunc="$w" ;;
+          esac ;;
+        '<') [ "$w" = /dev/null ] && devin=1 ;;   #M: stdin from /dev/null
+      esac
+      expect=""; continue
+    fi
+    if [[ $w == "$OPM"* ]]; then expect="${w#"$OPM"}"; continue; fi
+    a[${#a[@]}]="$w"
+  done
+  TRUNC="$trunc"
+  DEVIN="$devin"
+  if [ ${#a[@]} -eq 0 ]; then
+    [ -n "$TRUNC" ] && _deny redir-trunc "> $TRUNC"      #M: bare truncating redirection
+    return 0
+  fi
+  _argv "$ALIAS_DEPTH_CTX" "${a[@]}"
+}
+
+RE_ASSIGN='^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?='
+RE_RM_P='^-[A-Za-z]*P'
+RE_RSYNC_DEL='^--(del|delete|delete-[a-z-]+|remove-source-files|remove-sent-files)(=.*)?$'
+_is_assign() { [[ $1 =~ $RE_ASSIGN ]]; }
+
+# Classify one argv. $1 = alias depth, then the words.
+_argv() {
+  [ -n "$REASON_ID" ] && return 0
+  local adepth="$1"; shift
+  local RM_LOOKUP="${RM_LOOKUP-}" pa="" ha=""
+  local TRASH_VIA="${TRASH_VIA-}"   # command/env seen before a trash (trash-path, 2026-09-29)
+  # leading assignments: VAR=1 cmd
+  while [ $# -gt 0 ] && [[ $1 == *=* ]] && _is_assign "$1"; do
+    case "$1" in SAFE_RM_OFF=*|SAFE_RM_OFF+=*) _deny safe-rm-off "$1"; return 0 ;; esac   #M: SAFE_RM_OFF prefix
+    case "$1" in PATH=*|PATH+=*|path=*|path+=*) pa="$1" ;; esac
+    case "$1" in HOME=*|HOME+=*) ha="$1" ;; esac
+    shift
+  done
+  [ -n "$pa" ] && RM_LOOKUP="$pa"                                                            #M: PATH= prefix
+  if [ $# -eq 0 ]; then
+    [ -n "$pa" ] && PATH_TOUCHED="$pa"                                                       #M: bare PATH= statement
+    [ -n "$ha" ] && HOME_TOUCHED="$ha"                                                       #M: bare HOME= statement
+    [ -n "$TRUNC" ] && _deny redir-trunc "> $TRUNC"
+    return 0
+  fi
+  local c="$1"; shift
+  c="${c#=}"                      # zsh =cmd expands to the PATH hit   #M: zsh =cmd
+  local base="${c##*/}"
+  local w k letters
+
+  # aliases, as zsh expands them: the command word, recursively
+  if [ "$adepth" -lt 5 ] && [ ${#AL_N[@]} -gt 0 ] && _alias_of "$c"; then
+    local exp="$ALIAS_VAL" first q qq
+    first="${exp%%[[:space:]]*}"
+    if [ "$first" != "$c" ] || [ "$adepth" -eq 0 ]; then
+      local joined="$exp" save_trunc="$TRUNC"
+      for q in "$@"; do printf -v qq '%q' "$q"; joined="$joined $qq"; done
+      _shell_text_alias "$joined" $((adepth + 1))                                           #M: alias expansion
+      TRUNC="$save_trunc"
+      [ -n "$REASON_ID" ] && { REASON_WHERE="alias $c='$exp'"; return 0; }
+      # an alias that resolves to itself (alias ls='ls -G') falls through below
+      [ "$first" = "$c" ] || return 0
+    fi
+  fi
+
+  case "$base" in
+    # ---- reserved words and precommands: look past them
+    '{'|'}'|'!'|if|then|else|elif|fi|do|done|while|until|end|always|coproc|']]')
+      [ $# -gt 0 ] && _argv "$adepth" "$@"                                                   #M: reserved-word look-through
+      return 0 ;;
+    '[['|for|foreach|select|case|esac) return 0 ;;
+    function)   # W-20260929-A134: function NAME [()] { BODY: the body is a command
+      [ $# -gt 0 ] && shift
+      [ "${1:-}" = "()" ] && shift
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: A134 function body
+      return 0 ;;
+    *'()')   # W-20260929-A134: NAME() { BODY
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: A134 NAME() body
+      return 0 ;;
+    script)   # W-20260929-A118: script [opts] [file [cmd ...]] runs cmd; Linux: script -c CMD
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -c|--command) [ $# -ge 2 ] && _shell_text "$2"; return 0 ;;   #M: A118 script -c
+          -F|-t|-T|-I|-O|-B|-E) shift 2 || set -- ;;
+          --) shift; break ;;
+          -*) shift ;;
+          *) break ;;
+        esac
+      done
+      [ $# -gt 0 ] && shift   # the typescript file
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: A118 script CMD
+      return 0 ;;
+    source|.)   # W-20260929-A118: sourcing stdin reads it as shell code
+      for w in "$@"; do case "$w" in /dev/stdin|/dev/fd/0|-) SI_KIND[$CUR_PID]=shell ;; esac; done   #M: A118 source /dev/stdin
+      return 0 ;;
+    -|nohup|noglob|nocorrect|builtin|unbuffer|chronic)
+      [ $# -gt 0 ] && _argv "$adepth" "$@"                                                   #M: precommand look-through
+      return 0 ;;
+    command)
+      TRASH_VIA="command"                                                                    #M: command trash
+      while [ $# -gt 0 ]; do
+        case "$1" in -v|-V) return 0 ;; esac   #M: command -v is a lookup
+        case "$1" in -*[vV]*) return 0 ;; -*p*) RM_LOOKUP="command $1" ;; esac                #M: command -p
+        case "$1" in -*) shift ;; *) break ;; esac
+      done
+      [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0 ;;
+    exec)
+      while [ $# -gt 0 ]; do
+        case "$1" in -a) shift 2 || set -- ;; -c|-l|-cl|-lc) shift ;; --) shift; break ;; *) break ;; esac
+      done
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: exec look-through
+      return 0 ;;
+    time)
+      while [ $# -gt 0 ]; do case "$1" in -o) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: time look-through
+      return 0 ;;
+    repeat)
+      [ $# -gt 0 ] && shift
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: repeat N look-through
+      return 0 ;;
+    sudo|doas)
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --) shift; break ;;
+          -u|-g|-h|-p|-C|-D|-r|-t|-T|-U|-c) shift 2 || set -- ;;
+          --login|-i*|-[!-]*i*) RM_LOOKUP="$base $1"; shift ;;                                 #M: sudo -i
+          -*) shift ;;
+          *) break ;;
+        esac
+      done
+      [ $# -gt 0 ] && _argv "$adepth" "$@"                                                   #M: sudo look-through
+      return 0 ;;
+    env)
+      RM_LOOKUP="env"                                                                        #M: env rm
+      TRASH_VIA="env"                                                                        #M: env trash
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --) shift; break ;;
+          -u|-C|-P|--unset|--chdir) shift 2 || set -- ;;
+          -S|--split-string) _shell_text "${2:-}"; shift 2 || set --; [ -n "$REASON_ID" ] && return 0 ;;   #M: env -S
+          --split-string=*) _shell_text "${1#*=}"; shift; [ -n "$REASON_ID" ] && return 0 ;;
+          -*) shift ;;
+          *) if _is_assign "$1"; then
+               case "$1" in SAFE_RM_OFF=*) _deny safe-rm-off "env $1"; return 0 ;; esac   #M: env SAFE_RM_OFF
+               shift
+             else break; fi ;;
+        esac
+      done
+      [ $# -gt 0 ] && _argv "$adepth" "$@"                                                   #M: env look-through
+      return 0 ;;
+    export|declare|typeset|local|readonly)
+      for w in "$@"; do
+        :
+        case "$w" in SAFE_RM_OFF=*|SAFE_RM_OFF) _deny safe-rm-off "$base $w"; return 0 ;; esac   #M: export SAFE_RM_OFF
+        case "$w" in PATH=*|PATH+=*|path=*|path+=*) PATH_TOUCHED="$base $w" ;; esac            #M: export PATH=
+        case "$w" in HOME=*|HOME+=*) HOME_TOUCHED="$base $w" ;; esac                            #M: export HOME=
+      done
+      return 0 ;;
+    unset)
+      for w in "$@"; do
+        :
+        case "$w" in PATH|path) PATH_TOUCHED="unset $w" ;; esac                                  #M: unset PATH
+        case "$w" in HOME) HOME_TOUCHED="unset $w" ;; esac                                       #M: unset HOME
+      done
+      return 0 ;;
+    hash)
+      for w in "$@"; do
+        :
+        case "$w" in rm=*|grm=*) _deny rm-lookup "hash $w"; return 0 ;; esac                  #M: hash rm=
+        case "$w" in trash=*) _deny trash-path "hash $w"; return 0 ;; esac                     #M: hash trash=
+      done
+      return 0 ;;
+    nice)
+      while [ $# -gt 0 ]; do case "$1" in -n) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: nice look-through
+      return 0 ;;
+    timeout|gtimeout)
+      while [ $# -gt 0 ]; do case "$1" in -s|-k) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
+      [ $# -gt 0 ] && shift                     # the duration
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: timeout look-through
+      return 0 ;;
+    caffeinate)
+      while [ $# -gt 0 ]; do case "$1" in -t|-w) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: caffeinate look-through
+      return 0 ;;
+    stdbuf|gstdbuf)
+      while [ $# -gt 0 ]; do case "$1" in -i|-o|-e) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: stdbuf look-through
+      return 0 ;;
+    watch)
+      while [ $# -gt 0 ]; do case "$1" in -n|--interval) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
+      [ $# -gt 0 ] && _shell_text "$*"   #M: watch look-through
+      return 0 ;;
+    xargs|gxargs)
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --) shift; break ;;
+          -I|-n|-P|-L|-s|-d|-E|-a|-J|-R|-S|--arg-file|--delimiter|--max-args|--max-procs|--max-lines|--max-chars|--process-slot-var) shift 2 || set -- ;;
+          -*) shift ;;
+          *) break ;;
+        esac
+      done
+      [ $# -gt 0 ] && _argv "$adepth" "$@"                                                   #M: xargs look-through
+      return 0 ;;
+    eval)
+      [ $# -gt 0 ] && _shell_text "$*"   #M: eval
+      return 0 ;;
+    sh|bash|zsh|dash|ksh|mksh|yash|fish)
+      _shell_cmd "$@"; return 0 ;;
+
+    # ---- the deleters themselves
+    rm)
+      if [[ $c == */* ]] && ! _home_shim "$c" rm; then _deny rm-path "$c"; return 0; fi   #M: rm by path
+      if [[ $c != */* ]] && [ -n "$RM_LOOKUP$PATH_TOUCHED" ]; then _deny rm-lookup "${RM_LOOKUP:-$PATH_TOUCHED}, then rm"; return 0; fi   #M: rm after a lookup change
+      for w in "$@"; do
+        [ "$w" = "--" ] && break
+        if [[ $w =~ $RE_RM_P ]]; then _deny rm-P "rm $w"; return 0; fi                           #M: rm -P
+      done
+      SAW_DELETER="rm"                                                                       #M: an allowed rm is a deleter (find -exec order)
+      return 0 ;;
+    rmdir|grmdir|safe-rm)   # W-20261001-A72: allowed, but a deleter for the find -exec order check
+      SAW_DELETER="$base"                                                                    #M: rmdir is a deleter (find -exec order)
+      return 0 ;;
+    grm) _deny grm "grm"; return 0 ;;   #M: grm
+    unlink|gunlink) _deny unlink "$base"; return 0 ;;                                            #M: unlink
+    shred|gshred|srm|wipe) _deny shred "$base"; return 0 ;;                                      #M: shred
+    truncate|gtruncate) _deny truncate "$base"; return 0 ;;                                      #M: truncate
+    echo|print|printf)   # W-20260929-A37: an empty output into a truncating redirection
+      if [ -n "$TRUNC" ]; then
+        if [ "$base" = printf ]; then
+          [ $# -eq 1 ] && [ -z "$1" ] && _deny redir-trunc "printf '' > $TRUNC"   #M: printf '' truncation
+          return 0
+        fi
+        local e_n=0 e_out=0
+        for w in "$@"; do case "$w" in -n) e_n=1 ;; -e|-E|-r|-nE|-ne|-En|-en) case "$w" in *n*) e_n=1 ;; esac ;; '') ;; *) e_out=1 ;; esac; done
+        [ "$e_n" -eq 1 ] && [ "$e_out" -eq 0 ] && _deny redir-trunc "$base -n > $TRUNC"   #M: echo -n truncation
+      fi
+      return 0 ;;
+    tee|gtee)   # W-20260929-A37: tee f < /dev/null empties f
+      if [ "$DEVIN" = 1 ]; then
+        local t_ap=0
+        for w in "$@"; do case "$w" in --append|-a|-[A-Za-z]*a*) t_ap=1 ;; esac; done
+        [ "$t_ap" -eq 0 ] && _deny redir-trunc "$base < /dev/null"   #M: tee < /dev/null truncation
+      fi
+      return 0 ;;
+    crontab)   # W-20260929-A37: crontab -r deletes the whole table
+      for w in "$@"; do [[ $w =~ ^-[A-Za-z]*r[A-Za-z]*$ ]] && { _deny crontab-remove "crontab $w"; return 0; }; done   #M: crontab -r
+      return 0 ;;
+    dd|gdd)
+      for w in "$@"; do
+        :
+        case "$w" in of=/dev/null) ;; of=*) _deny dd-of "dd $w"; return 0 ;; esac                #M: dd of=
+      done
+      return 0 ;;
+    :|true|cat|gcat|cp|gcp)
+      if [ -n "$TRUNC" ]; then
+        case "$base" in
+          :|true) [ $# -eq 0 ] && { _deny redir-trunc ": > $TRUNC"; return 0; } ;;               #M: colon truncation
+          cat|gcat) [ "$*" = /dev/null ] && { _deny redir-trunc "cat /dev/null > $TRUNC"; return 0; } ;;   #M: cat /dev/null truncation
+        esac
+      fi
+      { [ "$base" = cp ] || [ "$base" = gcp ]; } && [ "${1:-}" = /dev/null ] && [ $# -eq 2 ] && { _deny redir-trunc "cp /dev/null $2"; return 0; }   #M: cp /dev/null
+      return 0 ;;
+    find|gfind)
+      _find_cmd "$adepth" "$@"; return 0 ;;
+    fd|fdfind)
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -x|--exec|-X|--exec-batch)
+            shift
+            local -a sub=()
+            while [ $# -gt 0 ] && [ "$1" != ";" ]; do sub[${#sub[@]}]="$1"; shift; done
+            [ ${#sub[@]} -gt 0 ] && _argv "$adepth" "${sub[@]}"   #M: fd -x body
+            [ -n "$REASON_ID" ] && return 0 ;;
+          *) shift ;;
+        esac
+      done
+      return 0 ;;
+    git)
+      _git_cmd "$@"; return 0 ;;
+    rsync)
+      for w in "$@"; do
+        :
+        [[ $w =~ $RE_RSYNC_DEL ]] && { _deny rsync-delete "rsync $w"; return 0; }            #M: rsync delete
+      done
+      return 0 ;;
+    rimraf|del-cli) _deny rimraf "$base"; return 0 ;;   #M: rimraf
+    docker|podman|docker-compose)
+      _container_cmd "$base" "$@"; return 0 ;;
+    brew)
+      case "${1:-}" in
+        cleanup) _deny prune "brew cleanup"; return 0 ;;                                         #M: brew cleanup
+        uninstall|remove|rm) for w in "$@"; do [ "$w" = --zap ] && { _deny prune "brew $1 --zap"; return 0; }; done ;;   #M: brew --zap
+      esac
+      return 0 ;;
+    pnpm)
+      if [ "${1:-}" = store ] && [ "${2:-}" = prune ]; then _deny prune "pnpm store prune"; return 0; fi   #M: pnpm store prune
+      if [ "${1:-}" = dlx ] || [ "${1:-}" = exec ]; then shift; [ $# -gt 0 ] && _argv "$adepth" "$@"; fi   #M: pnpm dlx look-through
+      return 0 ;;
+    bun)
+      if [ "${1:-}" = pm ] && [ "${2:-}" = cache ] && [ "${3:-}" = rm ]; then _deny prune "bun pm cache rm"; return 0; fi   #M: bun pm cache rm
+      if [ "${1:-}" = x ]; then shift; [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0; fi
+      _interp_cmd node "$@"; return 0 ;;
+    bunx|npx|pnpx)
+      while [ $# -gt 0 ]; do case "$1" in -*) shift ;; *) break ;; esac; done
+      [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0 ;;
+    uv)
+      _uv_cmd "$adepth" "$@"; return 0 ;;
+    python|python[0-9]*|pypy|pypy[0-9]*)
+      _interp_cmd python "$@"; return 0 ;;
+    node|nodejs|deno)
+      if [ "$base" = deno ] && [ "${1:-}" = eval ]; then _code_deletes "${2:-}"; return 0; fi   #M: deno eval
+      _interp_cmd node "$@"; return 0 ;;
+    perl|ruby)
+      _interp_cmd "$base" "$@"; return 0 ;;
+    osascript)
+      while [ $# -gt 0 ]; do
+        [ "$1" = -e ] && { _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; }   #M: osascript -e
+        shift
+      done
+      return 0 ;;
+    diskutil)
+      case "${1:-}" in
+        erase*|zeroDisk|randomDisk|secureErase|partitionDisk|reformat|apfs)
+          if [ "${1:-}" != apfs ]; then _deny disk "diskutil $1"; return 0; fi   #M: diskutil erase
+          case "${2:-}" in delete*|erase*) _deny disk "diskutil apfs $2"; return 0 ;; esac ;;
+      esac
+      return 0 ;;
+    mkfs|mkfs.*|newfs|newfs_*|wipefs) _deny disk "$base"; return 0 ;;   #M: mkfs / newfs / wipefs
+    tmutil)
+      case "${1:-}" in delete|deletelocalsnapshots|thinlocalsnapshots|deleteinprogress) _deny tmutil "tmutil $1"; return 0 ;; esac   #M: tmutil delete
+      return 0 ;;
+    trash-empty|trash-rm) _deny trash-empty "$base"; return 0 ;;   #M: trash-empty
+    herdr)   # W-20261007-A20: herdr worktree remove deletes the checkout folder for good
+      while [ $# -gt 0 ]; do case "$1" in --session|--machine|--remote) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done   #M: herdr global options
+      if [ "${1:-}" = worktree ] && [ "${2:-}" = remove ]; then
+        for w in "$@"; do case "$w" in -h|--help) return 0 ;; esac; done             #M: herdr worktree remove --help
+        _deny herdr-worktree-remove "herdr worktree remove"; return 0                 #M: herdr worktree remove
+      fi
+      return 0 ;;
+    trash)   # 2026-09-29: only the PATH shim runs trash-guard; a path or command/env skips it
+      if [[ $c == */* ]] && ! _home_shim "$c" trash; then _deny trash-path "$c"; return 0; fi   #M: trash by path
+      [ -n "$TRASH_VIA" ] && { _deny trash-path "$TRASH_VIA trash"; return 0; }                       #M: command/env trash
+      if [[ $c != */* ]] && [ -n "$RM_LOOKUP$PATH_TOUCHED" ]; then _deny trash-path "${RM_LOOKUP:-$PATH_TOUCHED}, then trash"; return 0; fi   #M: trash after a lookup change
+      SAW_DELETER="trash"                                                                    #M: an allowed trash is a deleter (find -exec order)
+      return 0 ;;
+    # oh-my-zsh aliases that hide a reset --hard, denied BY NAME as well (Gavin,
+    # 2026-09-23). The snapshot's alias table normally denies them by their
+    # expansion above; this arm covers a hook that cannot read the snapshot.
+    grhh|gwipe|gpristine) _deny git-reset-hard "alias $base (oh-my-zsh: git reset --hard$([ "$base" = grhh ] || echo ' && git clean'))"; return 0 ;;   #M: oh-my-zsh reset aliases by name
+  esac
+  return 0
+}
+
+# An alias expansion is shell text, classified with the alias depth carried.
+_shell_text_alias() { # $1 = text, $2 = alias depth
+  local save="$ALIAS_DEPTH_CTX"; ALIAS_DEPTH_CTX="$2"
+  _shell_text "$1"
+  ALIAS_DEPTH_CTX="$save"
+}
+ALIAS_DEPTH_CTX=0
+
+_shell_cmd() { # sh/bash/zsh [opts] [-c CODE | script | -s]
+  local code="" want_code=0 w
+  while [ $# -gt 0 ]; do
+    w="$1"
+    case "$w" in
+      --) shift; break ;;
+      -o|+o|-O|+O) shift 2 || set --; continue ;;
+      -|--noprofile|--norc|--login|--posix) shift; continue ;;
+      --*) shift; continue ;;
+      -*|+*)
+        [[ $w == *c* ]] && want_code=1
+        [[ $w == *s* ]] && SI_KIND[$CUR_PID]=shell
+        shift; continue ;;
+    esac
+    break
+  done
+  if [ "$want_code" -eq 1 ]; then
+    [ $# -gt 0 ] && _shell_text "$1"                                                 #M: sh -c
+    return 0
+  fi
+  [ $# -eq 0 ] && SI_KIND[$CUR_PID]=shell   #M: shell reading stdin
+  return 0
+}
+
+_interp_cmd() { # $1 = python|node|perl|ruby, then args
+  local kind="$1"; shift
+  local w
+  while [ $# -gt 0 ]; do
+    w="$1"
+    case "$kind" in
+      python)
+        case "$w" in
+          -c) _code_deletes "${2:-}"; return 0 ;;                                     #M: python -c
+          -c*) _code_deletes "${w#-c}"; return 0 ;;
+          -m) return 0 ;;
+          -W|-X) shift 2 || set --; continue ;;
+          -[A-Za-z]*c) _code_deletes "${2:-}"; return 0 ;;   #M: python -Xc cluster (a GLOB: letter, anything, c)
+          -) SI_KIND[$CUR_PID]=code; return 0 ;;   #M: python - ARG: code on stdin, ARG is sys.argv (W-20260928-A35)
+          -*) shift; continue ;;
+          *) return 0 ;;                            # a script file: invisible
+        esac ;;
+      node)
+        case "$w" in
+          -e|--eval|-p|--print) _code_deletes "${2:-}"; return 0 ;;                  #M: node -e
+          --eval=*|--print=*) _code_deletes "${w#*=}"; return 0 ;;
+          -r|--require|--import|--loader) shift 2 || set --; continue ;;
+          -) SI_KIND[$CUR_PID]=code; return 0 ;;   #M: node - ARG: code on stdin (W-20260928-A35)
+          -*) shift; continue ;;
+          *) return 0 ;;
+        esac ;;
+      perl|ruby)
+        case "$w" in
+          -e|-E) _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; shift 2 || set --; continue ;;   #M: perl/ruby -e
+          -[A-Za-z]*[eE]) _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; shift 2 || set --; continue ;;
+          -[A-Za-z]*[eE]?*) _code_deletes "${w#*[eE]}"; [ -n "$REASON_ID" ] && return 0; shift; continue ;;
+          -) SI_KIND[$CUR_PID]=code; return 0 ;;
+          -*) shift; continue ;;
+          *) return 0 ;;
+        esac ;;
+    esac
+  done
+  # only options, or `-`, or nothing at all: the code arrives on stdin
+  SI_KIND[$CUR_PID]=code   #M: interpreter reading stdin
+  return 0
+}
+
+_uv_cmd() { # uv [global opts] run|cache|tool ...
+  local adepth="$1"; shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --directory|--project|--cache-dir|--config-file|--color|--python|-p) shift 2 || set -- ;;
+      -*) shift ;;
+      *) break ;;
+    esac
+  done
+  case "${1:-}" in
+    cache)
+      case "${2:-}" in clean|prune) _deny prune "uv cache $2"; return 0 ;; esac   #M: uv cache clean
+      return 0 ;;
+    run)
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --) shift; break ;;
+          --with|--with-editable|--with-requirements|--python|-p|--project|--directory|--package|--extra|--group|--only-group|--no-group|--env-file|--index|--default-index|--index-url|--extra-index-url|--find-links|-f|--upgrade-package|--reinstall-package|--cache-dir|--config-file|--exclude-newer|--python-platform|--color) shift 2 || set -- ;;
+          -m|--module) return 0 ;;
+          -*) shift ;;
+          *) break ;;
+        esac
+      done
+      [ $# -gt 0 ] && _argv "$adepth" "$@"                                             #M: uv run look-through
+      return 0 ;;
+  esac
+  return 0
+}
+
+_container_cmd() { # docker|podman|docker-compose, then args
+  local tool="$1"; shift
+  local -a pos=(); local w vol=0
+  for w in "$@"; do
+    case "$w" in
+      -v|--volumes) vol=1 ;;
+      -*) ;;
+      *) pos[${#pos[@]}]="$w" ;;
+    esac
+  done
+  local p0="${pos[0]:-}" p1="${pos[1]:-}"
+  if [ "$p0" = prune ] || [ "$p1" = prune ]; then _deny prune "$tool ... prune"; return 0; fi      #M: docker prune
+  if [ "$p0" = volume ] && { [ "$p1" = rm ] || [ "$p1" = remove ]; }; then _deny prune "$tool volume $p1"; return 0; fi   #M: docker volume rm
+  { { [ "$tool" = docker-compose ] && [ "$p0" = down ]; } || { [ "$p0" = compose ] && [ "$p1" = down ]; }; } && [ "$vol" -eq 1 ] && { _deny prune "$tool compose down -v"; return 0; }   #M: compose down -v
+  return 0
+}
+
+_find_cmd() { # find args: -delete, and -exec/-execdir/-ok/-okdir bodies
+  # W-20261001-A72: find evaluates left to right, so a Trash-routed deleter in an
+  # -exec body (rm, rmdir, trash, sh -c 'rm ...') still runs on EVERY file when no
+  # test stands before it in its AND-chain (one starts after a -o, a , or a "(").
+  # And -depth (BSD -d) switches -prune off, so a pruned folder is no longer kept.
+  # tst[d]: the current AND-chain at paren depth d has a test. all[d]: every
+  # chain already closed by a -o in the group at depth d had one. A group is a
+  # test for the chain around it only when ALL its chains are: ( -name a -o -print )
+  # is true for every file.
+  local adepth="$1"; shift
+  local -a tst=(0) all=(1)
+  local d=0 k guarded lead=1 depth="" prune=0 deleter=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -delete) _deny find-delete "find -delete"; return 0 ;;                          #M: find -delete
+      -exec|-execdir|-ok|-okdir)
+        local act="$1"
+        shift
+        local -a sub=()
+        while [ $# -gt 0 ] && [ "$1" != ";" ] && [ "$1" != "+" ]; do sub[${#sub[@]}]="$1"; shift; done
+        SAW_DELETER=""
+        # the lexer's word filter drops rmdir and safe-rm, so an sh -c body would
+        # hide them; a body is lexed unfiltered (a local, so it ends with this find)
+        local DEL_GUARD_NOFILTER=1                                                     #M: find body lexed unfiltered
+        [ ${#sub[@]} -gt 0 ] && _argv "$adepth" "${sub[@]}"                           #M: find -exec body
+        [ -n "$REASON_ID" ] && { REASON_WHERE="find -exec ${REASON_WHERE}"; return 0; }
+        if [ -n "$SAW_DELETER" ]; then
+          deleter="$act $SAW_DELETER"
+          guarded=0; k=0
+          while [ $k -le $d ]; do [ "${tst[$k]}" = 1 ] && guarded=1; k=$((k + 1)); done
+          [ "$guarded" = 1 ] || { _deny find-exec-untested "find $deleter with no test before it"; return 0; }   #M: find-exec-untested
+        fi
+        ;;
+      '(') d=$((d + 1)); tst[$d]=0; all[$d]=1 ;;                                       #M: find ( opens a chain
+      ')') if [ $d -gt 0 ]; then
+             [ "${all[$d]}" = 1 ] && [ "${tst[$d]}" = 1 ] && tst[$((d - 1))]=1          #M: find (group) counts as a test
+             d=$((d - 1))
+           fi ;;
+      -o|-or|,)
+        [ "${tst[$d]}" = 1 ] || all[$d]=0                                              #M: find untested alternative opens the group
+        tst[$d]=0                                                                      #M: find -o starts a chain
+        ;;
+      '!'|-not|-a|-and|-true) ;;
+      -depth|-d) depth="$1" ;;                                                         #M: find -depth seen
+      -prune) prune=1 ;;                                                               #M: find -prune seen
+      -maxdepth|-mindepth|-f|-D|-regextype|-files0-from|-fprint|-fprint0|-fls|-printf) shift ;;
+      -fprintf) shift; [ $# -gt 0 ] && shift ;;
+      -xdev|-mount|-follow|-noleaf|-ignore_readdir_race|-noignore_readdir_race|-warn|-nowarn|-daystart|-help|--help|-version|--version|-O*|-print|-print0|-ls|-quit) ;;
+      -name|-iname|-path|-ipath|-wholename|-iwholename|-regex|-iregex|-lname|-ilname|-type|-xtype|-size|-user|-group|-uid|-gid|-perm|-newer|-anewer|-cnewer|-newer[a-zA-Z]*|-mtime|-atime|-ctime|-Btime|-mmin|-amin|-cmin|-Bmin|-links|-inum|-samefile|-fstype|-used|-context|-flags|-acl)
+        tst[$d]=1                                                                      #M: find test with an argument
+        shift ;;
+      -*) if [ "$lead" = 1 ] && [[ $1 =~ ^-[EXdsxHLP]+$ ]]; then                       # BSD/GNU leading options, before the path
+            :
+            [[ $1 == *d* ]] && depth="$1"                                              #M: find leading -d
+          else
+            :
+            tst[$d]=1                                                                  #M: find test without an argument
+          fi ;;
+      *) lead=0 ;;                                                                     # a path, or a stray word
+    esac
+    [ $# -gt 0 ] && shift
+  done
+  if [ -n "$deleter" ] && [ -n "$depth" ] && [ "$prune" = 1 ]; then
+    :
+    _deny find-depth-prune "find $depth ... -prune ... $deleter"                       #M: find-depth-prune
+  fi
+  return 0
+}
+
+_exists() { # $1 = path, $2 = directory it is relative to
+  local p="$1" base="$2"
+  [ -n "$p" ] || return 1
+  case "$p" in /*) [ -e "$p" ]; return ;; esac
+  [ -n "$base" ] || return 1
+  [ -e "$base/$p" ]
+}
+
+# Short-option letters and long options of the current git call (dynamic scope).
+_l() { [[ $letters == *"$1"* ]]; }
+_o() { [[ $longs == *" $1 "* ]]; }
+
+_git_cmd() {
+  local gdir="$CWD" w
+  # global options, and the directory they point at
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -C) case "${2:-}" in /*) gdir="${2:-}" ;; *) [ -n "$gdir" ] && gdir="$gdir/${2:-}" ;; esac; shift 2 || set -- ;;   #M: git -C
+      -c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix) shift 2 || set -- ;;
+      -*) shift ;;
+      *) break ;;
+    esac
+  done
+  local sub="${1:-}"; [ $# -gt 0 ] && shift
+  local letters="" longs=" " args=() dd=0 after=()
+  for w in "$@"; do
+    if [ "$dd" -eq 1 ]; then after[${#after[@]}]="$w"; continue; fi
+    case "$w" in
+      --) dd=1 ;;
+      --*) longs="$longs${w%%=*} " ; [[ $w == --prune=* ]] && longs="$longs$w " ;;
+      -[A-Za-z]*) letters="$letters${w#-}" ;;
+      *) args[${#args[@]}]="$w" ;;
+    esac
+  done
+  case "$sub" in
+    rm)   # W-20260929-A37: -f also drops uncommitted changes; --cached keeps the file
+      if ! _o --cached && { _l f || _o --force; }; then _deny git-rm-force "git rm -f"; fi   #M: git rm -f
+      ;;
+    filter-repo|filter-branch)
+      _deny git-filter-repo "git $sub"   #M: git filter-repo
+      ;;
+    worktree)
+      [ "${args[0]:-}" = remove ] && _deny git-worktree-remove "git worktree remove"          #M: git worktree remove
+      ;;
+    clean)
+      _l n || _o --dry-run || _deny git-clean "git clean"                                     #M: git clean
+      ;;
+    reset)
+      _o --hard && _deny git-reset-hard "git reset --hard"                                    #M: git reset --hard
+      ;;
+    checkout)
+      if [ ${#after[@]} -gt 0 ] || _l f || _o --force; then _deny git-checkout-discard "git checkout"; return 0; fi   #M: git checkout --
+      # -b/-B/--orphan take a branch name; that name is not a path
+      local -a pos=(); local skip=0
+      for w in "$@"; do
+        if [ "$skip" -eq 1 ]; then skip=0; continue; fi
+        case "$w" in -b|-B|--orphan|--conflict) skip=1 ;; -*) ;; *) pos[${#pos[@]}]="$w" ;; esac
+      done
+      if [ ${#pos[@]} -ge 2 ]; then _deny git-checkout-discard "git checkout <ref> <path>"; return 0; fi   #M: git checkout <ref> <path>
+      if [ ${#pos[@]} -eq 1 ]; then
+        case "${pos[0]}" in
+          .|./|:/|:/*|*'*'*|*'?'*) _deny git-checkout-discard "git checkout ${pos[0]}"; return 0 ;;   #M: git checkout .
+        esac
+        if _exists "${pos[0]}" "$gdir"; then _deny git-checkout-discard "git checkout ${pos[0]} (a path on disk)"; return 0; fi   #M: checkout path on disk
+      fi ;;
+    restore)
+      if ! { _l S || _o --staged; } || _l W || _o --worktree; then _deny git-restore "git restore"; fi   #M: git restore
+      ;;
+    switch)
+      if _l f || _o --force || _o --discard-changes; then _deny git-switch-discard "git switch"; fi      #M: git switch -f
+      ;;
+    branch)
+      if _l D || _l M || _l C; then _deny git-branch-force "git branch -$letters"; return 0; fi   #M: git branch -D
+      if { _l d || _o --delete || _l m || _o --move || _l c || _o --copy; } && { _l f || _o --force; }; then _deny git-branch-force "git branch --force"; fi   #M: git branch --delete --force
+      ;;
+    stash)
+      case "${args[0]:-}" in drop|clear) _deny git-stash-drop "git stash ${args[0]}" ;; esac   #M: git stash drop
+      ;;
+    reflog)
+      case "${args[0]:-}" in expire|delete) _deny git-history-prune "git reflog ${args[0]}" ;; esac   #M: git reflog expire
+      ;;
+    gc)
+      case "$longs" in *' --prune=now '*|*' --prune=all '*) _deny git-history-prune "git gc --prune=now" ;; esac   #M: git gc --prune=now
+      ;;
+    prune)
+      _deny git-history-prune "git prune"                                                     #M: git prune
+      ;;
+    submodule)
+      if [ "${args[0]:-}" = foreach ]; then
+        local -a rest=(); local seen=0
+        for w in "$@"; do
+          if [ "$seen" -eq 1 ]; then case "$w" in --recursive|-q|--quiet) ;; *) rest[${#rest[@]}]="$w" ;; esac; fi
+          [ "$w" = foreach ] && seen=1
+        done
+        [ ${#rest[@]} -gt 0 ] && _shell_text "${rest[*]}"   #M: git submodule foreach
+      fi ;;
+  esac
+  return 0
+}
+
+# Classify one whole command string. Sets REASON_ID / REASON / REASON_WHERE.
+_classify() { # $1 = command, $2 = cwd (optional)
+  REASON=""; REASON_ID=""; REASON_WHERE=""; PIDBASE=0; SI_KIND=(); DEPTH=0; PATH_TOUCHED=""; HOME_TOUCHED=""; SAW_DELETER=""
+  AL_N=(); AL_V=(); LEXER_FAILED=0; CWD="${2:-}"; TRUNC=""; CUR_PID=0
+  _shell_text "$1"
+  return 0
+}
+
+# ---------------------------------------------------------------- log
+_redact() { # stdin -> stdout, capped, one line, token shapes removed
+  LC_ALL=C sed -E \
+    -e 's/(gh[pousr]_|github_pat_|glpat-|xox[abposr]-|sk-ant-|sk-)[A-Za-z0-9_-]{8,}/[redacted]/g' \
+    -e 's/AKIA[0-9A-Z]{12,}/[redacted]/g' \
+    -e 's/([A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|_KEY|CREDENTIAL|PRIVKEY|PAT)[A-Za-z0-9_]*=)[^[:space:]]+/\1[redacted]/g' \
+    | tr '\n\t' '  ' | cut -c1-400
+}
+
+_log() { # $1 = rule id, $2 = command
+  local red; red="$(printf '%s' "$2" | _redact)"
+  { mkdir -p "$(dirname "$LOG_FILE")" && \
+    printf '[%s] BLOCKED %s "%s" "%s"\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$HOOK_NAME" "$1" "$red" >> "$LOG_FILE"; } 2>/dev/null
+  return 0
+}
+
+# ---------------------------------------------------------------- selftest
+_selftest() {
+  local fails=0 passes=0 self="$0"
+  local fx; fx="$(mktemp -d "${TMPDIR:-/tmp}/del-guard-selftest.XXXXXX")" || { echo "cannot make a fixture dir"; return 1; }
+  mkdir -p "$fx/repo/src" "$fx/snap"; : > "$fx/repo/src/app.c"; : > "$fx/repo/notes.txt"
+  # a fixture snapshot: one alias that expands to a denied command, harmless ones, a self-alias
+  cat > "$fx/snap/snapshot-zsh-1-fixture.sh" <<'SNAP'
+alias -- gclean='git clean -fdx'
+alias -- gwtrm='git worktree remove'
+alias -- nuke='gclean'
+alias -- ll='eza -l'
+alias -- ls='ls -G'
+alias -- gs='git status'
+alias -- q='echo '\''git clean -fdx'\'''
+rm () {
+	if [[ -n "$SAFE_RM_OFF" ]]; then /bin/rm "$@"; else safe-rm "$@"; fi
+}
+SNAP
+  local save_snap="$SNAP_DIR"; SNAP_DIR="$fx/snap"; SNAP_DONE=0
+
+  # --mutants sets DEL_GUARD_FAILFAST=1: a mutant is caught at its first
+  # failing arm, so the run is not the full selftest times every rule line
+  _failfast() { [ "${DEL_GUARD_FAILFAST:-0}" = 1 ] && { echo "del-guard selftest: stopped at the first failure (DEL_GUARD_FAILFAST)"; exit 1; }; return 0; }
+
+  # Every arm runs twice: with the lexer's prefilter, and with it off
+  # (DEL_GUARD_NOFILTER=1). Both must give the expected answer, which proves
+  # the filter never hides a command the rules would have denied.
+  _must() { # $1 = expected rule id or - for allow, $2 = label, $3 = command, $4 = cwd
+    local got got2
+    _classify "$3" "${4:-$fx/repo}"; got="${REASON_ID:--}"
+    DEL_GUARD_NOFILTER=1 _classify "$3" "${4:-$fx/repo}"; got2="${REASON_ID:--}"
+    if [ "$got" = "$1" ] && [ "$got2" = "$1" ]; then passes=$((passes + 1)); printf 'ok    %-26s %s\n' "$1" "$2"
+    else fails=$((fails + 1)); printf 'FAIL  %-26s %s  (got %s, unfiltered %s)\n' "$1" "$2" "$got" "$got2"; _failfast; fi
+  }
+
+  echo "=== DENY arms: each must be refused by the named rule ==="
+  _must git-worktree-remove 'git worktree remove'            'git worktree remove ../wt'
+  _must git-worktree-remove 'worktree remove --force'        'git worktree remove --force .worktree/x'
+  # W-20261007-A20: herdr's own worktree remove deletes the checkout folder for good
+  _must herdr-worktree-remove 'herdr worktree remove'        'herdr worktree remove'
+  _must herdr-worktree-remove 'herdr ... --workspace ID'     'herdr worktree remove --workspace w12'
+  _must herdr-worktree-remove 'herdr ... --force'            'herdr worktree remove --force --workspace w12'
+  _must herdr-worktree-remove 'herdr --session s ...'        'herdr --session main worktree remove --workspace w12'
+  _must herdr-worktree-remove 'herdr --machine m ...'        'herdr --machine mini worktree remove --workspace w12'
+  _must herdr-worktree-remove 'herdr by path'                '/opt/homebrew/bin/herdr worktree remove --workspace w12'
+  _must herdr-worktree-remove 'command herdr'                'command herdr worktree remove'
+  _must herdr-worktree-remove 'inside $( )'                  'echo "$(herdr worktree remove --workspace w12)"'
+  _must herdr-worktree-remove 'after &&'                     'git status && herdr worktree remove --workspace w12'
+  _must git-clean           'git clean -fdx'                  'git clean -fdx'
+  _must git-clean           'git clean -f'                    'git clean -f'
+  _must git-clean           'git clean -xfd -e keep'          'git clean -xfd -e keep'
+  _must git-reset-hard      'git reset --hard'                'git reset --hard'
+  _must git-reset-hard      'git reset --hard HEAD~1'         'git reset --hard HEAD~1'
+  _must git-checkout-discard 'git checkout -- path'           'git checkout -- src/app.c'
+  _must git-checkout-discard 'git checkout .'                 'git checkout .'
+  _must git-checkout-discard 'git checkout HEAD -- f'         'git checkout HEAD -- notes.txt'
+  _must git-checkout-discard 'git checkout <file on disk>'    'git checkout notes.txt'
+  _must git-checkout-discard 'git checkout main <file>'       'git checkout main notes.txt'
+  _must git-checkout-discard 'git checkout -f main'           'git checkout -f main'
+  _must git-checkout-discard "git checkout '*.c'"             "git checkout '*.c'"
+  _must git-restore         'git restore f'                   'git restore notes.txt'
+  _must git-restore         'git restore .'                   'git restore .'
+  _must git-restore         'git restore --staged --worktree' 'git restore --staged --worktree notes.txt'
+  _must git-restore         'git restore -SW'                 'git restore -SW notes.txt'
+  _must git-switch-discard  'git switch --discard-changes'    'git switch --discard-changes main'
+  _must git-branch-force    'git branch -D'                   'git branch -D feature'
+  _must git-branch-force    'git branch --delete --force'     'git branch --delete --force feature'
+  _must git-branch-force    'git branch -df'                  'git branch -df feature'
+  _must git-branch-force    'git branch -M (overwrite)'       'git branch -M old new'
+  _must git-stash-drop      'git stash drop'                  'git stash drop'
+  _must git-stash-drop      'git stash clear'                 'git stash clear'
+  _must git-history-prune   'git reflog expire'               'git reflog expire --expire=now --all'
+  _must git-history-prune   'git gc --prune=now'              'git gc --prune=now'
+  _must git-history-prune   'git prune'                       'git prune'
+  _must find-delete         'find -delete'                    'find . -name "*.o" -delete'
+  _must rm-path             'find -exec /bin/rm'              'find . -name x -exec /bin/rm {} \;'
+  _must unlink              'find -exec unlink'               'find . -type f -exec unlink {} +'
+  _must rm-path             'fd -x /bin/rm'                   'fd -e tmp -x /bin/rm'
+  # W-20261001-A72: find runs left to right, so a Trash-routed deleter with no test
+  # before it in its AND-chain runs on every file; -depth/-d switches -prune off.
+  _must find-exec-untested  'A72 action first'                'find . -exec rm -rf {} + -name "*.tmp"'
+  _must find-exec-untested  'A72 action after -o, no test'    'find . -name x -o -exec rm {} +'
+  _must find-exec-untested  'A72 -exec rm -rf \;'             'find . -exec rm -rf {} \;'
+  _must find-exec-untested  'A72 -execdir rm'                 'find . -execdir rm {} +'
+  _must find-exec-untested  'A72 -ok rm'                      'find . -ok rm {} \;'
+  _must find-exec-untested  'A72 -okdir rm'                   'find . -okdir rm {} \;'
+  _must find-exec-untested  'A72 -exec command rm'            'find . -exec command rm {} +'
+  _must find-exec-untested  'A72 -exec \rm'                   'find . -exec \rm {} +'
+  _must find-exec-untested  'A72 -exec rmdir'                 'find . -exec rmdir {} +'
+  _must find-exec-untested  'A72 -exec trash'                 'find . -exec trash {} +'
+  _must find-exec-untested  'A72 -exec safe-rm'               'find . -exec safe-rm {} +'
+  _must find-exec-untested  "A72 -exec sh -c 'rm'"            "find . -exec sh -c 'rm \"\$@\"' _ {} +"
+  _must find-exec-untested  'A72 -prune is not a test'        'find . -prune -exec rm -rf {} +'
+  _must find-exec-untested  'A72 -print is not a test'        'find . -print -exec rm {} +'
+  _must find-exec-untested  'A72 -true is not a test'         'find . -true -exec rm {} +'
+  _must find-exec-untested  'A72 -maxdepth is not a test'     'find . -maxdepth 1 -exec rm {} +'
+  _must find-exec-untested  'A72 a grep -exec is not a test'  'find . -exec grep -q x {} \; -exec rm {} +'
+  _must find-exec-untested  'A72 -E leading flag'             'find -E . -exec rm {} +'
+  _must find-exec-untested  'A72 -x -L leading flags'         'find -x -L . -exec rm {} +'
+  _must find-exec-untested  'A72 a group with no test'        'find . \( -print \) -exec rm {} +'
+  _must find-exec-untested  'A72 in a group after -o'         'find . -name a -o \( -exec rm {} + \)'
+  _must find-exec-untested  'A72 GNU comma operator'          'find . -name a , -exec rm {} +'
+  _must find-exec-untested  'A72 sudo find'                   'sudo find . -exec rm {} +'
+  _must find-exec-untested  'A72 $(find)'                     'echo $(find . -exec rm {} +)'
+  _must find-exec-untested  "A72 sh -c 'find'"                "sh -c 'find . -exec rm {} +'"
+  _must find-exec-untested  'A72 xargs find'                  'echo . | xargs -I@ find @ -exec rm {} +'
+  _must find-depth-prune    'A72 -depth and -prune'           'find . -depth -path ./keep -prune -o -name "*.o" -exec rm {} +'
+  _must find-depth-prune    'A72 BSD -d leading and -prune'   'find -d . -path ./keep -prune -o -name "*.o" -exec rm {} +'
+  _must find-depth-prune    'A72 -d primary and -prune'       'find . -d -path ./keep -prune -o -name "*.o" -exec rm {} +'
+  _must find-depth-prune    'A72 -dx cluster and -prune'      'find -dx . -path ./keep -prune -o -name "*.o" -exec rm {} +'
+  _must find-depth-prune    'A72 -prune before -depth'        'find . -path ./keep -prune -o -depth -name "*.o" -exec trash {} +'
+  _must find-exec-untested  'A72 a group true for every file' 'find . \( -name a -o -print \) -exec rm {} +'
+  _must find-exec-untested  'A72 nested untested alternative' 'find . \( -name a -o \( -type f -o -print \) \) -exec rm {} +'
+  _must find-exec-untested  'A72 untested alternative first'  'find . \( -print -o -name a \) -exec rm {} +'
+  _must find-exec-untested  "A72 -exec sh -c 'rmdir'"         "find . -exec sh -c 'rmdir \"\$@\"' _ {} +"
+  _must find-exec-untested  "A72 -exec bash -c 'safe-rm'"     "find . -exec bash -c 'safe-rm \"\$1\"' _ {} \\;"
+  _must rm-path             '/bin/rm'                         '/bin/rm -rf build'
+  _must rm-path             '/usr/bin/rm'                     '/usr/bin/rm x'
+  _must rm-path             'quoted /bin/rm as command'       '"/bin/rm" x'
+  _must rm-path             'backslashed /bin/rm'             '\/bin/rm x'
+  _must rm-path             'env rm by path'                  'env /bin/rm x'
+  # 2026-09-29: the trash guard lives in the PATH shim, so these skip it
+  _must trash-path          '/usr/bin/trash'                  '/usr/bin/trash x'
+  _must trash-path          'quoted /usr/bin/trash'           '"/usr/bin/trash" x'
+  _must trash-path          'command trash'                   'command trash x'
+  _must trash-path          'env trash'                       'env trash x'
+  _must trash-path          'env VAR=1 trash'                 'env FOO=1 trash x'
+  _must trash-path          'sh -c /usr/bin/trash'            "sh -c '/usr/bin/trash x'"
+  _must trash-path          'sh -c command trash'             "sh -c 'command trash x'"
+  _must trash-path          'eval command trash'              "eval 'command trash x'"
+  _must trash-path          'eval /usr/bin/trash'             'eval /usr/bin/trash x'
+  _must trash-path          '$(env trash)'                    'echo $(env trash x)'
+  _must trash-path          '$(/usr/bin/trash)'               'echo "$(/usr/bin/trash x)"'
+  _must trash-path          'xargs /usr/bin/trash'            'ls | xargs /usr/bin/trash'
+  _must trash-path          'find -exec /usr/bin/trash'       'find . -name x -exec /usr/bin/trash {} +'
+  # W-20260929-A158: a PATH change in front of a bare trash reached /usr/bin/trash directly
+  # (the engage incident's own shape); rm had rm-lookup for exactly this, trash had nothing.
+  _must trash-path          'PATH= prefix before trash'       "PATH=/usr/bin trash ''"
+  _must trash-path          'export PATH, then trash'         'export PATH=/usr/bin; trash x'
+  _must trash-path          'path=() (zsh), then trash'       'path=(/usr/bin); trash x'
+  _must trash-path          'unset PATH, then trash'          'unset PATH; trash x'
+  _must trash-path          'hash trash='                     'hash trash=/usr/bin/trash; trash x'
+  _must trash-path          'sudo -i trash'                   "sudo -i trash ''"
+  _must trash-path          'sh -c PATH= trash'               "sh -c 'PATH=/usr/bin trash x'"
+  _must trash-path          'env PATH= trash'                 'env PATH=/usr/bin trash x'
+  # W-20260929-A171: any folder named .local/bin was trusted as the shim's; only ~/.local/bin is
+  _must trash-path          'a trash in another .local/bin'   '/tmp/x/.local/bin/trash x'
+  _must trash-path          './.local/bin/trash'              './.local/bin/trash x'
+  _must rm-path             'an rm in another .local/bin'     '/tmp/x/.local/bin/rm x'
+  _must trash-path          'HOME=; then ~/.local/bin/trash'  'HOME=/tmp/e; ~/.local/bin/trash x'
+  _must trash-path          'export HOME, then $HOME/...'     'export HOME=/tmp/e; $HOME/.local/bin/trash x'
+  _must rm-path             'unset HOME, then ~/.local/bin/rm' 'unset HOME; ~/.local/bin/rm x'
+  _must rm-path             'HOME= later in a chain'          'FOO=1; HOME=/tmp/e; ~/.local/bin/rm x'
+  # rm-lookup (W-20260925-A25): each of these finds rm through a PATH that may
+  # not hold the Trash shim. env -i and command -p MEASURED to reach /bin/rm.
+  _must rm-lookup           'env rm'                          'env rm x'
+  _must rm-lookup           'env -i rm'                       'env -i rm -rf build'
+  _must rm-lookup           'env -u PATH rm'                  'env -u PATH rm x'
+  _must rm-lookup           'env PATH=/bin rm'                'env PATH=/bin rm x'
+  _must rm-lookup           'env -i xargs rm'                 'ls | env -i xargs rm'
+  _must rm-lookup           "env -i sh -c 'rm x'"             "env -i sh -c 'rm x'"
+  _must rm-lookup           'PATH= prefix'                    'PATH=/bin rm x'
+  _must rm-lookup           'path= prefix (zsh array)'        'path=/bin rm x'
+  _must rm-lookup           'PATH+= prefix'                   'PATH+=:/x rm x'
+  _must rm-lookup           'PATH= prefix, command rm'        'PATH=/usr/bin:/bin command rm x'
+  _must rm-lookup           'command -p rm'                   'command -p rm x'
+  _must rm-lookup           'command -p xargs rm'             'ls | command -p xargs rm'
+  _must rm-lookup           'sudo -i rm'                      'sudo -i rm -rf /opt/x'
+  _must rm-lookup           'sudo --login rm'                 'sudo --login rm x'
+  _must rm-lookup           'sudo -Hi rm'                     'sudo -Hi rm x'
+  _must rm-lookup           'unset PATH; rm'                  'unset PATH; rm x'
+  _must rm-lookup           'unset path && rm'                'unset path && rm x'
+  _must rm-lookup           'export PATH= then rm'            'export PATH=/bin && rm x'
+  _must rm-lookup           'typeset PATH= then rm'           'typeset PATH=/bin; rm x'
+  _must rm-lookup           'bare PATH= statement then rm'    'PATH=/bin; rm x'
+  _must rm-lookup           'hash rm='                        'hash rm=/bin/rm'
+  _must rm-lookup           'hash grm= then rm'               'hash grm=/bin/rm && rm x'
+  _must rm-P                'rm -P'                           'rm -P secret.txt'
+  _must rm-P                'rm -rfP cluster'                 'rm -rfP dir'
+  _must safe-rm-off         'SAFE_RM_OFF=1 rm'                'SAFE_RM_OFF=1 rm x'
+  _must safe-rm-off         'export SAFE_RM_OFF'              'export SAFE_RM_OFF=1; rm x'
+  _must safe-rm-off         'env SAFE_RM_OFF=1'               'env SAFE_RM_OFF=1 rm x'
+  _must grm                 'grm (GNU rm)'                    'grm -rf x'
+  _must unlink              'unlink'                          'unlink file'
+  _must shred               'shred'                           'shred -u key'
+  _must shred               'srm'                             'srm -rf dir'
+  _must truncate            'truncate -s0'                    'truncate -s0 log.txt'
+  _must dd-of               'dd of='                          'dd if=/dev/zero of=disk.img bs=1m count=1'
+  _must redir-trunc         '> f (bare)'                      '> notes.txt'
+  _must redir-trunc         ': > f'                           ': > notes.txt'
+  _must redir-trunc         'true >| f'                       'true >| notes.txt'
+  _must redir-trunc         'zsh >! f bare'                   '>! notes.txt'
+  _must redir-trunc         'cat /dev/null > f'               'cat /dev/null > notes.txt'
+  _must redir-trunc         'cp /dev/null f'                  'cp /dev/null notes.txt'
+  _must redir-trunc         '2> f bare'                       '2> notes.txt'
+  # W-20260929-A37 (red-team H7): truncation by a command, git rm -f, history rewrites,
+  # crontab -r. The allow arms are the done-when's controls.
+  _must redir-trunc         'A37 echo -n > f (D11)'           'echo -n > notes.txt'
+  _must redir-trunc         "A37 printf '' > f (D12)"         "printf '' > notes.txt"
+  _must redir-trunc         'A37 tee f < /dev/null (D47)'     'tee notes.txt < /dev/null'
+  _must git-rm-force        'A37 git rm -rf src (D45)'        'git rm -rf src'
+  _must git-rm-force        'A37 git rm --force f'            'git rm --force notes.txt'
+  _must git-filter-repo     'A37 git filter-repo (D44)'       'git filter-repo --path secrets --invert-paths'
+  _must git-filter-repo     'A37 git filter-branch'           'git filter-branch --tree-filter true HEAD'
+  _must crontab-remove      'A37 crontab -r (D50)'            'crontab -r'
+  _must crontab-remove      'A37 crontab -ir'                 'crontab -ir'
+  _must -                   'A37 echo hi >> f (append)'       'echo hi >> notes.txt'
+  _must -                   'A37 echo hi > f (content, not an empty truncation)' 'echo hi > notes.txt'
+  _must -                   'A37 git rm --cached f'           'git rm --cached notes.txt'
+  _must -                   'A37 crontab -l'                  'crontab -l'
+  _must -                   'A37 tee -a f < /dev/null'        'tee -a notes.txt < /dev/null'
+  # W-20260929-A118: four shapes that ran a command no guard saw (lexer comparison S47
+  # S54 S55 S57). The allow arms are the near-miss and data controls.
+  _must rm-P                'A118 script -q /dev/null CMD (S47)' 'script -q /dev/null rm -P x'
+  _must rm-P                'A118 script -q -c CMD file'      'script -q -c "rm -P x" /dev/null'
+  _must rm-P                'A118 source <(echo ...) (S54)'   "source <(echo 'rm -P x')"
+  _must rm-P                'A118 . <(printf ...)'            ". <(printf 'rm -P x')"
+  _must rm-P                'A118 . /dev/stdin <<< (S55)'     ". /dev/stdin <<< 'rm -P x'"
+  _must rm-P                'A118 $(...) in unquoted heredoc (S57)' $'cat <<EOF\n$(rm -P x)\nEOF'
+  _must -                   'A118 script -q /dev/null rm x'   'script -q /dev/null rm x'
+  _must -                   'A118 source <(a generator)'      'source <(kubectl completion zsh)'
+  _must -                   'A118 . /dev/stdin <<< rm x'      ". /dev/stdin <<< 'rm x'"
+  _must -                   'A118 $(...) in QUOTED heredoc stays data' $'cat <<\'EOF\'\n$(rm -P x)\nEOF'
+  # W-20260929-A134: function bodies and eval of a substitution (lexer comparison S20 S21 S69)
+  _must rm-P                'A134 f() { ...; }; f (S20)'      'f() { rm -P x; }; f'
+  _must rm-P                'A134 f () { ...; }'              'f () { rm -P x; }'
+  _must rm-P                'A134 function f { ...; }; f (S21)' 'function f { rm -P x; }; f'
+  _must rm-P                'A134 function f() { ...; }'      'function f() { rm -P x; }'
+  _must rm-P                'A134 eval "$(echo ...)" (S69)'   'eval "$(echo rm -P x)"'
+  _must rm-P                'A134 eval `echo ...`'            'eval `echo rm -P x`'
+  _must -                   'A134 f() { rm x; }; f (near miss)' 'f() { rm x; }; f'
+  _must -                   'A134 eval "$(echo rm x)" (near miss)' 'eval "$(echo rm x)"'
+  _must rsync-delete        'rsync --delete'                  'rsync -a --delete src/ dst/'
+  _must rsync-delete        'rsync --delete-after'            'rsync -a --delete-after src/ dst/'
+  _must rsync-delete        'rsync --del'                     'rsync -a --del src/ dst/'
+  _must rsync-delete        'rsync --remove-source-files'     'rsync -a --remove-source-files src/ dst/'
+  _must inline-code         'python3 -c os.remove'            "python3 -c 'import os; os.remove(\"x\")'"
+  _must inline-code         'uv run python -c shutil.rmtree'  'uv run python -c "import shutil; shutil.rmtree(\"d\")"'
+  _must inline-code         'uv run --with x python3 -c'      "uv run --with rich python3 -c 'from pathlib import Path; Path(\"x\").unlink()'"
+  _must inline-code         'python3 -c os.unlink'            "python3 -c 'import os; os.unlink(\"x\")'"
+  _must inline-code         'python3 -c rmdir'                "python3 -c 'import os; os.rmdir(\"d\")'"
+  _must inline-code         'node -e fs.rmSync'               "node -e 'require(\"fs\").rmSync(\"d\",{recursive:true})'"
+  _must inline-code         'node -e fs.unlinkSync'           "node -e 'require(\"fs\").unlinkSync(\"f\")'"
+  _must inline-code         'node -e fs.rm'                   "node -e 'require(\"fs\").rm(\"d\", ()=>{})'"
+  _must inline-code         'perl -e unlink'                  "perl -e 'unlink \"f\"'"
+  _must inline-code         'ruby -e FileUtils.rm_rf'         "ruby -e 'require \"fileutils\"; FileUtils.rm_rf(\"d\")'"
+  _must inline-code         'python heredoc (uv run -)'       $'uv run python3 - <<\'EOF\'\nimport os\nos.remove("x")\nEOF'
+  _must inline-code         'python heredoc, arg after -'     $'uv run python3 - "$dir" <<\'EOF\'\nimport os\nos.remove("x")\nEOF'
+  _must inline-code         'python3 - two args heredoc'      $'python3 - a b <<\'EOF\'\nimport shutil; shutil.rmtree("d")\nEOF'
+  _must inline-code         'node heredoc, arg after -'       $'node - x <<\'EOF\'\nrequire("fs").rmSync("d")\nEOF'
+  _must inline-code         'python3 heredoc no args'         $'python3 <<EOF\nimport shutil; shutil.rmtree("d")\nEOF'
+  _must inline-code         'cat heredoc | python3'           $'cat <<EOF | python3\nimport os; os.remove("x")\nEOF'
+  _must inline-code         'here-string to python3'          "python3 <<< 'import os; os.remove(\"x\")'"
+  _must inline-code         'echo code | python3'             "echo 'import os; os.remove(\"x\")' | python3"
+  _must prune               'docker system prune'             'docker system prune -af'
+  _must prune               'docker volume prune'             'docker volume prune -f'
+  _must prune               'docker volume rm'                'docker volume rm pgdata'
+  _must prune               'docker compose down -v'          'docker compose down -v'
+  _must prune               'brew cleanup'                    'brew cleanup --prune=all'
+  _must prune               'brew uninstall --zap'            'brew uninstall --zap --cask foo'
+  _must prune               'pnpm store prune'                'pnpm store prune'
+  _must prune               'uv cache clean'                  'uv cache clean'
+  _must prune               'bun pm cache rm'                 'bun pm cache rm'
+  _must rimraf              'pnpm dlx rimraf'                 'pnpm dlx rimraf dist'
+  _must disk                'diskutil eraseDisk'              'diskutil eraseDisk APFS X disk4'
+  _must disk                'mkfs.ext4'                       'mkfs.ext4 /dev/sdb1'
+  _must tmutil              'tmutil deletelocalsnapshots'     'tmutil deletelocalsnapshots /'
+  _must trash-empty         'trash-empty'                     'trash-empty'
+  _must trash-empty         'osascript empty trash'           "osascript -e 'tell application \"Finder\" to empty the trash'"
+
+  echo "=== DENY arms: every prefix and position the anchor must see through ==="
+  _must git-worktree-remove 'after &&'                        'git status && git worktree remove x'
+  _must git-worktree-remove 'after ||'                        'false || git worktree remove x'
+  _must git-worktree-remove 'after ;'                         'echo hi; git worktree remove x'
+  _must git-worktree-remove 'after |'                         'echo x | git worktree remove x'
+  _must git-worktree-remove 'after newline'                   $'echo hi\ngit worktree remove x'
+  _must git-worktree-remove 'inside ( )'                      '(git worktree remove x)'
+  _must git-worktree-remove 'inside { }'                      '{ git worktree remove x; }'
+  _must git-worktree-remove 'inside $( )'                     'echo "$(git worktree remove x)"'
+  _must git-worktree-remove 'inside backticks'                'echo `git worktree remove x`'
+  _must git-worktree-remove 'inside <( )'                     'cat <(git worktree remove x)'
+  _must git-worktree-remove 'zsh =( )'                        'cat =(git worktree remove x)'
+  _must git-worktree-remove 'VAR=1 prefix'                    'FOO=1 git worktree remove x'
+  _must git-worktree-remove 'sudo'                            'sudo git worktree remove x'
+  _must git-worktree-remove 'sudo -u root'                    'sudo -u root git worktree remove x'
+  _must git-worktree-remove 'command'                         'command git worktree remove x'
+  _must git-worktree-remove 'nohup'                           'nohup git worktree remove x'
+  _must git-worktree-remove 'time'                            'time git worktree remove x'
+  _must git-worktree-remove 'xargs'                           'echo x | xargs -n1 git worktree remove'
+  _must git-worktree-remove 'env'                             'env -i FOO=1 git worktree remove x'
+  _must git-worktree-remove 'git -C path'                     'git -C /tmp/repo worktree remove x'
+  _must git-worktree-remove 'git -c k=v'                      'git -c core.x=1 worktree remove x'
+  _must git-worktree-remove 'git --git-dir='                  'git --git-dir=/r/.git worktree remove x'
+  _must git-worktree-remove 'path to git'                     '/usr/bin/git worktree remove x'
+  _must git-worktree-remove 'zsh noglob'                      'noglob git worktree remove x'
+  _must git-worktree-remove 'zsh nocorrect'                   'nocorrect git worktree remove x'
+  _must git-worktree-remove 'zsh - precommand'                '- git worktree remove x'
+  _must git-worktree-remove 'builtin/exec'                    'exec git worktree remove x'
+  _must git-worktree-remove 'zsh &! then cmd'                 'sleep 1 &! git worktree remove x'
+  _must git-worktree-remove 'zsh &| then cmd'                 'sleep 1 &| git worktree remove x'
+  _must git-worktree-remove 'zsh |&'                          'echo x |& git worktree remove x'
+  _must git-worktree-remove 'zsh repeat N'                    'repeat 2 git worktree remove x'
+  _must git-worktree-remove 'if/then'                         'if true; then git worktree remove x; fi'
+  _must git-worktree-remove 'sh -c'                           "sh -c 'git worktree remove x'"
+  _must git-worktree-remove 'bash -lc'                        "bash -lc 'git worktree remove x'"
+  _must git-worktree-remove 'zsh -c nested sudo'              "zsh -c 'sudo git worktree remove x'"
+  _must git-worktree-remove 'eval'                            "eval 'git worktree remove x'"
+  _must git-worktree-remove 'bash heredoc'                    $'bash <<EOF\ngit worktree remove x\nEOF'
+  _must git-worktree-remove 'timeout 5'                       'timeout 5 git worktree remove x'
+  _must git-worktree-remove 'nice -n'                         'nice -n 5 git worktree remove x'
+  _must git-worktree-remove 'line continuation'               $'git worktree \\\nremove x'
+  _must git-worktree-remove 'git submodule foreach'           "git submodule foreach 'git worktree remove x'"
+  _must git-clean           'git -C path clean'               'git -C sub clean -fdx'
+  _must rm-path             'sudo /bin/rm'                    'sudo /bin/rm -rf /opt/x'
+  _must rm-path             'xargs /bin/rm'                   'ls | xargs /bin/rm'
+  _must rm-path             'ANSI-C quoted path'              $'$\'\\x2fbin\\x2frm\' x'
+  _must rm-path             'zsh =rm style path'              '=/bin/rm x'
+  _must unlink              'zsh =unlink (= stripped)'        '=unlink x'
+  _must shred               'command shred'                   'command shred x'
+  _must git-clean           'git clean in sh -c after &&'     "cd_ok=1 && sh -c 'ls; git clean -fd'"
+  _must git-clean           'alias gclean (fixture)'          'gclean'
+  _must git-clean           'alias of alias (nuke->gclean)'   'nuke'
+  _must git-worktree-remove 'alias gwtrm + args'              'gwtrm ../wt'
+  _must git-clean           'alias after &&'                  'git status && gclean'
+  _must git-reset-hard      'grhh by name (not in snapshot)'  'grhh'
+  _must git-reset-hard      'gwipe by name'                   'gwipe'
+  _must git-reset-hard      'gpristine by name, after &&'     'git fetch && gpristine'
+  _must git-reset-hard      'sudo gpristine'                  'sudo gpristine'
+  _must git-worktree-remove 'unquoted $( ) in an assignment'  'x=$(git worktree remove y)'
+  _must git-worktree-remove '$( ) inside ${(f)...}'           'echo ${(f)"$(git worktree remove x)"}'
+  _must git-worktree-remove 'backticks inside double quotes'  'echo "`git worktree remove x`"'
+  _must git-worktree-remove 'after a <<- heredoc'             $'cat <<-EOF\n\tprose\n\tEOF\ngit worktree remove x'
+  _must git-worktree-remove 'caffeinate'                      'caffeinate -i git worktree remove x'
+  _must git-worktree-remove 'stdbuf'                          'stdbuf -oL git worktree remove x'
+  _must git-worktree-remove 'watch'                           'watch -n 5 git worktree remove x'
+  _must git-worktree-remove 'env -S string'                   "env -S 'git worktree remove x'"
+  _must git-worktree-remove 'pnpm exec'                       'pnpm exec git worktree remove x'
+  _must inline-code         'perl -ne cluster'                "perl -ne 'unlink \$_' list.txt"
+  _must inline-code         'python3 -Ic cluster'             "python3 -Ic 'import os; os.remove(\"x\")'"
+  _must inline-code         'deno eval'                       "deno eval 'Deno.removeSync(\"x\"); unlink(\"y\")'"
+  _must inline-code         'node heredoc'                    $'node <<EOF\nrequire("fs").rmSync("d")\nEOF'
+  _must inline-code         'node - heredoc'                  $'node - <<EOF\nrequire("fs").unlinkSync("f")\nEOF'
+  _must git-clean           'zsh heredoc to sh -s'            $'sh -s <<EOF\ngit clean -fdx\nEOF'
+
+  echo "=== ALLOW arms: each must pass untouched ==="
+  _must - 'bare rm'                         'rm notes.txt'
+  _must - 'A20 herdr worktree list'         'herdr worktree list'
+  _must - 'A20 herdr worktree create'       'herdr worktree create --branch topic'
+  _must - 'A20 herdr worktree open'         'herdr worktree open --workspace w12'
+  _must - 'A20 herdr worktree remove --help' 'herdr worktree remove --help'
+  _must - 'A20 herdr pane close'            'herdr pane close w12:p1'
+  _must - 'A20 the words as an echo arg'    'echo herdr worktree remove'
+  _must - 'rm -rf dir'                      'rm -rf build'
+  _must - 'command rm'                      'command rm x'
+  _must - '\rm'                             '\rm x'
+  _must - 'env ls (no rm)'                  'env -i ls'
+  _must - 'env FOO=1 git status'            'env FOO=1 git status'
+  _must - 'PATH= prefix, not rm'            'PATH=/bin ls'
+  _must - 'export PATH, no rm after'        'export PATH=/x:$PATH && ls'
+  _must - 'rm BEFORE export PATH'           'rm x; export PATH=/bin'
+  _must - 'command -p ls'                   'command -p ls'
+  _must - 'command -pv rm is a lookup'      'command -pv rm'
+  _must - 'sudo rm keeps PATH (shim)'       'sudo rm x'
+  _must - 'sudo -u root rm'                 'sudo -u root rm x'
+  _must - 'unset FOO; rm'                   'unset FOO; rm x'
+  _must - 'hash -r; rm'                     'hash -r; rm x'
+  _must - 'echo PATH=/bin rm (data)'        'echo "PATH=/bin rm x"'
+  _must - 'xargs rm (shim via PATH)'        'ls | xargs rm'
+  _must - 'rm -r dir'                       'rm -r dir'
+  _must - 'rm -- -P (a file named -P)'      'rm -- -P'
+  _must - 'zsh glob qualifier rm *(.)'      'rm *(.)'
+  _must - 'zsh glob qualifier rm **/*(N.)'  'rm -f **/*.o(N.)'
+  _must - 'git worktree list'               'git worktree list'
+  _must - 'git worktree add'                'git worktree add ../wt -b x'
+  _must - 'git worktree prune'              'git worktree prune'
+  _must - 'git clean -n'                    'git clean -n'
+  _must - 'git clean -nd'                   'git clean -nd'
+  _must - 'git clean -fdn'                  'git clean -fdn'
+  _must - 'git clean --dry-run -fd'         'git clean --dry-run -fd'
+  _must - 'git branch -d'                   'git branch -d feature'
+  _must - 'git branch -m rename'            'git branch -m old new'
+  _must - 'git branch --list'               'git branch --list'
+  _must - 'git checkout main'               'git checkout main'
+  _must - 'git checkout -b x'               'git checkout -b feature/x'
+  _must - 'git checkout -b x origin/x'      'git checkout -b x origin/x'
+  _must - 'git switch main'                 'git switch main'
+  _must - 'git restore --staged f'          'git restore --staged notes.txt'
+  _must - 'git restore -S f'                'git restore -S notes.txt'
+  _must - 'git stash push -u'               'git stash push -u -m tag'
+  _must - 'git stash list'                  'git stash list'
+  _must - 'git stash pop'                   'git stash pop'
+  _must - 'git stash apply sha'             'git stash apply abc123'
+  _must - 'git reset (soft default)'        'git reset HEAD notes.txt'
+  _must - 'git reset --soft'                'git reset --soft HEAD~1'
+  _must - 'git gc (default)'                'git gc'
+  _must - 'git remote prune'                'git remote prune origin'
+  _must - 'git fetch --prune'               'git fetch --prune'
+  _must - 'git rm (tracked)'                'git rm notes.txt'
+  _must - 'find -print'                     'find . -name x -print'
+  _must - 'find -exec rm (bare)'            'find . -name "*.o" -exec rm {} +'
+  _must - 'find -exec grep'                 'find . -exec grep -l delete {} \;'
+  _must - 'fd -x rm (bare)'                 'fd -e tmp -x rm'
+  # W-20261001-A72 controls: a test before the deleter, or no deleter at all
+  _must - 'A72 find -name x -exec rm'       'find . -name x -exec rm {} +'
+  _must - 'A72 prune idiom'                 "find . -path ./keep -prune -o -name '*.o' -exec rm {} +"
+  _must - 'A72 ( -o ) group then rm'        'find . \( -name a -o -name b \) -exec rm {} +'
+  _must - 'A72 nested groups then rm'       'find . \( \( -name a -o -name b \) -type f \) -exec rm {} +'
+  _must - 'A72 non-deleter action first'    'find . -exec grep -l x {} +'
+  _must - 'A72 ! -name then rm'             'find . ! -name keep -exec rm {} \;'
+  _must - 'A72 -not -name then rm'          'find . -not -name keep -exec rm {} +'
+  _must - 'A72 -name -a -exec rm'           'find . -name a -a -exec rm {} \;'
+  _must - 'A72 -newermt then rm'            'find . -type f -newermt 2026-01-01 -exec rm {} +'
+  _must - 'A72 -maxdepth, -name then rm'    'find . -mindepth 1 -maxdepth 1 -name "*.log" -exec rm {} +'
+  _must - "A72 -name then sh -c 'rm'"       "find . -name x -exec sh -c 'rm \"\$@\"' _ {} +"
+  _must - 'A72 -depth without -prune'       'find . -depth -name "*.o" -exec rm {} +'
+  _must - 'A72 -d -prune, no deleter'       'find -d . -prune -o -print'
+  _must - 'A72 -E with -regex then rm'      "find -E . -regex '.*[.]o' -exec rm {} +"
+  _must - 'A72 rm -d inside the body'       'find . -name x -type d -exec rm -d {} +'
+  _must - 'A72 the words as data'           "rg -n -- '-exec rm {} +' docs/"
+  _must - 'A72 a test, then an open group'  "find . -name '*.o' \( -size +1k -o -print \) -exec rm {} +"
+  _must - 'A72 -empty then rmdir'           'find . -type d -empty -exec rmdir {} +'
+  _must - 'A72 -empty alone then rmdir'     'find . -empty -exec rmdir {} +'
+  _must - 'cmd > out.txt'                   'ls > out.txt'
+  _must - 'cmd 2>&1 > out'                  'make 2>&1 > build.log'
+  _must - '>> append bare'                  '>> notes.txt'
+  _must - ': > /dev/null'                   ': > /dev/null'
+  _must - 'exec > log (logging setup)'      'exec > run.log'
+  _must - 'rsync -a'                        'rsync -a src/ dst/'
+  _must - 'rsync --delay-updates'           'rsync -a --delay-updates src/ dst/'
+  _must - 'rsync --max-delete'              'rsync -a --max-delete=0 src/ dst/'
+  _must - 'dd of=/dev/null'                 'dd if=big of=/dev/null bs=1m'
+  _must - 'dd without of='                  'dd if=/dev/urandom bs=16 count=1'
+  _must - 'commit message with the words'   'git commit -m "note: git worktree remove and git clean -fdx are banned"'
+  _must - 'commit heredoc with the words'   $'git commit -F - <<\'EOF\'\ngit worktree remove x\n/bin/rm -P x\nfind . -delete\nEOF'
+  _must - 'echo prose'                      'echo "never run /bin/rm or git reset --hard"'
+  _must - 'echo unquoted words'             'echo git worktree remove is banned'
+  _must - 'rg pattern'                      "rg 'git clean' docs/"
+  _must - 'rg unlink'                       'rg -n unlink src/'
+  _must - 'decided add --body'              'decided add "x" --body "we shred nothing; unlink is banned"'
+  _must - 'comment'                         'ls # then git worktree remove x'
+  _must - 'comment holding a ;'             'ls # tidy up; git worktree remove x'
+  _must - 'python3 -c reads only'           "python3 -c 'print(open(\"x\").read())'"
+  _must - 'uv run python3 script.py'        'uv run python3 tools/census.py --control x y'
+  _must - 'python heredoc reads only'       $'uv run python3 - <<\'EOF\'\nimport json; print(json.load(open("a")))\nEOF'
+  _must - 'python heredoc, arg after -, reads' $'uv run python3 - "$cur" <<\'EOF\'\nimport sys; print(sys.argv[1])\nEOF'
+  _must - 'python3 script.py arg (unread)'  'python3 tools/x.py - y'
+  _must - 'python -m module'                'python3 -m http.server'
+  _must - 'node -e harmless'                "node -e 'console.log(1)'"
+  _must - 'cat heredoc (not an interpreter)' $'cat <<EOF\nimport os; os.remove("x")\nEOF'
+  _must - 'echo code, no interpreter'       "echo 'os.remove(x)' > notes.md"
+  _must - 'command -v unlink (lookup)'      'command -v unlink'
+  _must - 'which shred'                     'which shred'
+  _must - 'man truncate'                    'man truncate'
+  _must - 'zsh no word-split of $x'         'x="git clean -fd"; $x'
+  _must - 'zsh ${(f)...} flags'             'for l in ${(f)"$(git status)"}; do echo $l; done'
+  _must - 'docker ps'                       'docker ps -a'
+  _must - 'docker compose down (no -v)'     'docker compose down'
+  _must - 'brew install'                    'brew install jq'
+  _must - 'pnpm install'                    'pnpm install'
+  _must - 'bash script.sh'                  'bash ./install.sh --check'
+  _must - 'sh -c harmless'                  "sh -c 'ls -la'"
+  _must - 'trash command'                   'trash notes.txt'
+  _must - 'trash with options (the shim)'   'trash -v notes.txt'
+  _must - 'the trash shim by path'          '~/.local/bin/trash notes.txt'
+  # every spelling of the real ~/.local/bin stays allowed (W-20260929-A171 narrowed the rest)
+  _must - '$HOME/.local/bin/trash'          '$HOME/.local/bin/trash x'
+  _must - 'quoted "$HOME/.local/bin/trash"' '"$HOME/.local/bin/trash" x'
+  _must - '${HOME}/.local/bin/trash'        '${HOME}/.local/bin/trash x'
+  _must - 'the home written out'            "$HOME/.local/bin/trash x"
+  _must - '~/.local/bin/rm by path'         '~/.local/bin/rm x'
+  _must - 'HOME= as a PREFIX (~ is still the old home)' 'HOME=/tmp/e ~/.local/bin/trash x'
+  _must - 'HOME= then a harmless command'   'HOME=/tmp/e; ls'
+  _must - 'PATH= then a harmless command'   'PATH=/usr/bin ls'
+  _must - 'plain trash'                     'trash x'
+  _must - 'command -v trash (lookup)'       'command -v trash'
+  _must - 'trash-guard --check'             'trash-guard --check -- notes.txt'
+  _must - 'the trash words as data'         'echo "never /usr/bin/trash or command trash"'
+  _must - 'mv (not a deleter here)'         'command mv a b'
+  _must - 'alias ll (harmless, fixture)'    'll -d /tmp'
+  _must - 'self alias ls=ls -G'             'ls notes.txt'
+  _must - 'alias that echoes the words'     'q'
+  _must - 'git status alias'                'gs'
+  _must - 'look-alike grh (soft reset)'     'grh'
+  _must - 'look-alike gwip (wip commit)'    'gwip'
+  _must - 'look-alike gpr'                  'gpr'
+  _must - 'the names as data'               'echo grhh gwipe gpristine'
+  _must - 'the name inside a git grep'      'git log --grep=gpristine'
+  _must - 'quoted alias name is data'       "echo 'gclean'"
+  _must - 'SAFE_RM_OFF in prose'            'echo "SAFE_RM_OFF=1 is for humans"'
+  _must - 'array assignment holding words'  'arr=(git worktree remove x)'
+  _must - 'git checkout - (previous branch)' 'git checkout -'
+  _must - 'heredoc to a non-shell after sh'  $'sh ./x.sh; cat <<EOF\ngit clean -fdx\nEOF'
+  _must - 'control: harmless'               'echo control-ok'
+  _must - 'empty command'                   ''
+
+  SNAP_DIR="$save_snap"; SNAP_DONE=0
+
+  echo "=== HOOK arms: the real payload envelope through stdin ==="
+  local env_json out rc t0 t1 ms big logf
+  # A REAL PreToolUse payload, captured by the conductor on 2.1.280 with a
+  # throwaway headless session whose hook tee'd its stdin. Only the username
+  # in the two paths is replaced (the leak scanner refuses it).
+  env_json='{"session_id":"8b72042b-ac79-44e8-8bbc-4c5382fde5fa","transcript_path":"/Users/example/.claude/projects/-Users-example-CODE-Scaffoldings-fifty-shades-of-dotfiles/8b72042b-ac79-44e8-8bbc-4c5382fde5fa.jsonl","cwd":"/Users/example/CODE/Scaffoldings/fifty-shades-of-dotfiles","prompt_id":"8905fe60-96c3-42ca-888b-28d51a8a7853","permission_mode":"auto","effort":{"level":"medium"},"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo capture-test-for-del-guard","description":"Echo a capture-test marker string"},"tool_use_id":"toolu_01KPKbNj9PaHgAYhx9dpiin1"}'
+  logf="$fx/security.log"
+  _hook() { # $1 = command string, $2 = snapshot dir (default: the fixture) -> sets out, rc
+    local p; p="$(printf '%s' "$env_json" | jq -c --arg c "$1" --arg cwd "$fx/repo" '.tool_input.command = $c | .cwd = $cwd')"
+    out="$(printf '%s' "$p" | DEL_GUARD_LOG="$logf" DEL_GUARD_SNAPSHOT_DIR="${2:-$fx/snap}" "$self" 2>&1)"; rc=$?
+  }
+  _chk() { # $1 = label, $2 = condition result (0 ok)
+    if [ "$2" -eq 0 ]; then passes=$((passes + 1)); printf 'ok    %-26s %s\n' hook "$1"
+    else fails=$((fails + 1)); printf 'FAIL  %-26s %s\n' hook "$1"; _failfast; fi
+  }
+  _hook 'echo capture-test-for-del-guard'
+  [ "$rc" -eq 0 ] && [ -z "$out" ]; _chk 'real payload, harmless: exit 0, no output' $?
+  _hook 'git worktree remove ../wt'
+  [ "$rc" -eq 0 ] && [ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision' 2>/dev/null)" = deny ]; _chk 'real payload, deny: JSON deny, exit 0' $?
+  printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason' 2>/dev/null | grep -q 'git worktree prune'; _chk 'deny names the safe route' $?
+  printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName' 2>/dev/null | grep -qx PreToolUse; _chk 'deny carries hookEventName' $?
+  grep -q "BLOCKED $HOOK_NAME \"git-worktree-remove\"" "$logf" 2>/dev/null; _chk 'denial logged in the sibling shape' $?
+  # the fake token is assembled at run time so this file never holds one
+  local tk="gh""p_""abcdefghijklmnopqrstuvwxyz0123456789"
+  _hook "GH_TOKEN=$tk /bin/rm x"
+  ! grep -q "${tk:0:14}" "$logf" 2>/dev/null && grep -q '\[redacted\]' "$logf" 2>/dev/null; _chk 'no token reaches the log' $?
+  out="$(printf 'this is {not json' | DEL_GUARD_LOG="$logf" "$self" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && [ -z "$out" ]; _chk 'malformed JSON: exit 0, no decision' $?
+  out="$(printf '' | DEL_GUARD_LOG="$logf" "$self" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && [ -z "$out" ]; _chk 'empty stdin: exit 0, no decision' $?
+  out="$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":""}}' | DEL_GUARD_LOG="$logf" "$self" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && [ -z "$out" ]; _chk 'empty command: exit 0, no decision' $?
+  out="$(printf '%s' '{"tool_name":"Bash"}' | DEL_GUARD_LOG="$logf" "$self" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && [ -z "$out" ]; _chk 'no tool_input: exit 0, no decision' $?
+  # timing: 5 KB of dense ordinary work (about 330 simple commands, the worst
+  # case for this design), end to end through the hook, against the REAL
+  # snapshot when this machine has one (its alias table is read every run).
+  # Best of three, timed by bash's own clock around the hook process alone:
+  # the payload is built before the clock starts. Other sessions share this
+  # machine, so one slow run is load, three slow runs are the hook.
+  # BUDGETS (W-20260929-A48, re-measured 2026-09-29 with ~12 live sessions, load 10 to 13 on
+  # 10 cores): dense 81-113 ms, dense+deny 106-146 ms, heredoc 49-83 ms, sandboxed and not.
+  # 100 ms failed on ordinary load, so the two dense arms get 200 ms: above every reading,
+  # and a hook that doubles from the typical ~110 ms reading fails it. The heredoc arm keeps 100 ms.
+  # SELF-CALIBRATING since W-20261002-A04 (Gavin, 2026-10-02, the ruling shared with
+  # trash-guard-selftest's A188): the fixed 200/100 ms failed on load alone at load ~74, and
+  # under 60 CPU burners the 1 s shift arms and the crash arm failed too. Each timed arm now
+  # first times CAL_N TRIVIAL calls ('echo', no work) through the same route, and its limit is
+  # its budget plus CAL_K times their median, printed on the line. CAL_K = 3 from the A04
+  # data: the 5 KB deny ran 1.9 x the trivial median at every load (its work scales with the
+  # load too), and 1.9 needs more than 2. Budgets are what a trivial call does not do: the
+  # 5 KB parse, or a deadline that runs on the wall clock. An overhead above CAL_ABSURD_MS is
+  # an INVALID TRIAL, never a pass, and the run exits 3. A hook that got slower to START would
+  # raise its own overhead and hide; the start-up arm holds a trivial call to CAL_RATIO_MAX
+  # bare /bin/bash starts timed in the same breath, which do not run the hook.
+  # CAL_K1 = 4 for a SINGLE-SHOT arm (shift, deadline, stall, crash): one timed call carries one
+  # more spike than a best of 3, and one needed 3.12 x at load 99 ('uv run -p' alone, 1977 ms
+  # against 1907). Idle, 4 x a ~45 ms overhead keeps the shift arms near 380 ms, under the old 1 s.
+  local cal_k=3 cal_k1=4 cal_n=3 cal_absurd=5000 cal_ratio=40 ov=0 ovs="" bare=0 calok=0 lim=0 calv="" calhow="" invalid=0 samples=""
+  _median() { printf '%s\n' "$@" | sort -n | awk '{ a[NR] = $1 } END { print a[int((NR + 1) / 2)] }'; }
+  _limit() { # $1 = budget ms, $2 = multiple (default cal_k) -> lim, calv (why the arm cannot be judged, or empty), calhow (the sum, printed)
+    local k=${2:-$cal_k}
+    lim=$(( $1 + k * ov )); calhow="limit $lim = $1 + $k x overhead $ov (median of $ovs)"; calv=""
+    [ "$calok" -eq 0 ] || calv="a trivial calibration call was not a clean allow, so the overhead measured something else"
+    [ "$ov" -le "$cal_absurd" ] || calv="overhead $ov ms is above $cal_absurd ms: this machine is too loaded to time anything"
+    return 0
+  }
+  _tchk() { # $1 = label, $2 = verdict ok (0), $3 = ms: the verdict, then the clock against lim
+    if [ -n "$calv" ] && [ "$2" -eq 0 ]; then invalid=$((invalid + 1)); printf 'INVALID TRIAL %-18s %s\n' hook "$1: ${3} ms, timing not judged: $calv ($calhow)"
+    else [ "$2" -eq 0 ] && [ "$3" -lt "$lim" ]; _chk "$1: ${3} ms ($calhow)" $?; fi
+  }
+  local tsnap="$save_snap" tlabel="real snapshot" best p1 p2 i secs
+  set +f; ls "$tsnap"/snapshot-*.sh >/dev/null 2>&1 || { tsnap="$fx/snap"; tlabel="fixture snapshot"; }; set -f
+  _time3() { # $1 = command -> sets best (ms), samples (all 3) and rc/out of the last run
+    local pl; pl="$(printf '%s' "$env_json" | jq -c --arg c "$1" --arg cwd "$fx/repo" '.tool_input.command = $c | .cwd = $cwd')"
+    best=999999; samples=""
+    for i in 1 2 3; do
+      secs="$( { TIMEFORMAT=%R; time out="$(printf '%s' "$pl" | DEL_GUARD_LOG="$logf" DEL_GUARD_SNAPSHOT_DIR="$tsnap" "$self" 2>&1)"; } 2>&1 )"
+      ms=$(( 10#${secs%.*} * 1000 + 10#${secs#*.} ))
+      [ "$ms" -lt "$best" ] && best=$ms
+      samples="$samples $ms"
+    done
+    out="$(printf '%s' "$pl" | DEL_GUARD_LOG="$logf" DEL_GUARD_SNAPSHOT_DIR="$tsnap" "$self" 2>&1)"; rc=$?
+  }
+  _cal3() { # the overhead for the 5 KB arms: _time3 itself on a trivial command, so the route and the clock are the same
+    _time3 'echo capture-test-for-del-guard'
+    ov=$(_median $samples); ovs="${samples# }"   #C: ov
+    calok=0; { [ "$rc" -eq 0 ] && [ -z "$out" ]; } || calok=1
+  }
+  _bare() { # median ms of 3 bare /bin/bash starts, timed by the same clock -> bare
+    local b="" k s
+    for k in 1 2 3; do s="$( { TIMEFORMAT=%R; time /bin/bash -c :; } 2>&1 )"; b="$b $(( 10#${s%.*} * 1000 + 10#${s#*.} ))"; done
+    bare=$(_median $b)
+  }
+  _cal3; _limit 0; _bare
+  local bf=$bare; [ "$bf" -ge 5 ] || bf=5
+  if [ -n "$calv" ]; then invalid=$((invalid + 1)); printf 'INVALID TRIAL %-18s %s\n' hook "start-up not judged: $calv"
+  else [ "$ov" -le $(( cal_ratio * bf )) ]; _chk "start-up: a trivial call costs $ov ms (samples $ovs), a bare /bin/bash start $bare ms, so $(( ov / bf )) x (at most $cal_ratio x)" $?; fi
+  big=""; while [ ${#big} -lt 5120 ]; do big="${big}git status && rg -n 'foo bar' src/ | head -5; echo \"done \$(date)\" >> out.log; "; done
+  _cal3; _limit 60; _time3 "$big"
+  [ "$rc" -eq 0 ] && [ -z "$out" ]; _tchk "5 KB dense command, $tlabel: allowed, best of 3" $? "$best"
+  _cal3; _limit 60; _time3 "${big}git clean -fdx"
+  [ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision' 2>/dev/null)" = deny ]; _tchk "same 5 KB with a deny at the end: denied, best of 3" $? "$best"
+  hd=$'git commit -F - <<\'EOF\'\n'; while [ ${#hd} -lt 5120 ]; do hd="${hd}prose that mentions git clean -fdx and /bin/rm -P and find . -delete"$'\n'; done; hd="${hd}EOF"
+  _cal3; _limit 20; _time3 "$hd"
+  [ "$rc" -eq 0 ] && [ -z "$out" ]; _tchk "5 KB heredoc commit message: allowed, best of 3" $? "$best"
+
+  echo "=== SHIFT arms: a value flag given LAST must not stall the guard (W-20260923-A54) ==="
+  # Found 2026-09-23: in bash a shift of 2 with one word left FAILS and shifts
+  # nothing, so `while [ $# -gt 0 ]` spun forever, the harness killed the hook
+  # at 5 s, and the command ran unchecked. Each arm runs the real hook under a
+  # alarm (so an old copy that spins is a FAIL here, not a hung selftest) and
+  # times that one run; a verdict must arrive within 1 s.
+  local hb_ms hb_d hb_r f
+  _hookb() { # $1 = command, $2 = DEL_GUARD_NOFILTER value, $3 = alarm s (default 2), then VAR=value env -> out, rc, hb_ms, hb_d, hb_r
+    local pl s al="${3:-2}" nf="${2:-0}"; pl="$(printf '%s' "$env_json" | jq -c --arg c "$1" --arg cwd "$fx/repo" '.tool_input.command = $c | .cwd = $cwd')"
+    shift 3 || set --
+    # time's report goes to a fixture file so `out` and `rc` stay in this shell
+    { TIMEFORMAT=%R; time { out="$(printf '%s' "$pl" | env DEL_GUARD_LOG="$logf" DEL_GUARD_SNAPSHOT_DIR="$fx/snap" DEL_GUARD_NOFILTER="${nf:-0}" "$@" perl -e 'alarm shift; exec @ARGV' "$al" "$self" 2>&1)"; rc=$?; }; } 2> "$fx/time.txt"
+    s="$(tail -n 1 "$fx/time.txt")"; hb_ms=$(( 10#${s%.*} * 1000 + 10#${s#*.} ))
+    hb_d="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
+    hb_r="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)"
+  }
+  # every wrapper flag that takes a value, given last; sudo/doas/env/git/uv
+  # cover their option loops, the interpreters cover _interp_cmd, bash/zsh
+  # cover _shell_cmd
+  # Calibrated (A04): the overhead is _hookb itself on 'echo control-ok', re-measured when the
+  # last one is 5 s old, so the limit follows the load through the loop. The alarm, which is
+  # what turns a spinning copy into a FAIL, sits a second past the limit.
+  _calb() { # -> ov, ovs, calok, al (alarm s); $1 = alarm for the trivial calls
+    local k b=""; calok=0
+    for k in 1 2 3; do
+      _hookb 'echo control-ok' 0 "${1:-5}"
+      b="$b $hb_ms"; { [ "$rc" -eq 0 ] && [ -z "$out" ]; } || calok=1
+    done
+    ov=$(_median $b); ovs="${b# }"   #C: ovb
+  }
+  _alarm() { al=$(( lim / 1000 + 2 )); [ "$al" -le 30 ] || al=30; }   # from lim
+  local al cal_at=-99
+  # start-up through THIS route too, so a fault in _calb cannot raise its own limits unseen
+  _calb; _limit 0; _bare; bf=$bare; [ "$bf" -ge 5 ] || bf=5
+  if [ -n "$calv" ]; then invalid=$((invalid + 1)); printf 'INVALID TRIAL %-18s %s\n' hook "start-up (alarm route) not judged: $calv"
+  else [ "$ov" -le $(( cal_ratio * bf )) ]; _chk "start-up (alarm route): a trivial call costs $ov ms (samples $ovs), a bare /bin/bash start $bare ms, so $(( ov / bf )) x (at most $cal_ratio x)" $?; fi
+  for f in 'time -o' 'nice -n' 'exec -a' 'echo x | xargs -n' 'echo x | xargs -I' 'echo x | gxargs --max-args' \
+           'sudo -u' 'doas -u' 'env -u' 'env -C' 'env -S' 'env --split-string' 'timeout -s' 'gtimeout -k' \
+           'caffeinate -t' 'stdbuf -o' 'watch -n' 'git -C' 'git -c' 'git --git-dir' \
+           'python3 -W' 'python3 -X' 'node -r' 'node --require' 'perl -e' 'perl -ne' 'ruby -E' \
+           'bash -o' 'zsh +o' 'sh -O' 'uv --project' 'uv -p' 'uv run --with' 'uv run -p' 'uv run --env-file'; do
+    if [ $(( SECONDS - cal_at )) -ge 5 ]; then _calb; _limit 200 "$cal_k1"; _alarm; cal_at=$SECONDS; fi
+    _hookb "$f; unlink f" 0 "$al"
+    [ "$hb_d" = deny ] && [[ $hb_r == *'(unlink)'* ]]; _tchk "'$f; unlink f': denied as unlink" $? "$hb_ms"
+    _hookb "$f; unlink f" 1 "$al"
+    [ "$hb_d" = deny ] && [[ $hb_r == *'(unlink)'* ]]; _tchk "same, prefilter off: denied" $? "$hb_ms"
+    _hookb "$f" 0 "$al"
+    [ "$rc" -eq 0 ] && [ -z "$out" ]; _tchk "'$f' alone: allowed" $? "$hb_ms"
+  done
+  # The class, not only the instances above: no shift of 2 or more in this
+  # file may run unguarded. The positive arm (the guarded form IS found)
+  # proves the scan read the file; a zero from a scan that read nothing is
+  # not a pass.
+  local sg su
+  sg="$(awk '/shift [2-9] \|\| set --/ {n++} END {print n+0}' "$self")"
+  su="$(awk '/shift [2-9]/ && !/shift [2-9] \|\| set --/ {n++} END {print n+0}' "$self")"
+  [ "$sg" -ge 20 ] && [ "$su" -eq 0 ]; _chk "lint: $sg guarded multi-shifts (>= 20, the control), $su unguarded (must be 0)" $?
+
+  echo "=== DEADLINE arms: no verdict in time is a DENY that says so (fail closed) ==="
+  # DEL_GUARD_TEST_STALL makes the verdict child sleep, DEL_GUARD_TEST_CRASH
+  # makes it exit early: the two ways a guard can go quiet. Harmless commands
+  # throughout, so a deny here can only come from the fail-closed path.
+  # Calibrated (A04). The lowered deadline is 1 s while a trivial call costs at most 400 ms,
+  # else 2 s (the only other value it takes), so the verdict child of a healthy hook is never
+  # cut by load alone. Each stall is set past its arm's limit (the seam takes 1-9 s), so a hook
+  # that waited for the stall cannot pass; the alarm sits past the stall, so such a hook shows
+  # as the late allow it is. What the deadline WAS is read from the deny's own text, no clock.
+  local dl st
+  _stall() { st=$(( lim / 1000 + 1 )); al=$(( st + 1 )); [ "$st" -le 9 ] || { [ -n "$calv" ] || calv="the stall this load needs ($st s) is past the 9 s the seam allows"; st=9; al=10; }; }
+  _calb; dl=1; [ "$ov" -le 400 ] || dl=2
+  _limit 200 "$cal_k1"; _alarm
+  _hookb 'echo control-ok' 0 "$al" DEL_GUARD_DEADLINE=$dl
+  [ "$rc" -eq 0 ] && [ -z "$out" ]; _tchk "control: deadline $dl s, no stall: allowed (the deadline itself denies nothing)" $? "$hb_ms"
+  _calb; _limit $(( dl * 1000 + 200 )) "$cal_k1"; _stall
+  _hookb 'echo control-ok' 0 "$al" DEL_GUARD_DEADLINE=$dl DEL_GUARD_TEST_STALL=$st
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-timeout)'* ]] && [[ $hb_r == *"within $dl s"* ]]; _tchk "stall $st s, deadline $dl s: denied as guard-timeout, the deny says 'within $dl s'" $? "$hb_ms"
+  [[ $hb_r == *'NOT a match'* ]] && [[ $hb_r == *'timeout, not a match'* ]]; _chk 'the timeout deny says it was a timeout, not a match' $?
+  grep -q "BLOCKED $HOOK_NAME \"guard-timeout\"" "$logf" 2>/dev/null; _chk 'the timeout is logged' $?
+  # the deadline can only be lowered: 99 is ignored and the built-in 3 s holds, under the
+  # harness's 5 s (a stall past 5 s would be an allow). The 3 is read from the deny, so the
+  # harness comparison needs no clock; the clock shows the deny did not wait for the stall.
+  _calb; _limit 3200 "$cal_k1"; _stall
+  _hookb 'echo control-ok' 0 "$al" DEL_GUARD_DEADLINE=99 DEL_GUARD_TEST_STALL=$st
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-timeout)'* ]]; _tchk "DEL_GUARD_DEADLINE=99 is ignored, stall $st s: denied at the built-in deadline" $? "$hb_ms"
+  local bd; bd="$(printf '%s' "$hb_r" | sed -n 's/.*no verdict within \([0-9][0-9]*\) s.*/\1/p' | sed -n '1p')"
+  [ "$bd" = 3 ] && [ "$bd" -lt 5 ]; _chk "the deny names the built-in deadline: ${bd:-none} s (want 3, under the harness's 5 s)" $?
+  _calb; _limit 200 "$cal_k1"; _alarm
+  _hookb 'echo control-ok' 0 "$al" DEL_GUARD_TEST_CRASH=1
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-no-verdict)'* ]] && [[ $hb_r == *'crash, not a match'* ]]; _tchk "child exits before its verdict: denied as guard-no-verdict" $? "$hb_ms"
+  echo "=== BROKEN-FILE arms: a gutted classifier is a DENY, a syntax error a block (W-20260929-A186) ==="
+  # Copies of this file with ONE fault each, both inside _classify. Before A186
+  # the gutted copy ALLOWED /bin/rm x, exit 0, no output. Each copy is first
+  # proved to carry exactly the intended fault, so an arm cannot pass on a copy
+  # the sed left unchanged.
+  _hookc() { # $1 = hook file, $2 = command -> out, rc, hb_d, hb_r
+    local pl; pl="$(printf '%s' "$env_json" | jq -c --arg c "$2" --arg cwd "$fx/repo" '.tool_input.command = $c | .cwd = $cwd')"
+    out="$(printf '%s' "$pl" | DEL_GUARD_LOG="$logf" DEL_GUARD_SNAPSHOT_DIR="$fx/snap" perl -e 'alarm shift; exec @ARGV' 4 "$1" 2>&1)"; rc=$?
+    hb_d="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
+    hb_r="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)"
+  }
+  cp "$self" "$fx/hook-same.sh"
+  sed '/^_classify() {/,/^}/ s/^  _shell_text "\$1"$/  if then fi/' "$self" > "$fx/hook-syntax.sh"
+  sed '/^_classify() {/,/^}/ s/^  _shell_text "\$1"$/  :/' "$self" > "$fx/hook-gutted.sh"
+  chmod +x "$fx/hook-same.sh" "$fx/hook-syntax.sh" "$fx/hook-gutted.sh"
+  ! /bin/bash -n "$fx/hook-syntax.sh" 2>/dev/null && /bin/bash -n "$fx/hook-gutted.sh" 2>/dev/null \
+    && [ "$(diff "$self" "$fx/hook-syntax.sh" | grep -c '^>')" -eq 1 ] && [ "$(diff "$self" "$fx/hook-gutted.sh" | grep -c '^>')" -eq 1 ]
+  _chk 'fault copies: each differs by one line; the syntax copy fails bash -n, the gutted copy parses' $?
+  _hookc "$fx/hook-same.sh" '/bin/rm x'
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (rm-path)'* ]]; _chk 'control: an unmodified copy denies /bin/rm x as rm-path' $?
+  _hookc "$fx/hook-same.sh" 'echo control-ok'
+  [ "$rc" -eq 0 ] && [ -z "$out" ]; _chk 'control: an unmodified copy allows a harmless command, no output' $?
+  _hookc "$fx/hook-syntax.sh" '/bin/rm x'
+  [ "$rc" -eq 2 ] && [ -z "$hb_d" ]; _chk "syntax error: bash exits 2 before any verdict (Claude Code blocks on 2); got rc $rc" $?
+  _hookc "$fx/hook-gutted.sh" '/bin/rm x'
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-broken)'* ]]; _chk 'gutted classifier: /bin/rm x is denied as guard-broken (was an allow, exit 0, no output)' $?
+  _hookc "$fx/hook-gutted.sh" 'echo control-ok'
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-broken)'* ]] && [[ $hb_r == *'canary /bin/rm x came back allow'* ]]; _chk 'gutted classifier (parses fine): the canary refuses as guard-broken' $?
+  grep -q "BLOCKED $HOOK_NAME \"guard-broken\"" "$logf" 2>/dev/null; _chk 'the broken-guard deny is logged' $?
+
+  # a verdict still crosses the child boundary intact: rule id and where
+  _hookb 'gwtrm ../wt' 0 "$al" DEL_GUARD_DEADLINE=$dl   # dl and al from the calibrated deadline arms (A04)
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (git-worktree-remove)'* ]] && [[ $hb_r == *"Found: alias gwtrm='git worktree remove'"* ]]; _chk 'a rule verdict and its Found: line cross from the child intact' $?
+
+  echo "=== UNREADABLE arms: the payload cannot be read (D-20260925-A03) ==="
+  # These run the hook DEL_GUARD_UNDER_TEST names (default: this file), so the
+  # same arms can be pointed at another copy. A PATH with every tool in /bin
+  # and /usr/bin EXCEPT jq stands for a machine without jq (macOS ships
+  # /usr/bin/jq, so dropping Homebrew is not enough).
+  local hut="${DEL_GUARD_UNDER_TEST:-$self}" nojq="$fx/nojq" pu
+  echo "hook under test: $hut"
+  mkdir -p "$nojq"
+  set +f
+  for f in /bin/* /usr/bin/*; do
+    case "${f##*/}" in jq) continue ;; esac
+    [ -e "$nojq/${f##*/}" ] || ln -s "$f" "$nojq/${f##*/}"
+  done
+  set -f
+  ! PATH="$nojq" command -v jq >/dev/null 2>&1 && PATH="$nojq" command -v grep >/dev/null 2>&1
+  _chk 'control: the no-jq PATH has grep and no jq (else every no-jq arm is an invalid trial)' $?
+  _pl() { printf '%s' "$env_json" | jq -c --arg c "$1" --arg cwd "$fx/repo" '.tool_input.command = $c | .cwd = $cwd'; }
+  _mvk() { printf '%s' "$1" | jq -c '.tool_input.cmd = .tool_input.command | del(.tool_input.command)'; }
+  _hu() { # $1 = raw payload, [$2 = nojq] -> out, rc, hb_d, hb_r, hb_c
+    local path="$PATH"; [ "${2:-}" = nojq ] && path="$nojq"
+    out="$(printf '%s' "$1" | PATH="$path" DEL_GUARD_LOG="$logf" DEL_GUARD_SNAPSHOT_DIR="$fx/snap" "$hut" 2>/dev/null)"; rc=$?
+    hb_d="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
+    hb_r="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)"
+    hb_c="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)"
+  }
+  _isu() { # $1 = rule id, $2 = the why: a deny naming both
+    [ "$rc" -eq 0 ] && [ "$hb_d" = deny ] && [[ $hb_r == "$HOOK_NAME: cannot read the tool payload ($2"*"mentions $1. "* ]]
+  }
+  _isq() { [ "$rc" -eq 0 ] && [ -z "$out" ]; }
+  _iss() { [ "$rc" -eq 0 ] && [ -z "$hb_d" ] && [[ $hb_c == 'THE DELETION GUARD IS BROKEN: jq is not on PATH'* ]]; }
+  local ut='git worktree remove ../wt' uo='git worktree list'
+  pu="$(_pl "$ut")"; _hu "${pu%??????????}";       _isu git-worktree-remove 'jq could not parse it'; _chk 'truncated JSON, with the trigger: denied, naming the rule' $?
+  [[ $hb_r == *'git worktree prune'* ]];                                                _chk 'that deny names the safe route' $?
+  pu="$(_pl "$uo")"; _hu "${pu%??????????}";       _isq; _chk 'truncated JSON, without the trigger: quiet' $?
+  _hu "$(_mvk "$(_pl "$ut")")";                    _isu git-worktree-remove 'it has no tool_input.command'; _chk 'command under another key, with the trigger: denied' $?
+  _hu "$(_mvk "$(_pl "$uo")")";                    _isq; _chk 'command under another key, without the trigger: quiet' $?
+  _hu "$(_pl "$ut")" nojq;                         _isu git-worktree-remove 'jq is not on PATH'; _chk 'PATH without jq, with the trigger: denied' $?
+  _hu "$(_pl "$uo")" nojq;                         _iss; _chk 'PATH without jq, without the trigger: the jq shout, as before' $?
+  _hu "$(_pl 'rm -r x')" nojq;                     _iss; _chk 'PATH without jq, bare rm -r x is NOT a trigger (the safe route)' $?
+  _hu "$(_pl 'echo hi > out.txt')" nojq;           _iss; _chk 'PATH without jq, a > redirection is NOT a trigger' $?
+  _hu "$(_pl 'git checkout main')" nojq;           _iss; _chk 'PATH without jq, git checkout <branch> is NOT a trigger' $?
+  _hu "$(_pl 'git commit -m "never git clean -fdx"')" nojq; _isu git-clean 'jq is not on PATH'; _chk 'PATH without jq, the words as prose are denied too: unread, they cannot be told apart' $?
+  pu="$(_pl $'cd /tmp\ngit clean -fdx')"; _hu "${pu%??????????}"; _isu git-clean 'jq could not parse it'; _chk 'truncated, the trigger after an escaped newline' $?
+  _hu "$(_pl '' | jq -c '.tool_input.description = "git clean -fdx"')"; _isq; _chk 'a real, EMPTY command stays quiet, trigger in the description' $?
+  _hu "$(_pl 'git clean -fdx') {broken"
+  [ "$rc" -eq 0 ] && [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (git-clean)'* ]]; _chk 'a good document then a broken one: the command is still checked (was exit 0)' $?
+  grep -q "BLOCKED $HOOK_NAME \"unreadable:git-clean\"" "$logf" 2>/dev/null; _chk 'an unreadable deny is logged, command not quoted' $?
+
+  echo "=== COVERAGE arms: every rule id in _msg has a raw trigger, or a stated exclusion ==="
+  # Each sample is first proved a real deny of its rule by _classify, then its
+  # payload must trip _raw_trigger on the SAME rule id.
+  local cov ids id smp hit n_ids=0 missing=""
+  cov='safe-rm-off|SAFE_RM_OFF=1 rm x
+rm-path|/bin/rm x
+rm-lookup|env -i rm x
+rm-P|rm -P x
+grm|grm -rf x
+unlink|unlink f
+shred|shred -u f
+truncate|truncate -s0 f
+dd-of|dd if=/dev/zero of=f bs=1 count=1
+find-delete|find . -name x -delete
+find-exec-untested|find . -exec rm -rf {} + -name x
+find-depth-prune|find -d . -path ./keep -prune -o -name x -exec rm {} +
+git-worktree-remove|git -C ../r worktree remove ../wt
+herdr-worktree-remove|herdr --session main worktree remove --workspace w12
+git-clean|git clean -fdx
+git-reset-hard|git reset --hard HEAD
+git-checkout-discard|git checkout -- src/app.c
+git-restore|git restore src/app.c
+git-switch-discard|git switch -f main
+git-branch-force|git branch -D topic
+git-stash-drop|git stash drop
+git-rm-force|git rm -rf src
+git-filter-repo|git filter-repo --path x --invert-paths
+crontab-remove|crontab -r
+git-history-prune|git reflog expire --expire=now --all
+rsync-delete|rsync -a --delete a/ b/
+inline-code|python3 -c '"'"'import os; os.remove("f")'"'"'
+prune|docker system prune -af
+rimraf|rimraf dist
+disk|diskutil eraseDisk APFS X disk4
+tmutil|tmutil deletelocalsnapshots /
+trash-empty|trash-empty
+trash-path|/usr/bin/trash x'
+  SNAP_DIR="$fx/snap"; SNAP_DONE=0     # the fixture aliases, not this machine's (its grm is git rm)
+  while IFS='|' read -r id smp; do
+    _classify "$smp" "$fx/repo"; [ "$REASON_ID" = "$id" ]; _chk "sample is a real $id deny: $smp" $?
+    _raw_trigger "$(_pl "$smp")"; hit="$RAW_HIT"
+    [ "$hit" = "$id" ]; _chk "its raw payload trips the $id trigger (got ${hit:-none})" $?
+  done <<< "$cov"
+  # A72: the two find triggers are crude; their near-misses stay quiet
+  _raw_trigger "$(_pl 'find . -name x -exec rm {} +')"; [ -z "$RAW_HIT" ]; _chk "A72 raw: find -name x -exec rm trips nothing (got ${RAW_HIT:-none})" $?
+  _raw_trigger "$(_pl "find . -path ./keep -prune -o -name '*.o' -exec rm {} +")"; [ -z "$RAW_HIT" ]; _chk "A72 raw: the prune idiom trips nothing (got ${RAW_HIT:-none})" $?
+  SNAP_DIR="$save_snap"; SNAP_DONE=0
+  # the class: every rule id _msg knows, read from this file, is sampled above
+  # or excluded here; the count is the control (a scan that read nothing is 0)
+  ids="$(awk '/^_msg\(\)/ {m=1; next} m && /^}/ {m=0} m && match($0, /^    [a-z][a-zA-Z-]*\)/) {s=substr($0, RSTART+4, RLENGTH-5); print s}' "$self")"
+  for id in $ids; do
+    n_ids=$((n_ids + 1))
+    case "$id" in guard-timeout|guard-no-verdict|guard-broken|redir-trunc) continue ;; esac   # not a command shape / a > redirection
+    [[ $'\n'"$cov" == *$'\n'"$id|"* ]] || missing="$missing $id"
+  done
+  [ "$n_ids" -ge 25 ] && [ -z "$missing" ]; _chk "all $n_ids rule ids in _msg are covered or excluded (>= 25 read, the control)${missing:+; MISSING:$missing}" $?
+
+  # The fixture dir is left in $TMPDIR on purpose: deleting it would go to the
+  # Trash (or fail inside the sandbox), and the OS clears $TMPDIR.
+  echo
+  echo "del-guard selftest: $passes passed, $fails failed (fixtures: $fx)"
+  echo "timing: each limit = budget + $cal_k x (best-of-3 arm) or $cal_k1 x (single-shot arm) the median of $cal_n trivial calls through the same route, printed per arm; $invalid INVALID TRIAL(s)"
+  # 1 on any failure; 3 when nothing failed but a timing arm could not be judged (not a pass)
+  [ "$fails" -eq 0 ] || return 1
+  [ "$invalid" -eq 0 ] || { echo "del-guard selftest: NOT a pass: $invalid timing arm(s) were INVALID TRIALS (exit 3)"; return 3; }
+  return 0
+}
+
+# ---------------------------------------------------------------- mutants
+# Copies this file, deletes ONE line tagged `#M:`, runs the copy's selftest, and
+# expects it to FAIL. A tagged line whose removal still passes is a rule no arm
+# proves, which is the finding this mode exists to surface.
+_mutants() {
+  local self="$0" tmp n=0 caught=0 missed=0 broken=0 line tag ln mk mrc only="${1:-}"
+  mk='#''M: '              # built, so no line in this function carries the marker itself
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/del-guard-mutants.XXXXXX")" || return 1
+  while IFS= read -r line; do
+    ln="${line%%:*}"; tag="${line##*"$mk"}"
+    [ -n "$only" ] && [[ $tag != *"$only"* ]] && continue
+    n=$((n + 1))
+    awk -v L="$ln" 'NR != L' "$self" > "$tmp/m.sh"; chmod +x "$tmp/m.sh"
+    # a mutant that no longer PARSES proves nothing about the rule: say so
+    if ! /bin/bash -n "$tmp/m.sh" 2>/dev/null; then
+      broken=$((broken + 1)); printf 'BROKEN  line %-4s %s (syntax error, not a rule test)\n' "$ln" "$tag"; continue
+    fi
+    # a mutant whose LEXER no longer runs fails every deny arm for a reason
+    # that has nothing to do with the rule removed
+    if "$tmp/m.sh" --classify 'git clean -fdx' / 2>/dev/null | grep -q 'LEXER FAILED'; then
+      broken=$((broken + 1)); printf 'BROKEN  line %-4s %s (lexer fails, not a rule test)\n' "$ln" "$tag"; continue
+    fi
+    # a removed line can loop forever; 300 s is five times a normal selftest
+    DEL_GUARD_FAILFAST=1 perl -e 'alarm shift; exec @ARGV' 300 "$tmp/m.sh" --selftest >/dev/null 2>&1; mrc=$?
+    if [ "$mrc" -eq 0 ]; then
+      missed=$((missed + 1)); printf 'MISSED  line %-4s %s\n' "$ln" "$tag"
+    elif [ "$mrc" -eq 3 ]; then   # an INVALID TRIAL (A04) neither caught nor missed it: count it against
+      missed=$((missed + 1)); printf 'INVALID line %-4s %s (the timing could not be judged; re-run at lower load)\n' "$ln" "$tag"
+    elif [ "$mrc" -eq 142 ]; then   # the 300 s alarm, not a FAIL: a loaded full run takes 6-8 min (A04)
+      missed=$((missed + 1)); printf 'TIMEOUT line %-4s %s (the alarm ended the run, which is not a catch; re-run at lower load)\n' "$ln" "$tag"
+    else
+      caught=$((caught + 1)); printf 'caught  line %-4s %s\n' "$ln" "$tag"
+    fi
+  done < <(grep -n "$mk" "$self" | grep -v '^[0-9]*:#')
+  # Calibration faults (A04): the selftest's own overhead forced. Huge must be an INVALID TRIAL
+  # (exit 3), never a pass; inflated under the absurd line must fail a start-up arm, the one
+  # check an inflated overhead cannot raise its own limit for. One copy per tagged line.
+  local ck cv cw cs cn
+  ck='#''C: '
+  if [ -z "$only" ] || [ "$only" = calibration ]; then
+    for ct in ov ovb; do
+      for cv in 99999:3:'INVALID TRIAL' 4000:1:'start-up'; do
+        cw=${cv#*:}; cs=${cw#*:}; cw=${cw%%:*}; cv=${cv%%:*}
+        n=$((n + 1))
+        sed "s/^\( *\)ov=.*  *$ck$ct\$/\1ov=$cv/" "$self" > "$tmp/c.sh"; chmod +x "$tmp/c.sh"
+        cn="$(grep -c "$ck$ct\$" "$tmp/c.sh")"
+        if [ "$(grep -c "$ck$ct\$" "$self")" -ne 1 ] || [ "$cn" -ne 0 ]; then
+          broken=$((broken + 1)); printf 'BROKEN  %s forced to %s (the edit missed)\n' "$ct" "$cv"; continue
+        fi
+        perl -e 'alarm shift; exec @ARGV' 1800 "$tmp/c.sh" --selftest > "$tmp/c.out" 2>&1; mrc=$?
+        if [ "$mrc" -eq "$cw" ] && grep 'FAIL\|INVALID' "$tmp/c.out" | grep -q "$cs"; then
+          caught=$((caught + 1)); printf 'caught  %s forced to %s ms: exit %s, %s reported\n' "$ct" "$cv" "$mrc" "$cs"
+        else
+          missed=$((missed + 1)); printf 'MISSED  %s forced to %s ms: exit %s (want %s with %s)\n' "$ct" "$cv" "$mrc" "$cw" "$cs"
+        fi
+      done
+    done
+  fi
+  echo "del-guard mutants: $caught caught, $missed missed, $broken broken, of $n"
+  [ "$missed" -eq 0 ] && [ "$broken" -eq 0 ]
+}
+
+case "${1:-}" in
+  --selftest) _selftest; exit $? ;;
+  --mutants)  _mutants "${2:-}"; exit $? ;;   # optional: only tags containing this text
+  --help|-h)
+    awk 'NR > 1 && /^$/ { exit } NR > 1' "$0" | sed 's/^# \{0,1\}//'   # the header, up to its first blank line
+    exit 0 ;;
+  --classify) # debugging aid: prints the rule id and where, or "allow"
+    _classify "${2:-}" "${3:-$PWD}"
+    [ "${LEXER_FAILED:-0}" -eq 1 ] && echo "LEXER FAILED"
+    echo "${REASON_ID:-allow}${REASON_WHERE:+ ($REASON_WHERE)}"; exit 0 ;;
+esac
+
+# ---------------------------------------------------------------- hook path
+payload="$(cat 2>/dev/null || true)"
+[ -n "$payload" ] || exit 0
+
+# The payload cannot be read. $1 = why. DENY naming the rule when the raw text
+# mentions a trigger (JSON built without jq, since jq may be the fault);
+# return otherwise, and the caller goes on exactly as before.
+_unreadable() {
+  _raw_trigger "$payload" || return 0                                           #M: unreadable: raw trigger
+  local r
+  r="$HOOK_NAME: cannot read the tool payload ($1); denying because it mentions $RAW_HIT. $(_msg "$RAW_HIT") Fix the input (install jq, or check the payload shape) and run enforce-no-permanent-delete.sh --selftest."
+  _log "unreadable:$RAW_HIT" "(payload not read, ${#payload} bytes)"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' \
+    "$(printf '%s' "$r" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n\t' '  ')"
+  exit 0
+}
+
+if ! command -v jq >/dev/null 2>&1; then
+  _unreadable "jq is not on PATH"                                               #M: unreadable: no jq
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"THE DELETION GUARD IS BROKEN: jq is not on PATH, so enforce-no-permanent-delete.sh cannot read the command. Nothing is being checked for permanent deletes. Install jq. Until then: bare rm only, and ask Gavin before any git clean / worktree remove / reset --hard."}}'
+  exit 0
+fi
+
+cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)"; jrc=$?
+if [ -z "$cmd" ]; then
+  [ "$jrc" -ne 0 ] && _unreadable "jq could not parse it, rc=$jrc"               #M: unreadable: invalid JSON
+  printf '%s' "$payload" | jq -e '.tool_input | has("command")' >/dev/null 2>&1 || _unreadable "it has no tool_input.command"   #M: unreadable: moved key
+  exit 0   # a real, empty command: nothing to check, as before
+fi
+# jq failed yet printed a command (a second, broken document after a good
+# one): that command is checked below; before 2026-09-25 this exited 0.
+cwd="$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null)"
+
+# FAIL CLOSED ON A STALL. The harness gives this hook 5 s ("timeout": 5 in
+# settings) and then lets the command run, so a guard that never answers is a
+# guard that allows. The verdict is computed in a child; this shell waits at
+# most DEADLINE seconds for its one line and DENIES when none arrives
+# (guard-timeout), or when the child exits without one (guard-no-verdict).
+# DEL_GUARD_DEADLINE can only LOWER the deadline (the selftest uses 1): a
+# caller who sets it cannot buy back the time to stall past the harness.
+DEADLINE=3
+case "${DEL_GUARD_DEADLINE:-}" in 1|2) DEADLINE="$DEL_GUARD_DEADLINE" ;; esac   #M: deadline can only be lowered
+_verdict_child() {
+  trap 'printf "X\n"' EXIT          # any exit before the verdict says so
+  # Test seams, for the selftest's fail-closed arms. Both only ever make the
+  # child LATE or DEAD, which this shell turns into a deny: neither can
+  # produce an allow, so a caller who sets them gains nothing but refusals.
+  case "${DEL_GUARD_TEST_STALL:-}" in [1-9]) sleep "$DEL_GUARD_TEST_STALL" >/dev/null 2>&1 ;; esac
+  [ "${DEL_GUARD_TEST_CRASH:-}" = 1 ] && exit 7
+  # The canary: a classifier that no longer denies /bin/rm cannot be trusted to
+  # allow anything else either (a function lost at run time, an arm gutted).
+  _classify '/bin/rm x' "$cwd"
+  local canary_ok=1
+  [ "$REASON_ID" = rm-path ] || canary_ok=0                                     #M: canary fails closed
+  if [ "$canary_ok" = 0 ]; then
+    trap - EXIT
+    printf 'B%s%s\n' "$US" "the canary /bin/rm x came back ${REASON_ID:-allow}, not rm-path"
+    return 0
+  fi
+  _classify "$cmd" "$cwd"
+  trap - EXIT
+  printf 'V%s%s%s%s%s%s\n' "$US" "$REASON_ID" "$US" "${LEXER_FAILED:-0}" "$US" "${REASON_WHERE//$'\n'/$RSC}"
+}
+exec 3< <(_verdict_child 2>/dev/null)
+vchild=$!
+vline=""; IFS= read -r -t "$DEADLINE" -u 3 vline
+case "$vline" in
+  V"$US"*)
+    IFS="$US"; vf=($vline); IFS=$' \t\n'
+    REASON_ID="${vf[1]:-}"; LEXER_FAILED="${vf[2]:-0}"; REASON_WHERE="${vf[3]:-}"; REASON_WHERE="${REASON_WHERE//$RSC/$'\n'}"
+    [ -n "$REASON_ID" ] && REASON="$(_msg "$REASON_ID")" ;;
+  X)
+    _deny guard-no-verdict "the guard's child exited before its verdict"                        #M: crash fails closed
+    ;;
+  B"$US"*)
+    _deny guard-broken "${vline#B"$US"}"
+    ;;
+  *)
+    # nothing within the deadline: the child is still working, or died too
+    # hard for its EXIT trap (a signal); either way it gave no verdict
+    if kill -0 "$vchild" 2>/dev/null; then
+      kill -KILL "$vchild" 2>/dev/null
+      _deny guard-timeout "no verdict within ${DEADLINE} s"                                     #M: timeout fails closed
+    else
+      _deny guard-no-verdict "the guard's child died without a verdict"
+    fi ;;
+esac
+exec 3<&-
+
+if [ -z "$REASON_ID" ]; then
+  if [ "${LEXER_FAILED:-0}" -eq 1 ]; then
+    printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"The deletion guard (enforce-no-permanent-delete.sh) could not parse this command, so it was NOT checked for permanent deletes. Run its --selftest."}}'
+  fi
+  exit 0
+fi
+
+_log "$REASON_ID" "$cmd"
+case "$REASON_ID" in
+  guard-broken) head="the deletion guard is broken, so this command is refused (fail closed). This is NOT a match: nothing in it was found to be a delete."
+           foot="A broken guard that allowed would switch off every permanent-delete check in every session with no message, so it refuses instead. Tell Gavin; run enforce-no-permanent-delete.sh --selftest." ;;
+  guard-*) head="the deletion guard could not finish checking this command, so it is refused (fail closed). This is NOT a match: nothing in it was found to be a delete."
+           foot="A guard that stalls would let the command through when the harness gives up on it, so it refuses instead. Tell Gavin if an ordinary command hits this; run enforce-no-permanent-delete.sh --selftest." ;;
+  *)       head="this command deletes or destroys data outside the Trash."; foot="$FOOTER" ;;
+esac
+jq -n --arg r "$REASON" --arg w "$REASON_WHERE" --arg f "$foot" --arg id "$REASON_ID" --arg h "$head" \
+  '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
+    permissionDecisionReason: ("BLOCKED (" + $id + "): " + $h + "\n\n" + (if $w != "" then "Found: " + $w + "\n" else "" end) + $r + "\n\n" + $f)}}'
+exit 0

@@ -1,0 +1,131 @@
+{
+  "_comment": [
+    "codebox's hook list (Gavin, dotfiles-main Q50: 1, 23 Oct 2026): makeitso's guards that fit codebox, as copies.",
+    "Left out: the GitHub SSH-only guard (it blocks the credential helper codebox's token broker uses), the question box",
+    "ping (it needs the Mac's sounds and iMessage), the CI watch (the Macs already watch CI) and Herdr's pop-ups.",
+    "build-rows.py writes these rows into settings/codebox/claude-settings.json; ./install.sh --profile codebox copies",
+    "this folder (all but tests/ and build-rows.py) to ~/.claude/hooks/codebox/ and places the settings.",
+    "class guard: PreToolUse only; a missing or crashing script DENIES the call (fail closed).",
+    "class advisory and alarm: a missing script says so and the call goes ahead."
+  ],
+  "hooks": [
+    {
+      "id": "H1",
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "enforce-secret-probe.sh",
+      "class": "guard",
+      "timeout": 5
+    },
+    {
+      "id": "H1",
+      "event": "PreToolUse",
+      "matcher": "Monitor",
+      "script": "enforce-secret-probe.sh",
+      "class": "guard",
+      "timeout": 5
+    },
+    {
+      "id": "H2",
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "enforce-no-permanent-delete.sh",
+      "class": "guard",
+      "timeout": 5
+    },
+    {
+      "id": "H2",
+      "event": "PreToolUse",
+      "matcher": "Monitor",
+      "script": "enforce-no-permanent-delete.sh",
+      "class": "guard",
+      "timeout": 5
+    },
+    {
+      "id": "H3",
+      "event": "PreToolUse",
+      "matcher": "ExitWorktree",
+      "script": "enforce-no-worktree-discard.sh",
+      "class": "guard",
+      "timeout": 5
+    },
+    {
+      "id": "H4",
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "enforce-no-reset-by-name.sh",
+      "class": "guard",
+      "timeout": 5
+    },
+    {
+      "id": "H4",
+      "event": "PreToolUse",
+      "matcher": "Monitor",
+      "script": "enforce-no-reset-by-name.sh",
+      "class": "guard",
+      "timeout": 5
+    },
+    {
+      "id": "H5",
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "validate-bash.sh",
+      "class": "guard",
+      "timeout": 5
+    },
+    {
+      "id": "H5",
+      "event": "PreToolUse",
+      "matcher": "Monitor",
+      "script": "validate-bash.sh",
+      "class": "guard",
+      "timeout": 5
+    },
+    {
+      "id": "H5",
+      "event": "PreToolUse",
+      "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+      "script": "enforce-live-file-edit.sh",
+      "class": "guard",
+      "timeout": 5
+    },
+    {
+      "id": "H9",
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "warn-zsh-word-split.sh",
+      "class": "advisory",
+      "timeout": 5
+    },
+    {
+      "id": "H10",
+      "event": "PostToolUse",
+      "matcher": "Bash",
+      "script": "warn-install-telemetry.sh",
+      "class": "advisory",
+      "timeout": 5
+    },
+    {
+      "id": "H10",
+      "event": "PostToolUseFailure",
+      "matcher": "Bash",
+      "script": "warn-install-telemetry.sh",
+      "class": "advisory",
+      "timeout": 5
+    },
+    {
+      "id": "H20",
+      "event": "SessionStart",
+      "script": "ccw-watch",
+      "class": "alarm",
+      "timeout": 30
+    },
+    {
+      "id": "H21",
+      "event": "SessionStart",
+      "script": "claude-session-env",
+      "class": "alarm",
+      "timeout": 5
+    }
+  ]
+}

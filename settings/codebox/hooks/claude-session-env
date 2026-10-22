@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# CODEBOX'S COPY (23 Oct 2026, Gavin, dotfiles-main Q50: 1), from makeitso's hooks/claude-session-env at 38bf349; it shares nothing with that file. Changed: its logs are under ~/.local/state/codebox-hooks; the shell snapshots it reads, and the home it reads, are codebox's own ~/.claude; repair hints name this repo's settings/codebox/hooks (fifty-shades-of-dotfiles), placed by ./install.sh --profile codebox. The makeitso lines about ~/.claude_v2 stay and do nothing on codebox, which has no such folder. Its history before that: MAKEITSO'S OWN COPY (22 Oct 2026, Gavin, dotfiles-main), from fifty-shades-of-dotfiles home/.config/git/hooks/claude-session-env at 1b98d33; it shares nothing with that file. Changed: only this note; makeitso registers it in ~/.claude_v2/settings.json through hooks/hooks.json.
+# ============================================================================
+#  claude-session-env -- Claude Code SessionStart hook
+# ============================================================================
+# On codebox it runs from ~/.claude/hooks/codebox/, registered in ~/.claude/settings.json.
+#
+# On every SessionStart, Claude Code pipes a JSON payload on stdin containing
+# `session_id` (UUID), `transcript_path`, `cwd`, `source`, and `model`. NOTE
+# (verified 2026-06-22): the startup payload carries NO `session_title` (a /rename
+# happens after SessionStart fires) and NO claude.ai web id, so the name path is
+# usually inert and the web URL must be harvested downstream. This script:
+#   1. Exports CLAUDE_SESSION_ID (and CLAUDE_SESSION_NAME if a name is ever present,
+#      e.g. possibly on a future resume) via CLAUDE_ENV_FILE, so _audit-chain's
+#      prepare-commit-msg step can stamp the five C-* trailers (C-Sess-Id, C-Web-Id,
+#      C-Branch, C-Worktree, C-Wt-Path).
+#   2. Injects an identity line into the model's context so the fork knows its
+#      own name/id (to give when another session asks who it is).
+#
+# Fail-open: never exits non-zero. Requires jq; degrades quietly if missing.
+# ============================================================================
+set -uo pipefail
+
+input="$(cat 2>/dev/null || true)"
+
+sid=""
+name=""
+if [ -n "$input" ] && command -v jq >/dev/null 2>&1; then
+    sid="$(printf '%s' "$input"  | jq -r '.session_id // empty'    2>/dev/null || true)"
+    name="$(printf '%s' "$input" | jq -r '.session_title // empty' 2>/dev/null || true)"
+fi
+
+# 1. Persist identity for scripts + git hooks (sourced for the whole session).
+if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+    {
+        [ -n "$sid" ]  && printf 'export CLAUDE_SESSION_ID=%q\n'   "$sid"
+        [ -n "$name" ] && printf 'export CLAUDE_SESSION_NAME=%q\n' "$name"
+    } >> "$CLAUDE_ENV_FILE" 2>/dev/null || true
+fi
+
+# 2. Inject identity into the model's context (documented JSON channel; falls
+#    back to plain stdout if jq is unavailable).
+if [ -n "$sid" ]; then
+    if [ -n "$name" ]; then
+        ctx="Session identity: you are session \"$name\" (id: $sid). Use \"$name\" when another session asks who you are. Commits you make are auto-stamped with C-Sess-Id: $sid plus C-Web-Id, C-Branch, C-Worktree, and C-Wt-Path (commit context). The hook fills C-Web-Id by harvesting the \"Claude-Session: <url>\" line the harness still has you append, so keep appending that line if asked -- but do NOT hand-add any C- trailer."
+    else
+        ctx="Session identity: this session is unnamed (id: $sid). Use this id when another session asks who you are. Commits you make are auto-stamped with C-Sess-Id: $sid plus C-Web-Id, C-Branch, C-Worktree, and C-Wt-Path (commit context). The hook fills C-Web-Id by harvesting the \"Claude-Session: <url>\" line the harness still has you append, so keep appending that line if asked -- but do NOT hand-add any C- trailer."
+    fi
+    if command -v jq >/dev/null 2>&1; then
+        jq -n --arg c "$ctx" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'
+    else
+        printf '%s\n' "$ctx"
+    fi
+fi
+
+exit 0
