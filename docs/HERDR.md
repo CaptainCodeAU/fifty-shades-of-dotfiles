@@ -1273,6 +1273,41 @@ native terminal selection the real accessibility hotkey can read. Fine
 occasionally, awkward across splits: the host terminal selects a rectangle over
 the whole grid and does not know pane borders exist.
 
+## Pop-ups: what can and cannot change
+
+Read in the herdr 0.9.5 source (tag v0.9.5) and seen live on 22 Oct 2026, with
+herdr run as a server and client. herdr is never built or patched here (ruling
+#3636), so only `config.toml` and our own callers can change a pop-up.
+
+| Pop-up                               | First line / second line                                   | Time | Sound                                              |
+| ------------------------------------ | ---------------------------------------------------------- | ---- | -------------------------------------------------- |
+| needs attention (red dot)            | `<agent label> needs attention` / workspace · number · tab | 8 s  | request: the camera click in `sounds/request.mp3`  |
+| finished (blue dot)                  | `<agent label> finished` / the same                        | 5 s  | done: herdr's built-in sound (no `done_path`)      |
+| `herdr notification show` (gold dot) | whatever the caller sends                                  | 5 s  | the caller's `--sound` (`none`, `done`, `request`) |
+| updated                              | herdr's own text                                           | 3 s  | none, in code                                      |
+| copied to clipboard                  | herdr's own text                                           | -    | none, in code                                      |
+
+- **Settable:** the corner (`[ui.toast.herdr] position`: the four corners only,
+  set to top right) and the clipboard pop-up's place (`[ui.toast.clipboard]`,
+  left at its bottom-centre default, silent on purpose; Gavin, 22 Oct).
+- **Fixed in code:** the times (`notification_duration`,
+  `src/client/shell/notification_policy.rs`), the distance from the edge, the
+  wording, and the second line's colour, which is the theme's `overlay0` and so
+  also the inactive borders, the sidebar's dim text and the scrollbars.
+- **The agent label** comes from herdr's screen reading ("claude"); the project
+  shows only on the second line, as the workspace name. A `pane report-agent`
+  from a source other than `herdr:claude` can set another label, but then that
+  source owns the pane's state; Gavin declined that (engage-main Q3: 1, Q4: 1).
+- **One at a time:** pop-ups wait in a queue of up to 8 and each takes the same
+  place when the one before ends. A pop-up's sound plays when it arrives, not
+  when it shows, so a queued one beeps while the earlier one is still up.
+- **No pop-up and no sound** for an agent in the tab being looked at.
+- **Every pop-up has a sound** except the two silent in code (Gavin, 22 Oct).
+  engage's hook sends `--sound request`; `speak-clipboard`'s herdr fallback
+  sends `--sound done`. Its macOS notification stays silent on purpose.
+- `[ui.sound.agents]` is the only per-agent setting; there is none for pop-ups,
+  and `delivery = "off"` stops every pop-up, engage's included.
+
 ## It installs hooks into your agent CLIs
 
 Worth knowing, because nothing announces it. herdr writes an executable
