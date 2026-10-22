@@ -271,6 +271,11 @@ height = "70%"
 [ui.toast]
 delivery = "herdr"
 
+# Pop-ups in the top right corner, not herdr's default bottom right (Gavin, 22 Oct).
+# A pop-up sent with its own --position still goes where it asks.
+[ui.toast.herdr]
+position = "top-right"
+
 # The "needs attention" sound (Gavin, 17 Oct, dotfiles-main Q46): a short camera click
 # from his sound library (button_bunny/sounds/clicks/camera-digital.wav). herdr plays
 # only mp3 (a .wav falls back to its own sound, src/config/sound.rs), so it was converted
