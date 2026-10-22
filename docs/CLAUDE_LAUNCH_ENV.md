@@ -78,6 +78,15 @@ permissions on". The blind spot is the same as for the rest of this section: a C
 started without zsh gets none of it. codebox has none of the Mac's guards, so bypass
 there can delete for real; Network_Plan recorded the ruling as its Claude Code D-003.
 
+Since 2026-10-23 (dotfiles-main Q21: 1 and Q22: 1, from the codebox comparison page) the
+function gives the Macs' screen and agent view instead of the classic renderer:
+`CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=0` and `CLAUDE_CODE_NO_FLICKER=1`, as makeitso and engage,
+and `CLAUDE_CODE_DISABLE_AGENT_VIEW=1`. Until then the function forced the classic renderer
+while codebox's `settings.json` asked for fullscreen, so the two contradicted. The same night
+codebox's settings source took most of the Macs' settings and the install's codebox profile
+began placing Herdr's own skill text (`_place_codebox_herdr_skill`); see
+`settings/codebox/claude-settings.json` and `docs/INSTALL_PROFILES.md`.
+
 Blind spot: only a `claude` typed in zsh reaches the function. A launch that skips the shell
 starts bare. Claude's own settings file (`env`) would cover every start path, but whether it
 can empty `DISABLE_TELEMETRY` early enough for feature flags is not measured.

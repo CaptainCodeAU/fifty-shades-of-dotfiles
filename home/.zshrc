@@ -1081,8 +1081,11 @@ fi
 # ~/.config/dotfiles/nvd-api-key, Gavin's single exception, D-20261018-A02):
 # telemetry emptied for claude only, so feature flags load and Remote Control can start
 # (~/.zshenv sets it back for Claude's own commands), with the survey kept off; the
-# non-blocking stdout guard for a stalled `herdr --remote` link; the classic renderer;
-# auto-background and its 10-minute check-in. Why each: docs/CLAUDE_LAUNCH_ENV.md.
+# non-blocking stdout guard for a stalled `herdr --remote` link; auto-background and its
+# 10-minute check-in. Why each: docs/CLAUDE_LAUNCH_ENV.md. Since 23 Oct 2026 also the Macs'
+# screen and agent view (Gavin, dotfiles-main Q21: 1, Q22: 1): fullscreen allowed with no
+# flicker, as makeitso and engage, where this used to force the classic renderer; and the
+# agent view off.
 # Only a `claude` typed in zsh reaches it; a launch that skips the shell starts bare.
 #
 # Inside a herdr pane it also gets SSH_TTY (Gavin, dotfiles-main Q21, 2026-10-16). Claude
@@ -1108,7 +1111,8 @@ if [[ -n ${DOTFILES_PLAIN_CLAUDE-} ]]; then
             over_ssh=(SSH_TTY=$pane_tty)
         fi
         DISABLE_TELEMETRY= DO_NOT_TRACK= CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 \
-        CLAUDE_CODE_NONBLOCKING_STDOUT=1 CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
+        CLAUDE_CODE_NONBLOCKING_STDOUT=1 CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=0 \
+        CLAUDE_CODE_NO_FLICKER=1 CLAUDE_CODE_DISABLE_AGENT_VIEW=1 \
         CLAUDE_AUTO_BACKGROUND_TASKS=1 CLAUDE_CODE_WORKER_CHECKIN_SCHEDULE=600 \
             command env "${over_ssh[@]}" claude --dangerously-skip-permissions "$@"
     }

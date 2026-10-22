@@ -9,14 +9,29 @@
     }
   },
   "tui": "fullscreen",
-  "theme": "dark",
+  "theme": "dark-daltonized",
   "statusLine": {
     "type": "command",
     "command": "bash \"$HOME/.claude/statusline-command.sh\"",
-    "refreshInterval": 30
+    "refreshInterval": 1
   },
   "enabledPlugins": {
-    "cc-capture@cc-warehouse": true
+    "cc-capture@cc-warehouse": true,
+    "chrome-devtools-mcp@claude-plugins-official": false,
+    "hamilton@apache-hamilton": false,
+    "cowork-plugin-management@synced": false,
+    "customer-support@synced": false,
+    "data@synced": false,
+    "design@synced": false,
+    "engineering@synced": false,
+    "finance@synced": false,
+    "legal@synced": false,
+    "marketing@synced": false,
+    "operations@synced": false,
+    "product-management@synced": false,
+    "productivity@synced": false,
+    "sales@synced": false,
+    "small-business@synced": false
   },
   "timeFormat": "12-hour",
   "timeZone": "Australia/Melbourne",
@@ -451,14 +466,14 @@
       "Hydrogen-Sonata-playing"
     ]
   },
-  "verbose": true,
+  "verbose": false,
   "model": "opus",
   "effortLevel": "high",
   "fallbackModel": [
     "claude-opus-5",
     "sonnet"
   ],
-  "autoCompactEnabled": false,
+  "autoCompactEnabled": true,
   "contextDisplay": {
     "compactionThreshold": 83
   },
@@ -485,5 +500,62 @@
     "claude-opus-5-5": {
       "effortLevel": "high"
     }
+  },
+  "env": {
+    "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+    "API_TIMEOUT_MS": "1800000",
+    "BASH_DEFAULT_TIMEOUT_MS": "600000",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "80000",
+    "CLAUDE_CODE_FORK_SUBAGENT": "1",
+    "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "20",
+    "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "3",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "disableClaudeAiConnectors": true,
+  "crossSessionInbound": "accept",
+  "isolatePeerMachines": true,
+  "allowedHttpHookUrls": [],
+  "httpHookAllowedEnvVars": [],
+  "remoteControlAtStartup": true,
+  "idleCompaction": false,
+  "respondToBashCommands": false,
+  "enableArtifact": false,
+  "leftArrowOpensAgents": false,
+  "preferredNotifChannel": "ghostty",
+  "skillListingBudgetFraction": 0.015,
+  "skillOverrides": {
+    "code-review": "on",
+    "herdr:herdr": "on",
+    "plugin-authoring": "name-only",
+    "workflow-authoring": "name-only",
+    "loop": "name-only",
+    "run": "name-only",
+    "goal": "name-only",
+    "anthropic-skills:deep-research": "name-only",
+    "anthropic-skills:skill-creator": "name-only",
+    "anthropic-skills:pdf": "name-only",
+    "update-config": "user-invocable-only",
+    "fewer-permission-prompts": "user-invocable-only",
+    "init": "user-invocable-only",
+    "keybindings-help": "user-invocable-only",
+    "schedule": "user-invocable-only",
+    "security-review": "user-invocable-only",
+    "simplify": "user-invocable-only",
+    "claude-in-chrome": "user-invocable-only",
+    "anthropic-skills:chrome-browser": "user-invocable-only",
+    "artifact-capabilities": "off",
+    "artifact-design": "off",
+    "artifact-diagramming": "off",
+    "anthropic-skills:computer-use": "off",
+    "anthropic-skills:setup-writing-style": "off",
+    "anthropic-skills:built-in-browser": "off",
+    "anthropic-skills:docs": "off",
+    "anthropic-skills:google-workspace": "off",
+    "anthropic-skills:import-memory": "off",
+    "claude-api": "off",
+    "dataviz": "off",
+    "anthropic-skills:docx": "off",
+    "anthropic-skills:xlsx": "off",
+    "anthropic-skills:pptx": "off"
   }
 }

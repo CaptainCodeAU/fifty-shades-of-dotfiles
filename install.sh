@@ -5810,6 +5810,36 @@ _place_codebox_statusline() {
     return 0
 }
 
+# codebox's Herdr skill (Gavin, dotfiles-main Q25: 1, 23 Oct 2026): Herdr's own skill text, the
+# copy this repo keeps beside the Mac's merged skill (home/.claude/skills/herdr/UPSTREAM.md, its
+# version in UPSTREAM.version), as makeitso uses it; not the merged SKILL.md, which names engage's
+# tools that codebox does not have. A COPY, never a link, for the same reason as settings.json.
+# The source wins; a different file on the box is kept beside it as SKILL.md.pre-dotfiles.<time>.bak.
+_place_codebox_herdr_skill() {
+    [[ "$PLACE_CODEBOX_SETTINGS" == true ]] || return 0
+    local src="$REPO_DIR/home/.claude/skills/herdr/UPSTREAM.md"
+    local dst="$HOME/.claude/skills/herdr/SKILL.md"
+    local bak
+    bak="$dst.pre-dotfiles.$(date +%Y%m%d-%H%M%S).bak"
+    step "codebox: Claude Code's Herdr skill"
+    if [[ ! -f "$src" ]]; then
+        warn "The source $(pretty_path "$src") is missing; no Herdr skill placed."
+        return 0
+    fi
+    if [[ -f "$dst" && ! -L "$dst" ]] && cmp -s "$src" "$dst"; then
+        success "The Herdr skill already matches the source; nothing written."
+        return 0
+    fi
+    if [[ -e "$dst" || -L "$dst" ]]; then
+        warn "$(pretty_path "$dst") differs from the source; it is kept as $(pretty_path "$bak") and the source put in its place."
+        run_cmd mv "$dst" "$bak" || return 0
+    else
+        run_cmd mkdir -p "$(dirname "$dst")"
+    fi
+    run_cmd cp "$src" "$dst" && [[ "$DRY_RUN" != true ]] && success "Herdr skill placed from $(pretty_path "$src") (Herdr $(cat "$REPO_DIR/home/.claude/skills/herdr/UPSTREAM.version" 2>/dev/null || echo '?'))"
+    return 0
+}
+
 # ~/.zshrc.private.early is the machine-local file home/.zshrc reads BEFORE its
 # startup guards (section 3), the same file install.sh's takeover gate writes its
 # DOTFILES_ALLOW_* opt-outs to. A skip flag that changes what the stowed shell
@@ -6055,6 +6085,7 @@ main() {
     # --- codebox profile only: Claude Code's settings.json and status line, placed as copies ---
     _place_codebox_claude_settings
     _place_codebox_statusline
+    _place_codebox_herdr_skill
 
     # --- Optional: pnpm-audit git hooks (confirm-gated) ---
     setup_pnpm_audit_hooks
