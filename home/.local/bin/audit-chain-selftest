@@ -357,6 +357,48 @@ wanteq '51 branchtags.disable true: no split tag' "" "$(tags 'split/off/*')"
 tg switch -q -c on
 want   '52   and with the knob gone, tags again' 'split/on/' "$(tags 'split/on/*')"
 
+# ------------------------------------------------ 53-58 a moved commit keeps its id ---
+# #3644 (22 Oct 2026): win_go_app_test-main cherry-picked the background runner's record
+# commit, which carried no C-* trailers because no session made it, and the copy came out
+# stamped with the cherry-picking session's id. A cherry-pick or an amend copies an existing
+# commit, so it keeps that commit's trailers, or its lack of them. These arms use a real
+# git, because what tells the hook it is copying (CHERRY_PICK_HEAD, "commit HEAD") only
+# exists inside one. Arm 53 is the control: a new commit by the same session IS stamped.
+printf '\nA MOVED COMMIT KEEPS ITS OWN ID\n'
+A_ID="aaaaaaaa-0000-0000-0000-000000000000"; B_ID="bbbbbbbb-0000-0000-0000-000000000000"
+mkdir -p "$ROOT/movehooks"; ln -sf "$TOOL" "$ROOT/movehooks/prepare-commit-msg"
+MREPO="$ROOT/home/work/move-repo"; mkdir -p "$MREPO"
+git -C "$MREPO" init -q -b main >/dev/null 2>&1
+git -C "$MREPO" config user.email selftest@example.invalid
+git -C "$MREPO" config user.name  selftest
+git -C "$MREPO" config core.hooksPath "$ROOT/movehooks"
+# mg <session id, or - for none> <git args...>
+mg(){ local id="$1"; shift
+      if [ "$id" = - ]; then
+          ( cd "$MREPO" && env -u CLAUDE_WEB_URL -u CLAUDE_TRAILERS_DISABLE -u CLAUDE_SESSION_ID -u CLAUDE_CODE_SESSION_ID HOME="$ROOT/home" git "$@" ) >/dev/null 2>&1
+      else
+          ( cd "$MREPO" && env -u CLAUDE_WEB_URL -u CLAUDE_TRAILERS_DISABLE -u CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID="$id" HOME="$ROOT/home" git "$@" ) >/dev/null 2>&1
+      fi; }
+msid(){ git -C "$MREPO" log -1 --format='%(trailers:key=C-Sess-Id,valueonly,separator=,)' "${1:-HEAD}"; }
+mhas(){ git -C "$MREPO" log -1 --format=%B "${1:-HEAD}" | grep -qi '^C-Sess-Id:' && echo yes || echo no; }
+printf 's\n' > "$MREPO/s.txt"; mg - add s.txt; mg - commit -q -m seed
+mg - switch -q -c side
+printf 'a\n' > "$MREPO/a.txt"; mg - add a.txt; mg "$A_ID" commit -q -m "by session A"
+printf 'r\n' > "$MREPO/r.txt"; mg - add r.txt; mg - commit -q -m "by the runner, no session"
+mg - switch -q main
+printf 'b\n' > "$MREPO/b.txt"; mg - add b.txt; mg "$B_ID" commit -q -m "by session B"
+wanteq '53 control: a new commit by session B carries B' "$B_ID" "$(msid)"
+mg "$B_ID" cherry-pick side~1
+wanteq '54 B cherry-picks A'"'"'s commit: it keeps A' "$A_ID" "$(msid)"
+mg "$B_ID" cherry-pick side
+wanteq '55 B cherry-picks the runner'"'"'s unstamped commit: still no C-Sess-Id' no "$(mhas)"
+mg "$B_ID" commit -q --amend --no-edit
+wanteq '56 B amends the runner'"'"'s commit, same message: still no C-Sess-Id' no "$(mhas)"
+mg "$B_ID" revert --no-edit HEAD~1
+wanteq '57 B reverts A'"'"'s commit: the revert is new work, so it carries B' "$B_ID" "$(msid)"
+mg "$B_ID" switch -q side~1 --detach; mg "$B_ID" commit -q --amend --no-edit
+wanteq '58 B amends A'"'"'s commit, same message: it keeps A' "$A_ID" "$(msid)"
+
 printf '\nfixtures: %s\n' "$ROOT"
 printf 'tool: %s\n' "$TOOL"
 printf '%s passed, %s failed\n\n' "$PASS" "$FAIL"

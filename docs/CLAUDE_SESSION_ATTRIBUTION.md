@@ -213,7 +213,14 @@ line (stripping only the key + spaces so the URL's own `:` survives), else blank
 `C-Sess-Id`, `C-Web-Id`, `C-Branch`, `C-Worktree`, `C-Wt-Path` with
 `git interpret-trailers --in-place` (plain-append fallback), each guarded by its own
 `^<key>:` grep so `--amend` never doubles. Empty values are emitted as-is
-(blank-tolerant). Steps 1 (delegate to the repo's own hook) and 2 (pre-push pnpm
+(blank-tolerant). **A copy of an existing commit is never stamped** (#3644, 22 Oct
+2026): during a cherry-pick (git leaves `CHERRY_PICK_HEAD`) or an amend that keeps the
+message (git passes `commit HEAD`), step (4) is skipped, so the copy keeps the original's
+trailers, or its lack of them. Before this, a cherry-pick of the background runner's
+unstamped record commit came out carrying the session that moved it. A revert is new
+work and is stamped. A rebase runs no `prepare-commit-msg` for its picks. **Known limit:**
+`git commit --amend -m` passes `message`, as a new commit does, so it is still stamped
+as the amending session's. `audit-chain-selftest` arms 53 to 58 prove each case. Steps 1 (delegate to the repo's own hook) and 2 (pre-push pnpm
 audit) are unchanged.
 
 ### 3. SessionStart registration in `~/.claude/settings.json`
@@ -326,10 +333,10 @@ merges additively, and keeps it valid JSON. If you hand-edit, validate after:
 
 ### Manual (per machine, not carried by the dotfiles)
 
-4. Register the SessionStart hook in `~/.claude/settings.json` (see Component 3).
+1. Register the SessionStart hook in `~/.claude/settings.json` (see Component 3).
    Use the `update-config` skill or hand-edit + `jq -e .` validate. Preserve
    existing hooks.
-5. Start a **fresh** Claude session. Hooks load at session start, so the feature
+2. Start a **fresh** Claude session. Hooks load at session start, so the feature
    is inert in the session that deployed it.
 
 ### Per-clone caveat

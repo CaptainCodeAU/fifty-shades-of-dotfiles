@@ -279,6 +279,20 @@ if [ "$hook" = "prepare-commit-msg" ]; then
                 echo "_audit-chain: C-* trailers SKIPPED ($trailers_off)" >&2
                 exit 0
             fi
+            # A copy of an existing commit keeps that commit's trailers, or its lack of
+            # them (#3644, 22 Oct 2026). A cherry-pick (git leaves CHERRY_PICK_HEAD while
+            # it runs this hook) and an amend that keeps the message (git passes "commit
+            # HEAD") carry the original message, so any C-* keys it had are already in it.
+            # Adding the missing ones stamps this session onto someone else's commit: a
+            # runner's record commit, made with no session, came out of a cherry-pick
+            # carrying the session that moved it. A revert is new work and is stamped.
+            # Known limit: `git commit --amend -m` passes "message", exactly as a new
+            # commit does, so it is still stamped as this session's. Exiting here is
+            # falling through, as for the opt-out above.
+            if [ -e "$(git rev-parse --git-path CHERRY_PICK_HEAD 2>/dev/null)" ] \
+               || { [ "${2:-}" = commit ] && [ "${3:-}" = HEAD ]; }; then
+                exit 0
+            fi
             # Commit context: branch (blank on detached HEAD), worktree folder name,
             # and worktree path. The path is recorded $HOME-relative (~/...) so a
             # machine-local username/layout never lands in history; a path outside
