@@ -271,10 +271,15 @@ height = "70%"
 [ui.toast]
 delivery = "herdr"
 
-# Pop-ups in the top right corner, not herdr's default bottom right (Gavin, 22 Oct).
-# A pop-up sent with its own --position still goes where it asks.
+# Every pop-up in the bottom left corner (Gavin, 22 Oct; top right before that, the
+# same day). herdr's defaults are bottom right for pop-ups and bottom centre for the
+# "copied to clipboard" one. A pop-up sent with its own --position still goes where
+# it asks. herdr has no setting for the distance from the edge.
 [ui.toast.herdr]
-position = "top-right"
+position = "bottom-left"
+
+[ui.toast.clipboard]
+position = "bottom-left"
 
 # The "needs attention" sound (Gavin, 17 Oct, dotfiles-main Q46): a short camera click
 # from his sound library (button_bunny/sounds/clicks/camera-digital.wav). herdr plays
