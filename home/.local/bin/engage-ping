@@ -76,6 +76,7 @@
 #   <ISO local time>  <the time as in the text>  <kind>  <session>  queued  <what was missing, or ->
 #   <ISO local time>  <the time as in the text>  <kind>  <session>  sent    sound=started|- imsg=<rc1>,<rc2> or - ntfy=<topic>:<code>|off|- [fallback=imsg:<rc1>,<rc2>]
 #   <ISO local time>  <the time as in the text>  <kind>  <session>  silent  launched-by=<name>
+#   <ISO local time>  <the time as in the text>  <kind>  <session>  refused sandbox
 # So "did the 9:56:56 AM message go out?" is: grep '9:56:56 AM 19 Oct' <log>
 #
 # --detach  print the time, then do the sounds and sends in a double-forked process with every
@@ -85,19 +86,28 @@
 #       1 a tool or IMSG_TO was missing, an iMessage failed, or no phone route took the message:
 #         named on stderr and in the log
 #       2 usage error: nothing sent, nothing logged
-# stdout is the message's time; nothing for PJ_NO_PING or PING-1.
+#       3 REFUSED inside the Bash tool's sandbox: nothing sent, the refusal named on stderr and
+#         logged (see SANDBOX)
+# stdout is the message's time; nothing for PJ_NO_PING, PING-1 or a refusal.
 # PJ_NO_PING=1 is the kill switch: exit 0, nothing sent, nothing logged.
 # PING-1 (Gavin 2026-09-29): with PJ_LAUNCHED_BY set (a worker or a subagent), nothing is sent;
 # one silent log line names the launcher.
 #
-# SANDBOX. afplay fails inside the Bash tool's sandbox (AudioQueueStart -66680), and so does
-# every child of a sandboxed command, so from a Bash tool call run engage-ping as its own call
-# with the sandbox lifted. Hooks run outside it.
+# SANDBOX (#3640). Inside the Bash tool's sandbox afplay fails (AudioQueueStart -66680), imsg
+# and the gateway are blocked, and ping.log is not writable, so a send there could only fail;
+# on 22 Oct 2026 one did, said only "a send failed", and logged nothing. So with
+# SANDBOX_RUNTIME=1 (set inside the sandbox and nowhere else: measured 22 Oct 2026, 1 sandboxed,
+# unset with the sandbox lifted) engage-ping sends nothing, says REFUSED and why on stderr, and
+# exits 3. The refusal goes in the log when the log can be written, else in the pending file
+# $ENGAGE_PING_PENDING, else /tmp/claude-<uid>/engage-ping-refused.log (the sandbox lets every
+# session write there). The next engage-ping run outside the sandbox moves the pending lines
+# into the log and sends the emptied file to the Trash. From a Bash tool call, run engage-ping
+# as its own call with the sandbox lifted. Hooks run outside it.
 #
 # TEST SEAMS (selftest only), each used when SET, even to a missing path: PJ_PING_AFPLAY,
 # PJ_PING_IMSG, ENGAGE_PING_CURL replace the PATH lookup; ENGAGE_PING_NTFY_CONF,
-# ENGAGE_PING_GATEWAY_CONF, ENGAGE_PING_SESSIONS replace the files; ENGAGE_PING_NOW (epoch
-# seconds) is the clock.
+# ENGAGE_PING_GATEWAY_CONF, ENGAGE_PING_SESSIONS, ENGAGE_PING_PENDING replace the files;
+# ENGAGE_PING_NOW (epoch seconds) is the clock.
 #
 # `engage-ping --selftest` runs engage-ping-selftest from the same folder.
 
@@ -106,6 +116,7 @@ set -u
 SOUNDS_DIR="/System/Library/Sounds"
 STATE_DIR="${PJ_PING_STATE_DIR:-${ENGAGE_ACCOUNT_ROOT:-$HOME/CODE/CaptainCodeAU/CaptainCodeAU-isolinear}/engine-room/pj-state}"
 LOG_FILE="${PJ_PING_LOG:-$STATE_DIR/ping.log}"
+PENDING="${ENGAGE_PING_PENDING:-/tmp/claude-$UID/engage-ping-refused.log}"
 DOT=$'\xc2\xb7'
 NL=$'\n'
 
@@ -153,10 +164,27 @@ clean_many() {
 
 # One log line. The braces matter: a failed append is a redirection error the shell raises
 # before any 2>/dev/null on the command applies. Returns 1 when the line could not be written.
-log() { # log <event> <detail>   (uses ISO, TTIME, KIND, LOGSESS)
-  { mkdir -p "$(dirname "$LOG_FILE")" &&
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$ISO" "$TTIME" "$KIND" "$LOGSESS" "$1" "$2" >>"$LOG_FILE"
+log() { log_to "$LOG_FILE" "$@"; }  # log <event> <detail>
+log_to() { # log_to <file> <event> <detail>   (uses ISO, TTIME, KIND, LOGSESS)
+  { mkdir -p "$(dirname "$1")" &&
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$ISO" "$TTIME" "$KIND" "$LOGSESS" "$2" "$3" >>"$1"
   } 2>/dev/null
+}
+
+# fold_pending: move the refusals written to $PENDING inside the sandbox into the log. The file
+# is renamed first, so two runs at once cannot both fold it; once its lines are in the log it
+# goes to the Trash through the rm shim beside this script, and with no shim it stays, renamed.
+# When the log cannot be written its lines go back to $PENDING.
+fold_pending() {
+  local tmp="$PENDING.folding.$$"
+  [ -s "$PENDING" ] || return 0
+  command mv -f "$PENDING" "$tmp" 2>/dev/null || return 0
+  if { mkdir -p "$(dirname "$LOG_FILE")" && cat "$tmp" >>"$LOG_FILE"; } 2>/dev/null; then
+    [ -x "$(dirname "$0")/rm" ] && "$(dirname "$0")/rm" -f "$tmp" >/dev/null 2>&1
+  else
+    { cat "$tmp" >>"$PENDING" && [ -x "$(dirname "$0")/rm" ] && "$(dirname "$0")/rm" -f "$tmp"; } >/dev/null 2>&1
+  fi
+  return 0
 }
 
 # Resolve a tool: the seam variable when SET (even to a missing path), else PATH.
@@ -291,6 +319,20 @@ if [ -n "${PJ_LAUNCHED_BY:-}" ]; then
   printf 'engage-ping: launched by %s (PJ_LAUNCHED_BY), nothing sent (PING-1)\n' "$BY" >&2
   exit 0
 fi
+
+# SANDBOX (#3640): nothing can go out from here, so say so by name instead of trying.
+if [ "${SANDBOX_RUNTIME:-}" = 1 ]; then
+  WROTE="$LOG_FILE"
+  log refused sandbox || { WROTE="$PENDING"; log_to "$PENDING" refused sandbox; } || WROTE=""
+  printf 'engage-ping: %s REFUSED: this runs inside the Bash sandbox (SANDBOX_RUNTIME=1), which blocks the sounds, iMessage and ntfy, so nothing was sent. Run engage-ping as its own Bash call with the sandbox lifted.\n' "$TTIME" >&2
+  if [ -n "$WROTE" ]; then
+    printf 'engage-ping: the refusal is logged in %s\n' "$WROTE" >&2
+  else
+    printf 'engage-ping: the refusal could not be logged in %s or %s\n' "$LOG_FILE" "$PENDING" >&2
+  fi
+  exit 3
+fi
+fold_pending
 
 PROJECT="${PROJECT:-engage}"
 if [ "$HAVE_YOU" -eq 0 ]; then

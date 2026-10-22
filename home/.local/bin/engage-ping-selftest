@@ -103,16 +103,19 @@ export PATH="$FAKE:$PATH" PJ_PING_AFPLAY="$FAKE/afplay" PJ_PING_IMSG="$FAKE/imsg
 export ENGAGE_TRAP_GO="$FAKE/engage-go" ENGAGE_PING_FAKE_TRAP="$ROOT/trap.log"
 export IMSG_TO="selftest@example.invalid" ENGAGE_PING_SESSIONS="$ROOT/sessions"
 # This suite may run inside a session or a worker: every name it could pick up is pinned here.
+# SANDBOX_RUNTIME too: inside the Bash sandbox it is 1, and every arm but section 16's would
+# then be refused (#3640).
 unset PJ_NO_PING PJ_PING_LOG PJ_PING_FAKE_IMSG_RC PJ_LAUNCHED_BY CLAUDE_CODE_SESSION_NAME PJ_SESSION_NAME \
-  ENGAGE_PING_FAKE_HTTP ENGAGE_PING_FAKE_SLEEP HERDR_PANE_ID PJ_PING_BIN ENGAGE_PING_BIN
+  ENGAGE_PING_FAKE_HTTP ENGAGE_PING_FAKE_SLEEP HERDR_PANE_ID PJ_PING_BIN ENGAGE_PING_BIN SANDBOX_RUNTIME
 
 # arm <name>: fresh state, logs and the default pins for one arm.
 arm() {
   export PJ_PING_STATE_DIR="$ROOT/state-$1" PJ_PING_FAKE_LOG="$ROOT/fake-$1.log"
   export ENGAGE_PING_NTFY_CONF="$ROOT/conf/on.conf" ENGAGE_PING_GATEWAY_CONF="$ROOT/conf/no-such-file"
   export ENGAGE_PING_NOW="$NOW1" CLAUDE_PID=4242 CLAUDE_CODE_SESSION_ID=sess-uuid-1
+  export ENGAGE_PING_PENDING="$ROOT/pending-$1/refused.log"
   unset ENGAGE_PING_FAKE_HTTP PJ_PING_FAKE_IMSG_RC
-  LOG="$PJ_PING_STATE_DIR/ping.log"
+  LOG="$PJ_PING_STATE_DIR/ping.log"; PEND="$ENGAGE_PING_PENDING"
   : >"$PJ_PING_FAKE_LOG"
 }
 # settle: the sounds play in the background (Q89), so wait until the fake log stops growing
@@ -471,6 +474,43 @@ ENGAGE_PING_FAKE_HTTP=403 run question "q"
 arm twice-fail
 PJ_PING_FAKE_IMSG_RC=3 run question "q"
 [ "$RC" -eq 1 ] && [ "$(nof imsg)" -eq 2 ] && grep -q 'imsg=3,3 ' "$LOG" && ok "15 a failing imsg: both still tried, imsg=3,3, exit 1" || bad "15 failing pair" "rc=$RC imsg=$(nof imsg) $(cat "$LOG")"
+
+# ---- 16. Inside the Bash sandbox: refused by name, and logged (#3640) -----------------
+# On 22 Oct 2026 a ping inside the sandbox said only "a send failed" and logged nothing.
+# A file where a folder should be makes a log path that cannot be written.
+: >"$ROOT/a-file"
+arm sbx
+SANDBOX_RUNTIME=1 run question "q"
+[ "$RC" -eq 3 ] && [ "$(ncalls)" -eq 0 ] && [ -z "$OUT" ] && grep -q 'REFUSED' <<<"$ERR" && grep -q 'sandbox' <<<"$ERR" \
+  && ok "16 SANDBOX_RUNTIME=1: exit 3, no sound, imsg or curl, REFUSED and the sandbox named on stderr" || bad "16 refused" "rc=$RC calls=$(calls) out=$OUT err=$ERR"
+grep -q "	question	st-sess	refused	sandbox\$" "$LOG" && [ "$(wc -l <"$LOG" | tr -d ' ')" -eq 1 ] && [ ! -e "$PEND" ] && grep -qF "$LOG" <<<"$ERR" \
+  && ok "16 the refusal is one line in the log, stderr names the log, no pending file" || bad "16 refusal logged" "$(cat "$LOG" 2>&1) pend=$(cat "$PEND" 2>&1)"
+arm sbx-ctl
+SANDBOX_RUNTIME=0 run question "q"
+[ "$RC" -eq 0 ] && [ "$(calls)" = "afplay afplay afplay afplay imsg imsg curl " ] && ! grep -q refused "$LOG" \
+  && ok "16 control: SANDBOX_RUNTIME=0 sends as usual" || bad "16 control" "rc=$RC calls=$(calls) $(cat "$LOG")"
+arm sbx-detach
+SANDBOX_RUNTIME=1 run done "d" --detach; sleep 0.5; settle
+[ "$RC" -eq 3 ] && [ "$(ncalls)" -eq 0 ] && grep -q 'refused	sandbox$' "$LOG" \
+  && ok "16 --detach in the sandbox: refused the same, nothing forked off" || bad "16 detach" "rc=$RC calls=$(calls) $(cat "$LOG" 2>&1)"
+arm sbx-pend
+SANDBOX_RUNTIME=1 PJ_PING_LOG="$ROOT/a-file/p.log" run waiting "w" --you "x"
+[ "$RC" -eq 3 ] && [ "$(ncalls)" -eq 0 ] && grep -q '	waiting	st-sess	refused	sandbox$' "$PEND" && grep -qF "$PEND" <<<"$ERR" \
+  && ok "16 log not writable: the refusal goes in the pending file, named on stderr" || bad "16 pending" "rc=$RC pend=$(cat "$PEND" 2>&1) err=$ERR"
+ENGAGE_PING_NOW="$NOW2" run done "d"
+[ "$RC" -eq 0 ] && [ ! -e "$PEND" ] && [ "$(awk -F'\t' '{print $5}' "$LOG" | tr '\n' ' ')" = "refused queued sent " ] \
+  && grep -q "^[^	]*	$T1	waiting	st-sess	refused	sandbox\$" "$LOG" \
+  && ok "16 the next run outside the sandbox moves the refusal into the log first, then its own lines" || bad "16 fold" "rc=$RC pend=$(cat "$PEND" 2>&1) log=$(cat "$LOG" 2>&1)"
+run done "d"
+[ "$(grep -c refused "$LOG")" -eq 1 ] && ok "16 a run after that adds no second copy" || bad "16 fold once" "$(cat "$LOG")"
+arm sbx-keep
+mkdir -p "$(dirname "$PEND")"; printf 'x\tt\tdone\ts\trefused\tsandbox\n' >"$PEND"
+PJ_PING_LOG="$ROOT/a-file/p.log" run done "d"
+[ "$RC" -eq 1 ] && grep -q 'refused	sandbox$' "$PEND" && ok "16 log not writable outside the sandbox: the pending line stays for later" || bad "16 keep" "rc=$RC pend=$(cat "$PEND" 2>&1)"
+arm sbx-none
+SANDBOX_RUNTIME=1 PJ_PING_LOG="$ROOT/a-file/p.log" ENGAGE_PING_PENDING="$ROOT/a-file/r.log" run done "d"
+[ "$RC" -eq 3 ] && [ "$(ncalls)" -eq 0 ] && grep -q 'could not be logged' <<<"$ERR" \
+  && ok "16 neither writable: still refused, exit 3, and stderr says it could not be logged" || bad "16 none" "rc=$RC err=$ERR"
 
 printf 'engage-ping-selftest: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
