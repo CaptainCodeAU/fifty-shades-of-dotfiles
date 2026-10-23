@@ -1060,8 +1060,16 @@ _herdr_server_restart_status() {
     status_json=$(herdr status server --json 2>/dev/null) || true
     [[ -n "$status_json" ]] || return 0
     [[ "$(jq -r '.running // false' <<<"$status_json" 2>/dev/null)" == "true" ]] || return 0
-    if [[ "$(jq -r '.restart_needed // false' <<<"$status_json" 2>/dev/null)" == "true" ]]; then
-        echo "yes:$(jq -r '.version // "unknown"' <<<"$status_json" 2>/dev/null)"
+    # restart_needed alone is not enough: measured on mlbox 23 Oct 2026, a 0.9.1 server under
+    # a 0.9.5 binary (both protocol 22) said restart_needed false, so no restart was offered and
+    # the plugin link then failed with plugin_requires_newer_herdr. So a server whose version
+    # differs from the installed binary's counts as left behind too.
+    local running installed
+    running=$(jq -r '.version // ""' <<<"$status_json" 2>/dev/null)
+    installed=$(herdr --version 2>/dev/null | awk '{print $2}')
+    if [[ "$(jq -r '.restart_needed // false' <<<"$status_json" 2>/dev/null)" == "true" ]] \
+        || [[ -n "$running" && -n "$installed" && "$running" != "$installed" ]]; then
+        echo "yes:${running:-unknown}"
     else
         echo "no"
     fi
@@ -1505,10 +1513,17 @@ _post_stow_herdr_plugins_and_skill() {
             run_cmd herdr plugin unlink "$plugin_id" >/dev/null \
                 || warn "herdr plugin unlink $plugin_id failed; the link below will say why."
         fi
-        if run_cmd herdr plugin link "$plugin_dir" --enabled >/dev/null; then
+        local link_err
+        if link_err=$(run_cmd herdr plugin link "$plugin_dir" --enabled 2>&1 >/dev/null); then
             success "$plugin_id linked and enabled from $plugin_dir"
+        elif [[ "$link_err" == *plugin_requires_newer_herdr* ]]; then
+            # The running server is older than the plugin needs (mlbox, 23 Oct 2026: a 0.9.1
+            # server under a 0.9.5 binary). Say so, instead of asking whether it is running.
+            warn "herdr plugin link failed: the running herdr server is older than $plugin_id needs ($(jq -r '.error.message // empty' <<<"$link_err" 2>/dev/null))."
+            info "Restart the server onto the installed herdr when no session needs it (Linux: ${CYAN}systemctl --user restart herdr.service${RESET}), then: ${CYAN}herdr plugin link $plugin_dir --enabled${RESET}"
         else
             warn "herdr plugin link failed — is the herdr server running? Retry: ${CYAN}herdr plugin link $plugin_dir --enabled${RESET}"
+            [[ -n "$link_err" ]] && info "herdr said: ${link_err:0:300}"
         fi
     done
 
