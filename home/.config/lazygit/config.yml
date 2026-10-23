@@ -23,7 +23,6 @@
 # upgrade, and a missing key reads as ENABLED, not disabled.
 update:
   method: never
-
 gui:
   theme:
     activeBorderColor:
@@ -51,6 +50,5 @@ gui:
       - "#ed8796"
     defaultFgColor:
       - "#cad3f5"
-
-  authorColors:
-    "*": "#b7bdf8"
+    authorColors:
+      "*": "#b7bdf8"
