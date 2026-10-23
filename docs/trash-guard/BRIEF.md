@@ -13,7 +13,7 @@ Tonight (19:25, 19:31, 19:37) the engage repo went to the Trash three times: a c
 `trash ''` / `trash ""` with an empty variable, and macOS `/usr/bin/trash ''` trashes the
 current folder. Gavin recovered it each time with Put Back. Incident:
 ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/workbench/records-system/2026-09-28/INCIDENT-20260929-engage-repo-trashed.md
-Lesson: ~/.claude/pj-global/notes/20260929-cleanup-on-an-empty-path-trashes-the-folder.md
+Lesson: ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/reference/old-notes/20260929-cleanup-on-an-empty-path-trashes-the-folder.md
 The engage session has paused its cleanup work until this guard is live.
 
 ## Scope (Gavin confirmed in the conductor's boxes, 2026-09-29; do not widen or narrow)

@@ -5505,8 +5505,8 @@ _write_pj_machine_file() {
 # REPORT ONLY. It clones nothing, writes nothing and never fails the install.
 #
 # WHY IT EXISTS. Code and wiring live in this repo; the personal content pj needs does not
-# (D-20260920-09). `pj-prompt-file` concatenates ~/.claude/pj-global/OPERATIONAL_RULES.md
-# and ~/.claude/pj-global/RULES.md, and `pj` REFUSES to launch when it gets neither. So on a
+# (D-20260920-09). Until 19 Oct, `pj-prompt-file` read two rules files from the old global rules folder,
+# and `pj` refused to launch without them (history: B8 below retired that check). So on a
 # fresh machine this installer can finish perfectly and `pj` still will not start -- measured
 # by reading pj:46-49 and pj-prompt-file:118, not guessed. Before P8a nothing said so.
 #

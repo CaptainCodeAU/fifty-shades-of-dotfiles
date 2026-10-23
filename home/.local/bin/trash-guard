@@ -8,7 +8,7 @@
 # argument trashes the CURRENT folder. Gavin recovered it each time with Put Back.
 # Incident: CaptainCodeAU-isolinear/workbench/records-system/2026-09-28/
 #           INCIDENT-20260929-engage-repo-trashed.md
-# Lesson:   ~/.claude/pj-global/notes/20260929-cleanup-on-an-empty-path-trashes-the-folder.md
+# Lesson:   ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/reference/old-notes/20260929-cleanup-on-an-empty-path-trashes-the-folder.md
 #
 # Two routes reach the Trash and both ask this file first:
 #   trash    home/.local/bin/trash, a PATH shim in front of /usr/bin/trash
