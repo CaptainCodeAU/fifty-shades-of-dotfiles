@@ -24,6 +24,7 @@
 #   2b. On pre-commit, leak-scans the staged diff.
 #   2c. On pre-commit, `shift-lint --staged`, only where shiftlint.enable is true.
 #   3. On prepare-commit-msg, stamps the C-* session trailers in a Claude session.
+#   3b. On commit-msg, puts a blank line after the title when it has none (Q1: 1).
 #   4. On post-checkout and post-merge, tags each branch split and join (Q85: 1).
 #   (docs/PNPM_AUDIT_PREPUSH_HOOK.md "How it works" has the same list; keep in step.)
 #
@@ -48,7 +49,8 @@
 #   git config shiftlint.enable true       # step 2c -- OPT-IN: block unguarded
 #                                          #   `shift N` in staged shell files
 #   git config trailers.disable true       # step 3  -- no C-* session trailers
-#   git config branchtags.disable true     # step 4  -- no split and join tags
+#   git config titlegap.disable true       # step 3b -- no blank line put in after the title
+#   git config branchtags.disable true    # step 4  -- no split and join tags
 # ============================================================================
 set -uo pipefail
 
@@ -340,6 +342,35 @@ if [ "$hook" = "prepare-commit-msg" ]; then
                     || printf 'C-Wt-Path: %s\n' "${wt_path}" >> "$msg_file"
             fi
         fi
+    fi
+fi
+
+# 3b. A blank line after the commit title -- commit-msg only (Gavin, dotfiles-main Q1: 1,
+#     24 Oct 2026). git reads the whole first paragraph as the title, so a message written
+#     with no blank line after its first line becomes one long title in GitHub and in every
+#     one-line log. A makeitso session did exactly that on 24 Oct (it saw it and amended
+#     before the push); an engage session could do the same, as both run this chain.
+#     So when the line after the title is text, a blank line is put in and stderr says so.
+#     It runs at commit-msg, after any editor, so it sees the final words. git strips
+#     comment lines only after this hook, so leading comment and blank lines are skipped
+#     when finding the title, and a comment line after the title counts as no body.
+#     Known limits: a message meant as one paragraph of several lines is split after its
+#     first line, which is the point; with -m or -F git keeps a line starting with the
+#     comment character as text, so "title" then "#12 ..." is left as it is.
+#     Opt out per repo: git config titlegap.disable true
+if [ "$hook" = commit-msg ] && [ -n "${1:-}" ] && [ -f "$1" ] \
+   && [ "$(git config --bool titlegap.disable 2>/dev/null)" != true ]; then
+    cc="$(git config --get core.commentChar 2>/dev/null || true)"
+    [ "${#cc}" -eq 1 ] || cc="#"   # unset, or "auto": git's default comment character
+    title_at="$(awk -v cc="$cc" '
+        function text(s) { return s !~ /^[[:space:]]*$/ && index(s, cc) != 1 }
+        t == 0 { if (text($0)) t = NR; next }
+        { if (text($0)) print t; exit }' "$1")"
+    if [ -n "$title_at" ]; then
+        # The x keeps the trailing newlines that $(...) would drop.
+        fixed="$(awk -v n="$title_at" '{ print } NR == n { print "" }' "$1"; printf x)"
+        printf '%s' "${fixed%x}" > "$1"
+        echo "_audit-chain: put a blank line after the commit title, so the first line alone is the title (titlegap.disable turns this off)" >&2
     fi
 fi
 

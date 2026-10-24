@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  audit-chain-selftest -- proves _audit-chain: the C-* commit trailers (step 3),
+#  audit-chain-selftest -- proves _audit-chain: the C-* commit trailers (step 3), the title gap (3b),
 #  the pre-push leak scan (step 2d) and the split and join tags (step 4)
 # ============================================================================
 # Written 2026-09-21 alongside the CLAUDE_CODE_SESSION_ID fallback (F4,
@@ -398,6 +398,46 @@ mg "$B_ID" revert --no-edit HEAD~1
 wanteq '57 B reverts A'"'"'s commit: the revert is new work, so it carries B' "$B_ID" "$(msid)"
 mg "$B_ID" switch -q side~1 --detach; mg "$B_ID" commit -q --amend --no-edit
 wanteq '58 B amends A'"'"'s commit, same message: it keeps A' "$A_ID" "$(msid)"
+
+# ------------------------------------------------ 59-68 step 3b, title gap --
+# Gavin, dotfiles-main Q1: 1, 24 Oct 2026: a makeitso session's message had no blank line
+# after its first line, so git took the whole first paragraph as the title. Run through a
+# symlink named commit-msg, like the step 3 arms; 68 is one real `git commit`, to prove git
+# keeps the line this step puts in (it cleans the message only after the hook).
+printf '\nSTEP 3B (a blank line after the commit title)\n'
+ln -sf "$TOOL" "$ROOT/home/bin/commit-msg"
+# cm <message, printf-style> -- writes the message, runs the hook, sets OUT ERR RC
+cm(){ MSGF="$ROOT/cm.$$.$RANDOM"; printf "$1" > "$MSGF"; ERRF="$MSGF.err"
+      ( cd "$REPO" && HOME="$ROOT/home" "$ROOT/home/bin/commit-msg" "$MSGF" ) 2>"$ERRF"
+      RC=$?; OUT="$(cat "$MSGF"; printf x)"; OUT="${OUT%x}"; ERR="$(cat "$ERRF")"; }
+nl=$'\n'
+cm 'the title\nthe body runs on\nand on\n'
+wanteq '59 a run-on message gets a blank line after its title, the rest as it was' "the title${nl}${nl}the body runs on${nl}and on${nl}" "$OUT"
+want    '60 and stderr says so' 'put a blank line after the commit title' "$ERR"
+cm 'the title\n\nthe body\n'
+wanteq '61 control: a message that has the blank line is byte-identical' "the title${nl}${nl}the body${nl}" "$OUT"
+cm 'only a title\n'
+wanteq '62 a title alone is left alone' "only a title${nl}" "$OUT"
+cm '\n# a comment\nthe title\nthe body\n'
+wanteq '63 leading blank and comment lines are skipped to find the title' "${nl}# a comment${nl}the title${nl}${nl}the body${nl}" "$OUT"
+cm 'the title\n# Please enter the commit message\n'
+wanteq '64 a comment line after the title counts as no body' "the title${nl}# Please enter the commit message${nl}" "$OUT"
+git -C "$REPO" config titlegap.disable true
+cm 'the title\nthe body\n'
+wanteq '65 titlegap.disable: the run-on message is left as it was' "the title${nl}the body${nl}" "$OUT"
+git -C "$REPO" config --unset titlegap.disable
+cm 'the title\nthe body\n\n\n'
+wanteq '66 trailing blank lines are kept exactly' "the title${nl}${nl}the body${nl}${nl}${nl}" "$OUT"
+wanteq '67 the hook exits 0' 0 "$RC"
+GREPO="$ROOT/home/work/gap-repo"; mkdir -p "$GREPO" "$ROOT/gaphooks"
+ln -sf "$TOOL" "$ROOT/gaphooks/commit-msg"
+git -C "$GREPO" init -q -b main >/dev/null 2>&1
+git -C "$GREPO" config user.email selftest@example.invalid
+git -C "$GREPO" config user.name  selftest
+git -C "$GREPO" config core.hooksPath "$ROOT/gaphooks"
+printf 'g\n' > "$GREPO/g.txt"; git -C "$GREPO" add g.txt
+( cd "$GREPO" && HOME="$ROOT/home" git commit -q -m "a real title${nl}a body line right under it" ) >/dev/null 2>&1
+wanteq '68 a real git commit: the title is the first line alone' "a real title" "$(git -C "$GREPO" log -1 --format=%s)"
 
 printf '\nfixtures: %s\n' "$ROOT"
 printf 'tool: %s\n' "$TOOL"

@@ -217,6 +217,7 @@ The chainer runs more than this audit, so `git push --no-verify` skips all of it
 | 2b   | pre-commit           | `git-leak-scan` of the staged diff                                                          | `leakscan.skip` (prefer), `leakscan.disable`   |
 | 2c   | pre-commit           | `shift-lint --staged`, opt-in                                                               | on only with `shiftlint.enable true`          |
 | 3    | prepare-commit-msg   | `C-*` session trailers inside a Claude Code session                                         | `trailers.disable true`                       |
+| 3b   | commit-msg           | a blank line put in after the title when the next line is text (Q1: 1, 24 Oct)              | `titlegap.disable true`                       |
 | 4    | post-checkout, post-merge | a `split/<branch>/<time>` tag where a branch is created, a `join/<name>/<time>` tag where a `git merge` lands (never a pull or a squash); Q85: 1 | `branchtags.disable true` |
 
 ```sh
