@@ -73,7 +73,8 @@
 # $CLAUDE_CODE_SESSION_ID: first <sessions>/$CLAUDE_PID.json, then any <sessions>/*.json, where
 # <sessions> is $ENGAGE_PING_SESSIONS, else ~/.claude/sessions. Else $CLAUDE_CODE_SESSION_NAME,
 # else $PJ_SESSION_NAME, else none (then no Session line). <project> is the
-# main repo's session-alias: from .claude/pj-homes, else its basename (a linked worktree adds
+# main repo's session-alias: from its companion's config/project.txt (<main>-isolinear), else
+# from the old .claude/pj-homes, else its basename (a linked worktree adds
 # /<worktree>; outside git, the folder's basename), worked out from the session file's cwd when
 # there is one, else from the current folder.
 #
@@ -242,8 +243,12 @@ project_label() {
     return 0
   fi
   main=$(dirname "$common")
-  n=$(sed -n 's/^[[:space:]]*session-alias:[[:space:]]*//p' "$main/.claude/pj-homes" 2>/dev/null | head -n 1)
+  n=$(sed -n 's/^[[:space:]]*session-alias:[[:space:]]*//p' "$main-isolinear/config/project.txt" 2>/dev/null | head -n 1)
   n="${n%"${n##*[![:space:]]}"}"
+  if [ -z "$n" ]; then   # the old file, only as a fallback (#3818)
+    n=$(sed -n 's/^[[:space:]]*session-alias:[[:space:]]*//p' "$main/.claude/pj-homes" 2>/dev/null | head -n 1)
+    n="${n%"${n##*[![:space:]]}"}"
+  fi
   n="${n:-$(basename "$main")}"
   gdir=$(git -C "$d" rev-parse --path-format=absolute --git-dir 2>/dev/null)
   if [ -n "$gdir" ] && [ "$gdir" != "$common" ]; then

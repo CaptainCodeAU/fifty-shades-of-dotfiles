@@ -392,7 +392,23 @@ mkdir -p "$ROOT/st-proj/.claude" && printf 'session-alias: stp\n' >"$ROOT/st-pro
 arm sess7
 run test "t"
 case "$(nth imsg 1)" in "stp $TI t${NL}"*) ok "9 the session's repo's session-alias names the project" ;; *) bad "9 alias" "$(nth imsg 1)" ;; esac
+# #3818: the companion's config/project.txt is read first, the old .claude/pj-homes only as a fallback
+mkdir -p "$ROOT/st-proj-isolinear/config" && printf '# settings\nwrap-up: /x\n' >"$ROOT/st-proj-isolinear/config/project.txt"
+arm sess8
+run test "t"
+case "$(nth imsg 1)" in "stp $TI t${NL}"*) ok "9 a project.txt with no session-alias: falls back to the old file" ;; *) bad "9 project.txt fallback" "$(nth imsg 1)" ;; esac
+printf '# settings\nsession-alias: stc  \nsession-alias: second\n' >"$ROOT/st-proj-isolinear/config/project.txt"
+arm sess9
+run test "t"
+case "$(nth imsg 1)" in "stc $TI t${NL}"*) ok "9 the companion's project.txt session-alias wins over the old file" ;; *) bad "9 project.txt alias" "$(nth imsg 1)" ;; esac
 command mv -f "$ROOT/st-proj/.claude/pj-homes" "$ROOT/pj-homes.used"   # moved aside, never deleted
+arm sess10
+run test "t"
+case "$(nth imsg 1)" in "stc $TI t${NL}"*) ok "9 project.txt alone names the project" ;; *) bad "9 project.txt alone" "$(nth imsg 1)" ;; esac
+command mv -f "$ROOT/st-proj-isolinear" "$ROOT/st-proj-isolinear.used"   # moved aside, never deleted
+arm sess11
+run test "t"
+case "$(nth imsg 1)" in "st-proj $TI t${NL}"*) ok "9 neither file: the repo's basename" ;; *) bad "9 basename" "$(nth imsg 1)" ;; esac
 
 # ---- 10. Cleaning and caps ------------------------------------------------------------
 arm clean
