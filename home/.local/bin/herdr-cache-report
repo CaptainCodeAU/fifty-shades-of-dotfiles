@@ -11,6 +11,9 @@
 # re-runs every 30 s, so each status line calls this once per run:
 #   ~/.claude/statusline-command.sh       (plain claude sessions)
 #   engage's statusline/session-line.sh   (engage sessions; engage's to wire)
+#   makeitso's statusline/session-line.sh (makeitso sessions, ~/.claude_v2; makeitso's
+#                                          to wire, live 24 Oct; it refreshes every
+#                                          second, so it calls this at most every 20 s)
 #
 # It reports one of seven tokens on $HERDR_PANE_ID, clearing the other six. The
 # band is the minutes shown (Gavin, 19 Oct, 11:55 PM: six colours, one per ten

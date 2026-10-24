@@ -91,18 +91,25 @@ facts behind the choices and the options not taken.
 ## The cache countdown and the prompt palette (19 Oct)
 
 - **Cache countdown** (Gavin, dotfiles-main Q70: 1): line 1 of each agent row ends
-  with the minutes left before that session's prompt cache goes cold, "◷ 42m".
-  `herdr-cache-report` (home/.local/bin) reports it on the pane as one of three
-  tokens and clears the other two: `$cache_warm` cyan `#55ffff`, `$cache_low`
-  bright yellow `#ffff55` (the last fifth of the ttl: 12 min of 1 h, 1 min of 5 min,
-  5 min when the ttl is unknown) or `$cache_cold` red `#ff5555`, the status line's
-  own colours. The token expires 2 min after the last report, and goes when Claude
+  with the minutes left before that session's prompt cache goes cold. Since 19 Oct,
+  11:55 PM it reads "— 42" in six colour bands (seven tokens, `$cache_m50` to
+  `$cache_m0` and `$cache_cold`), as "What is set now" above says; until then it was
+  "◷ 42m" in three tokens (`$cache_warm` cyan, `$cache_low` yellow, `$cache_cold`
+  red). `herdr-cache-report` (home/.local/bin) sets one token and clears the rest.
+  The token expires 2 min after the last report, and goes when Claude
   exits. The numbers come from Claude Code's own status-line input
-  (`.prompt_cache.expires_at`, `.warm`, `.ttl`), so two status lines feed it, each
-  about every 30 s: `~/.claude/statusline-command.sh` for plain sessions (dot-claude
-  repo), and engage's status line for engage sessions (engage 75c1dda, #3319, live
+  (`.prompt_cache.expires_at`, `.warm`, `.ttl`), so three status lines feed it:
+  `~/.claude/statusline-command.sh` for plain sessions (dot-claude repo), every
+  30 s; engage's status line for engage sessions (engage 75c1dda, #3319, live
   19 Oct: a test session's row read "◷ 51m" while its status line read "51:56
-  left"). Silent outside herdr. `herdr-cache-report --selftest`.
+  left"); and makeitso's own status line for makeitso sessions, which run in their
+  own Claude home `~/.claude_v2`. makeitso's copy was made on 16 Oct, before the
+  call existed, so its rows had no timer until 24 Oct (Gavin's screenshot). Its
+  status line refreshes every second, so it calls the report at most every 20 s
+  per pane; makeitso wired it in its own repo, from a block written here, since it
+  cannot read this repo. Read back the same evening: both makeitso panes held a
+  cache token. A new status line that should show a timer has to make the same
+  call. Silent outside herdr. `herdr-cache-report --selftest`.
 - **Prompt palette** (Gavin, dotfiles-main Q69: 1): herdr's sidebar has exactly two
   sections and no plugin can draw in it, so the "third section of words" is a popup.
   `ctrl+Space` then `p`, or `ctrl+alt+p` in one press, or `cmd+option+p` in Ghostty
