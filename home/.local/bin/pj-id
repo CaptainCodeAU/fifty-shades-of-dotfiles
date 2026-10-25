@@ -198,7 +198,10 @@ cmd_next(){
 
 selftest(){
   local tmp fails=0 out rc a b day
-  tmp=$(mktemp -d "${TMPDIR:-/tmp}/pj-id-selftest.XXXXXX") || { echo "pj-id --selftest: mktemp failed -- INVALID TRIAL" >&2; return 2; }
+  # The shared test helper makes the fixture folder and sends it, with its 1,300 or so fixture
+  # files, to the Trash when the selftest ends, however it ends (records #2451, #3989).
+  . "$HOME/.local/bin/test-temp.sh" new pj-id-selftest || { echo "pj-id --selftest: the test helper refused (above) -- INVALID TRIAL" >&2; return 2; }
+  tmp="$TT"
   day="$(date +%Y%m%d)"
   ok(){ echo "  ok   $1"; }; fail(){ echo "  FAIL $1"; fails=1; }
   mkdir -p "$tmp/s"

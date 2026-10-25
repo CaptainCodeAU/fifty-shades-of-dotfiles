@@ -44,9 +44,10 @@ UNDER_TEST="${ZSHRC_UNDER_TEST:-$REPO/home/.zshrc}"
 FN="$(awk '/^herdr\(\) \{/{on=1} on{print} on && /^\}/{exit}' "$UNDER_TEST")"
 [[ "$FN" == *'command herdr "$@"'* ]] || { print -ru2 -- "REFUSED: no herdr() function found in $UNDER_TEST"; exit 2; }
 
-T="$(mktemp -d "${TMPDIR:-/tmp}/zsh-hg.XXXXXX")" || { print -ru2 -- "REFUSED: mktemp failed"; exit 2; }
-[[ -d "$T" ]] || { print -ru2 -- "REFUSED: no temp dir"; exit 2; }
-trap 'command rm -rf -- "$T" 2>/dev/null' EXIT
+# The shared test helper (docs/TEST_TEMP_FOLDERS.md) makes the folder and sends it to the Trash
+# when the test ends, Ctrl-C and TERM included: zsh runs a bare EXIT trap on neither (record #3989).
+. "$HOME/.local/bin/test-temp.sh" new zsh-hg || { print -ru2 -- "REFUSED: the test helper refused (above)"; exit 2; }
+T="$TT"
 mkdir -p "$T/bin" "$T/home/.config/systemd/user" || exit 2
 # The guard keys off the unit SYMLINK only; where it points does not matter here.
 ln -s /dev/null "$T/home/.config/systemd/user/herdr.service" || exit 2

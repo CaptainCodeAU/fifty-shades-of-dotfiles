@@ -90,7 +90,10 @@ pass() {
 }
 
 if [ "${1:-}" = "--selftest" ]; then
-    fx=$(mktemp -d "${TMPDIR:-/tmp}/herdr-stuck-watch.XXXXXX") || exit 2
+    # The shared test helper (docs/TEST_TEMP_FOLDERS.md) makes the fixture folder and sends it
+    # to the Trash when the selftest ends, however it ends (record #3989; it was left behind).
+    . "$HOME/.local/bin/test-temp.sh" new herdr-stuck-watch || exit 2
+    fx="$TT"
     pass_n=0 fail_n=0
     # A fake herdr: `pane list` prints $fx/list.json; every other call is logged, one per line.
     printf '#!/bin/bash\nif [ "$1 $2" = "pane list" ]; then cat "%s/list.json"; else printf "%%s\\n" "$*" >> "%s/calls"; fi\n' "$fx" "$fx" > "$fx/herdr"

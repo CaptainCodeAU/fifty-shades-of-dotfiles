@@ -536,11 +536,12 @@ report() {
 
 # ------------------------------------------------------------------ selftest
 selftest() {
-    local fx pass_n=0 fail_n=0 t0 out c rc before after sid1 sid2 sid3 sidA sidB iso pl base="${TMPDIR:-/tmp}"
-    fx=$(mktemp -d "${base%/}/disk-watch-selftest.XXXXXX") || { echo "disk-watch selftest: cannot make a temp folder" >&2; exit 2; }
-    # shellcheck disable=SC2064
-    trap "builtin cd /; rm -rf '$fx' >/dev/null 2>&1; test -e '$fx' && echo 'disk-watch selftest: its fixture folder could not go to the Trash (the sandbox refuses it), left in $fx'" EXIT
-    trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
+    local fx pass_n=0 fail_n=0 t0 out c rc before after sid1 sid2 sid3 sidA sidB iso pl
+    # The fixture folder comes from the shared test helper (docs/TEST_TEMP_FOLDERS.md): it goes
+    # to the Trash when the selftest ends, on success, failure or Ctrl-C, and inside the Claude
+    # sandbox, where the Trash is refused, it is listed and stays in the session's own folder.
+    . "$HOME/.local/bin/test-temp.sh" new disk-watch-selftest || { echo "disk-watch selftest: the test helper refused (above)" >&2; exit 2; }
+    fx="$TT"
     ok() { pass_n=$((pass_n + 1)); echo "  ok   $1"; }
     bad() { fail_n=$((fail_n + 1)); echo "  FAIL $1"; }
     mkdir -p "$fx/bin" "$fx/root" "$fx/state" "$fx/sessions" "$fx/projects/-proj-a" "$fx/projects/-proj-b" "$fx/repo" "$fx/trash"
