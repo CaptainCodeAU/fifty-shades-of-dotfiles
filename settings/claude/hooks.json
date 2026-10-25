@@ -203,15 +203,15 @@
     },
     {
       "event": "SessionStart",
-      "script": "pj-temp",
-      "script_path": "$HOME/.local/bin/pj-temp",
-      "targets": ["project"],
+      "script": "engage-temp",
+      "script_path": "$HOME/.local/bin/engage-temp",
+      "targets": ["user"],
       "entry": {
         "type": "command",
-        "command": "h=\"$HOME/.local/bin/pj-temp\"; if [ -x \"$h\" ]; then \"$h\" session-start || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: pj-temp is registered but ~/.local/bin/pj-temp is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: pj-temp is registered but ~/.local/bin/pj-temp is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
+        "command": "h=\"$HOME/.local/bin/engage-temp\"; if [ -x \"$h\" ]; then \"$h\" session-start || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: engage-temp is registered but ~/.local/bin/engage-temp is missing or not executable, so this session has no temp folder of its own. Fix: restore the link from engage (its setup puts ~/.local/bin/engage-temp back) or remove this registration from the dotfiles hook list.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: engage-temp is registered but ~/.local/bin/engage-temp is missing or not executable, so this session has no temp folder of its own. Fix: restore the link from engage (its setup puts ~/.local/bin/engage-temp back) or remove this registration from the dotfiles hook list.\"}}'; fi",
         "timeout": 10
       },
-      "why": "W-20260929-A155 (T1 as amended by Gavin 2026-09-30): gives each pj session its own temp folder /tmp/claude-<uid>/pj-<session id> by writing export TMPDIR into CLAUDE_ENV_FILE (sandboxed and unsandboxed Bash both read it; measured), and records the owner (session id, claude pid, start time) for the launcher's sweep. SessionStart, not a PreToolUse rewrite: CLAUDE_HOOKS.md Rule 2. Says by name when it cannot give a folder. Project target only",
+      "why": "Record #3989 (Gavin, dotfiles-main 25 Oct 2026: every session in both setups gets its own temp folder, cleared once it has ended). engage sessions read only engage's own settings (--setting-sources project,local), where engage registers this same hook; this row covers the main-setup sessions started WITHOUT engage, which read ~/.claude/settings.json and had no folder of their own. engage-temp (engage's tool, a port of the old pj-temp) writes export TMPDIR=/tmp/claude-<uid>/pj-<session id> into CLAUDE_ENV_FILE and records the owner; engage's launch sweep moves the folder to the Trash once the session is dead. Replaces the pj-temp row (project target, dead since pj retired). Tell engage-main if engage-temp's session-start changes (engage record #3991).",
       "class": "alarm"
     },
     {
@@ -509,9 +509,7 @@
       },
       "why": "Shouts when a grep/rg is used to CONCLUDE instead of census.py",
       "class": "advisory",
-      "legacy_commands": [
-        "$HOME/.claude/hooks/enforce-census.sh"
-      ]
+      "legacy_commands": ["$HOME/.claude/hooks/enforce-census.sh"]
     },
     {
       "event": "PreToolUse",
@@ -525,9 +523,7 @@
       },
       "why": "Same guard on the Grep tool, not just shell greps",
       "class": "advisory",
-      "legacy_commands": [
-        "$HOME/.claude/hooks/enforce-census.sh"
-      ]
+      "legacy_commands": ["$HOME/.claude/hooks/enforce-census.sh"]
     },
     {
       "event": "PreToolUse",
@@ -558,9 +554,7 @@
       "requires": ["$HOME/.claude/skills/herdr"],
       "why": "Lifts the block above; pointless without the skill it watches for",
       "class": "alarm",
-      "legacy_commands": [
-        "$HOME/.claude/hooks/mark-herdr-skill-read.sh"
-      ]
+      "legacy_commands": ["$HOME/.claude/hooks/mark-herdr-skill-read.sh"]
     },
     {
       "event": "PreToolUse",
