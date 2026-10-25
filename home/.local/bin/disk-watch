@@ -407,6 +407,9 @@ row_line() {
 $line
 EOF
     mk=$(maker "$kind" "$name" "$path"); mk="${mk#*"$TAB"}"; mk="${mk% (its own folder)}"; mk="${mk% (at *}"
+    # A session's own folder is named by its session, not its 39-character id, so the line still
+    # says whose it is on the lock screen (the first real ping, 26 Oct 2026, cut the id off).
+    case "$name" in pj-*) printf "%s's own folder %s" "$mk" "$(kb_h "$kb")"; return 0 ;; esac
     [ "$kind" = files ] && name="$name x$count"
     printf '%s %s, %s' "$name" "$(kb_h "$kb")" "$mk"
 }
@@ -622,7 +625,7 @@ EOF
                                          if (a[i] == "--you" && length(a[i+1]) + 4 > 40) print "you(" a[i+1] ")" }
               if (n < 12) print "only " n " arguments" }')
     [ -z "$out" ] && ok "3 summary within 20 characters, each line and the Do line within 40" || bad "3 widths: $out"
-    printf '%s\n' "$c" | grep -q '^ARG=Next: [^ ]* [0-9]' && ! printf '%s\n' "$c" | grep -qx 'ARG=Next:' \
+    printf '%s\n' "$c" | grep -Eq '^ARG=Next: .* [0-9]+ [KMG]B' && ! printf '%s\n' "$c" | grep -qx 'ARG=Next:' \
         && ok "3 the next biggest rows go in as --more lines, each one argument" || bad "3 more lines"
     # 4. Same value: quiet; 1 GiB worse: ping; quiet period edges, measured from the recorded ping.
     FX_FREE=5000000 "$0"
@@ -705,6 +708,12 @@ EOF
     grep -q '^ARG=Trash: not readable; temp folder ' "$fx/ping.$(pings)" && ok "14 a Trash that cannot be read: \"not readable\", not a size" || bad "14 trash unreadable: $(grep '^ARG=Trash' "$fx/ping.$(pings)")"
     out=$("$0" report 2>&1)
     printf '%s\n' "$out" | grep -q '^The Trash: 2 MB ' && ok "14 control: the report gives a readable Trash's size" || bad "14 control: $(printf '%s\n' "$out" | grep -i trash | head -n 2)"
+    # 15. A session's own folder at the top is named by its session, not its id (control: arm 3's
+    # loose folder keeps its own name and maker).
+    dd if=/dev/zero of="$fx/root/pj-$sid1/blob2" bs=1024 count=4096 2>/dev/null
+    : > "$fx/state/alerts"
+    FX_FREE=5000000 "$0"
+    grep -qx "ARG=Top: sess-one's own folder 5 MB" "$fx/ping.$(pings)" && ok "15 a session's own folder on top: 'sess-one's own folder 5 MB', no id" || bad "15 top: $(grep '^ARG=Top' "$fx/ping.$(pings)")"
     echo "disk-watch selftest: $pass_n passed, $fail_n failed"
     [ "$fail_n" -eq 0 ]
 }
