@@ -1,7 +1,7 @@
 # Zed Preview — Changelog Tracker
 
-<!-- ZED_PREVIEW_DOC_VERSION: 1.26.1 -->
-<!-- LAST_UPDATED: 2026-10-22 -->
+<!-- ZED_PREVIEW_DOC_VERSION: 1.26.2 -->
+<!-- LAST_UPDATED: 2026-10-25 -->
 
 > **What this is.** A living record of notable **Zed Preview** changes, filtered to
 > what Gavin cares about: **user interface**, **configuration / settings**, and
@@ -30,10 +30,10 @@
 
 | Field                  | Value         |
 | ---------------------- | ------------- |
-| Latest Preview tracked | **1.26.1**    |
-| Release date           | 2026-10-21    |
-| GitHub tag             | `v1.26.1-pre` |
-| Doc last refreshed     | 2026-10-22    |
+| Latest Preview tracked | **1.26.2**    |
+| Release date           | 2026-10-23    |
+| GitHub tag             | `v1.26.2-pre` |
+| Doc last refreshed     | 2026-10-25    |
 
 ---
 
@@ -49,7 +49,7 @@ rather than buried. (Cross-references are auto-memory slugs.)
     from git because it holds private server info — leave it alone.
 - **Per-project themes are wanted; the PR that would have delivered it was CLOSED
   unmerged** (`project_zed_per_project_theme`). Tracked upstream at **zed#13300** (still
-  open, re-checked 2026-10-22). **PR #58755 was closed on 2026-09-07** by a maintainer for
+  open, re-checked 2026-10-25). **PR #58755 was closed on 2026-09-07** by a maintainer for
   suspected LLM-written replies, not because the feature was refused; see the
   2026-09-23 re-check under watch-items for the detail. No successor PR found. The
   `--user-data-dir` workaround exists, but **Gavin rejected it on 2026-06-18** (one Zed
@@ -79,6 +79,19 @@ when it visibly affects the above or Gavin's known setup.
 ---
 
 ## Release log (newest first)
+
+> **Refresh of 2026-10-25 (1.26.2, one release).** Source: the GitHub release body for
+> `v1.26.2-pre`, cross-checked against <https://zed.dev/releases/preview/latest> (same
+> single item, dated Oct 23, 2026). Installed on the Mac: 1.26.2
+> (`CFBundleShortVersionString` read 1.26.2). Stable `v1.25.3` shipped the same day.
+
+### 1.26.2 - 2026-10-23
+
+**No UI, configuration or theme changes.** The only item: dependencies updated to
+address recent software ecosystem vulnerabilities (zed#66022, zed#65962).
+
+- _In plain English:_ a security patch only. Nothing looks or behaves differently,
+  and still nothing on colour-per-window.
 
 > **Refresh of 2026-10-22 (1.22.0 to 1.26.1, six releases).** Source: the GitHub release
 > bodies for `v1.23.1-pre`, `v1.24.1-pre`, `v1.24.2-pre`, `v1.25.0-pre`, `v1.25.1-pre` and
@@ -1043,12 +1056,12 @@ when it visibly affects the above or Gavin's known setup.
 
 ## Standing watch-items (open threads)
 
-| Item                               | Status as of 2026-10-22                                                                                                                                                  | Why it matters                      |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |
+| Item                               | Status as of 2026-10-25                                                                                                                                                                | Why it matters                      |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
 | Per-project themes (zed#13300)     | Issue open, last updated 2026-10-21 (two user comments, 12 and 21 Oct, no maintainer, no PR); **PR #58755 CLOSED unmerged 2026-09-07**, no successor; ruling: title aid + keep waiting | Gavin's color-per-window goal       |
-| `theme_overrides` at project level | Still user-settings only; nothing in 1.17.0 to 1.26.1 changes it                                                                                                         | zed#13300 open, nothing building it |
-| `detect_venv` default              | Not mentioned in 1.17.0 to 1.26.1; yours still pins `off`                                                                                                                | direnv double-activation            |
-| Title-bar settings surface         | `title_bar.show_worktree_name` (1.13.0); `window_title_format` (1.20.0); nothing new in 1.23.1 to 1.26.1                                                   | Title text only, never colour       |
+| `theme_overrides` at project level | Still user-settings only; nothing in 1.17.0 to 1.26.2 changes it                                                                                                                       | zed#13300 open, nothing building it |
+| `detect_venv` default              | Not mentioned in 1.17.0 to 1.26.2; yours still pins `off`                                                                                                                              | direnv double-activation            |
+| Title-bar settings surface         | `title_bar.show_worktree_name` (1.13.0); `window_title_format` (1.20.0); nothing new in 1.23.1 to 1.26.2                                                                               | Title text only, never colour       |
 
 **PR #58755 "Add per-window theme overrides"** (author 42piratas; opened 2026-06-06;
 open / not merged / not draft; last activity 2026-06-29; base `main`; no milestone;
