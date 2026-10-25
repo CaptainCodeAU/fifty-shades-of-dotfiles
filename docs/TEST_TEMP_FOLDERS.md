@@ -11,6 +11,8 @@ Sessions of another project had left 31 test folders, 8.8 GB, in the shared
 
 - `test-temp.sh` is sourced by a test. It makes the folder and sets the traps (1 and 2).
 - `test-temp` runs a suite and checks it (3). It also lints test files for the traps below.
+  And it is the after-command hook, which moves to the Trash the folders the Claude sandbox
+  would not let a test move there (Gavin's Q1: 2; see [The after-command hook](#the-after-command-hook)).
 
 Removal goes to the Trash only. Nothing here deletes anything for good.
 
@@ -109,7 +111,9 @@ made|gone|refused|failed|kept <TAB> path <TAB> pid <TAB> epoch seconds <TAB> det
 - `gone`: the path went to the Trash, or was already gone.
 - `refused`: the Claude sandbox would not let it go to the Trash. That needs
   `SANDBOX_RUNTIME=1`, which Claude Code sets inside the Bash sandbox and nowhere else, and an
-  afpAccessDenied from the Trash. The path is still there.
+  afpAccessDenied from the Trash. The path is still there. The end also names the list, once,
+  to the after-command hook, which moves the path once the Bash command ends where the hook
+  runs. The end says so only where the hook has run before, for this Claude (its heartbeat).
 - `failed`: the Trash would not take it anywhere else. The path is still there.
   `test-temp check` always fails this one.
 - `kept`: keep-on-fail kept it, for a test that failed.
@@ -125,8 +129,12 @@ test-temp run -- ./tests/run-all.sh
 1. It makes a private run folder, `test-temp-run.XXXXXX`, in your temp folder.
 2. It runs the suite with `TMPDIR` and `TEST_TEMP_DIR` set to that folder.
 3. It checks the folder, and prints one summary line.
-4. It sends the run folder to the Trash when nothing is left in it. Otherwise it keeps the
-   folder and says where.
+4. It sends the run folder to the Trash when nothing is left in it but its list and folders
+   the sandbox refused. Inside the sandbox that is refused too: the run folder is listed
+   `refused` in your list, and the after-command hook, where it runs, moves it after the
+   folders inside it (and leaves it if one of them was left).
+   Otherwise (a leak, a check not run, a folder kept for a failed test) it keeps the folder and
+   says where.
 
 The suite is a child that `run` waits on. Ctrl-C reaches it directly. An INT, TERM or HUP sent
 to `run` alone is passed on to it. Either way `run` still checks, prints its line, and then
@@ -152,14 +160,17 @@ The check fails a run when:
 
 `refused` and `kept` paths follow `TEST_TEMP_REFUSED`:
 
-- `pass` (the default): they are listed, and the run passes. The note says "they go when the
-  session ends" only when the run's `TMPDIR` is a session's own folder
-  (`/tmp/claude-<uid>/pj-<id>`). Elsewhere it says they stay there until you trash them. The
+- `pass` (the default): they are listed, and the run passes. When the run's `TMPDIR` is a
+  session's own folder (`/tmp/claude-<uid>/pj-<id>`) the note says "they go when the session
+  ends (no after-command hook has run in this session)", or, once the hook has left this
+  Claude its heartbeat, "the after-command hook moves them once this command ends, or they go
+  when the session ends". Elsewhere it says they stay there until you trash them. The
   `pj-<id>` shape mirrors engage-temp's session folders; it is kept here as a short mirror on
   purpose, not shared with engage's tool.
 - `fail`: they fail the run (exit 4).
 
-Gavin's question Q1 settles the default. Any other value refuses with exit 2.
+Gavin's Q1: 2 (25 Oct 2026): a hook outside the sandbox moves refused folders to the Trash
+once each Bash command ends, so `pass` stays the default. Any other value refuses with exit 2.
 
 When `TMPDIR` is the shared root (`/tmp/claude-<uid>`, with or without a trailing slash, or
 `/private/tmp/claude-<uid>`), `run` refuses with exit 3. The suite never runs. That session
@@ -282,12 +293,140 @@ and `setpgrp`. The supervisor also tells a child that died of a signal from one 
 
 - Inside a sandboxed Claude Bash call the Trash is refused. A folder stays where it is, and
   the list says `refused`. Nothing else is tried: removal is Trash-only (Gavin's ruling A155).
+  Where the after-command hook runs, it moves it once the command ends (below).
 - The same refusal outside the sandbox (no `SANDBOX_RUNTIME=1`) is listed `failed`, and the
   check fails it.
 - Hooks and launchd jobs run outside the sandbox.
 - A session with its own `TMPDIR` (`/tmp/claude-<uid>/pj-<id>`) keeps refused folders inside
   its own folder. A session without one would put them in the shared root, so `run` refuses
   there (exit 3).
+
+## The after-command hook
+
+Gavin's Q1: 2 (25 Oct 2026, record #3989): a hook that runs outside the sandbox after each
+Bash command moves to the Trash the folders a test listed `refused`. It is
+`test-temp after-command`, registered twice on Bash: as PostToolUse, which Claude Code 2.1.310
+fires only after a call that succeeded, and as PostToolUseFailure, which it fires after one
+that failed (a test that exits non-zero, times out or is stopped). The event's name is the
+argument, and the answer names it back.
+
+**How it learns of them.** An end that lists a path `refused` also writes the list's real path
+to `/tmp/claude-<uid>/.test-temp-pending/$CLAUDE_PID` (a folder of mode 700): once per test
+process, never when the file holds that line already, and never through a link. Claude Code
+sets `CLAUDE_PID` to its own pid for Bash calls and for hooks (2.1.310: the same function
+builds both environments), so the hook reads only its own Claude's file. With no
+`CLAUDE_PID` (not inside Claude Code) nothing is written. A write that fails never fails the
+test; it is said once. `run` names your list the same way when the sandbox refuses its run
+folder, and the selftest names the session's list for its own folder.
+
+**The heartbeat.** The hook runs only where it is registered: today the dotfiles' user
+settings, which engage sessions do not read. So nothing promises a move on the hook's behalf
+unless the hook has run for this Claude. Each run as a hook (Claude Code sets
+`CLAUDE_PROJECT_DIR` for hooks, never for a Bash call) makes
+`<state>/hook/$CLAUDE_PID` once, in the state folder below, which the sandbox cannot write.
+Only with that file does a test's end, `check`, `run` or the selftest say "the after-command
+hook moves it once this command ends"; without it they say "it goes when the session ends (no
+after-command hook has run in this session)". The first Bash call of a session therefore
+undersays: the hook may still move its folders once that call ends.
+
+**What it moves.** For each list named there, each path whose last line is `refused`, when all
+of these hold:
+
+| Check               | What is asked                                                                                                                |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| the list            | a file named `.test-temp/list`, this account's, no link                                                                      |
+| the list's place    | inside a session folder, `/tmp/claude-<uid>/pj-<id>`                                                                         |
+| that session folder | its `.pj-temp/owners` (this account's, no link) names this `CLAUDE_PID` (field 2) or the hook input's `session_id` (field 1) |
+| the path            | a real folder, no link, this account's                                                                                       |
+| its name            | mktemp-shaped, `NAME.XXXXXX`                                                                                                 |
+| its place           | inside that same session folder, by its real path; not holding the list that names it                                        |
+
+A folder that holds something left is left too ("it holds ..., which is left"): something
+this run left, or a path its own list (a run folder's) has not seen gone and that is still
+there. So a run folder never carries to the Trash a folder the checks kept out.
+
+**Against a swap.** Code inside the sandbox can change the session folder at any moment, also
+between a check and the move after it: swap a folder on the way for a link to one outside the
+session folder, say, and a move by path would take a same-named folder from there. So every
+touch of a path in the shared temp folder goes through a small perl walker: from `/`, one
+component at a time, never through a link, each folder lstat-ed, entered, and found to be the
+same folder (device and inode). The pending file, and each folder to move, is renamed from
+inside its verified folder into the staging folder (below), which the sandbox cannot write,
+and checked there again (a real folder, this account's, the same inode); the Trash takes it
+from there. A rename that fails (another volume, say) leaves the folder where it was, listed
+failed. A line for a list is appended the same way (O_NOFOLLOW, and only to an existing file
+of this account's), so a swapped list folder gets no line, and that is logged. A moved path
+gets a `gone` line ("moved by the after-command hook"), with the same pid as its `made` line,
+so `test-temp check` counts it gone. One Trash call per list, in the order the lists were
+named, so a run's own folder goes after the folders inside it.
+
+**What it never moves.** Anything that fails a check stays where it is, gets a `failed` line
+naming why (so `check` fails it), and a line in the log. A list that fails its checks is not
+read for moves and never written to. A list named by a pending file but gone (it went with
+its run folder) is logged and skipped. A folder the Trash would not take stays in the staging
+folder, and its `failed` line says so. Run by hand inside the sandbox (`SANDBOX_RUNTIME=1`) it
+takes nothing at all, and says so: the sandbox reaches neither the Trash nor the staging
+folder, so the work waits for the hook.
+
+**The pending file.** It is taken by a rename, through the walk, into the staging folder, as
+`<pid>.taken.<epoch>.<pid of the run>`; a test that writes at that moment starts a new file,
+which waits for the next Bash call. A line written into the taken file after it was read is
+named again (each line once, and not one the new file holds). A pending file that is a link
+is taken out of the way the same way, never read or followed, and logged. A run killed part
+way leaves its taken file; one whose name says it was taken more than two minutes ago (the
+epoch in its name, not its mtime, which a rename keeps from the last write and so can be
+days older) is read again, and the no-work test treats such a file as work. Twice is
+harmless: only a path whose last line is `refused` moves. Taken files go to the Trash with
+the last call.
+
+**What it says.** Nothing, when all went well, and it always exits 0 (the work runs in a
+subshell, so not even a fault of its own changes that). When it left something, one
+additionalContext line, for the event it ran for, names up to three of them and why, and
+points at the log. The rows are `async`, so that line reaches the model a turn later. Once a
+run has taken 20 s, the lists it has not moved yet wait for the next Bash call (the row's
+timeout is 60 s).
+
+**Its state** is `${XDG_STATE_HOME:-~/.local/state}/dotfiles/test-temp`: `after.log` (one line
+per path moved or left, kept to its last 500 lines, disk-watch's way), `staging/` (mode 700;
+"Put Back" from the Trash puts a folder there, not back in the session folder), and `hook/`
+(the heartbeats, one empty file per Claude that ran the hook).
+
+**Speed**, measured 26 Oct 2026 outside the sandbox on an idle Mac (load average 4 on 10
+cores), the command run as Claude Code runs it (`/bin/sh -c`, the input on a pipe):
+
+| Case                                                                | Median     |
+| ------------------------------------------------------------------- | ---------- |
+| a shell that only reads its input (what any hook pays)              | 4.3 ms     |
+| the PostToolUse row, nothing pending (a hook run, heartbeat made)   | 10.1 ms    |
+| the same test in the command, input read too (not used, below)      | 4.5 ms     |
+| the row, one refused folder pending: the whole run                  | 391 ms     |
+| what the session waits for, as async: start it, write the input, go | 0.2-0.3 ms |
+
+50 runs each for the first three, 8 for the others, interleaved. The Trash is most of the
+one-folder run, and it swings: the first call after a pause took 6.9 s, and a busy spell
+4.8 s (25 Oct, under load). As `async` rows the session waits for none of it: Claude Code
+2.1.310 writes the input, backgrounds the process, and delivers its output later as an
+`async_hook_response`.
+
+**Why the no-work test is test-temp's first code, not part of the command.** The cheaper
+place is the command itself (the third row). But the command shape here is ruled
+(`_shape_note` in `settings/claude/hooks.json`, D-20260925-A03): an advisory entry is
+`h=...; if [ -x "$h" ]; then "$h" args; else <HOOK MISSING>; fi`, and `claude-hooks-sync`
+refuses `||` in one. And `claude-hooks-sync-selftest`'s shape arm (A76) runs every entry from
+a Bash call, where `CLAUDE_PID` is set and nothing is pending, and needs the script to run. So
+the test is the first code of test-temp, before the whole-read line, and costs one start of
+bash. It reads its input to the end before it exits: Claude Code 2.1.310 counts a hook that
+closed its stdin before the input was written as failed (EPIPE) and drops its output, and a
+write to a pipe whose reader has gone fails at once (measured).
+
+**Where it is registered.** In the dotfiles' user settings, by `claude-hooks-sync`: two rows
+in `settings/claude/hooks.json`, PostToolUse and PostToolUseFailure on Bash, class advisory,
+`"async": true`, each with a HOOK MISSING line for its own event. The PostToolUse row carries
+its first shape (no argument, not async; installed 26 Oct 2026, 1:32 AM) as
+`legacy_commands[0]`, so the sync replaces it in place. Gavin runs
+`claude-hooks-sync --install`: the sandbox denies an agent's writes to Claude's settings
+files. engage sessions read only engage's own settings, so engage's and makeitso's settings
+are theirs to add (register it async there too, or the session waits for the moves).
 
 ## Limits
 
@@ -301,7 +440,16 @@ and `setpgrp`. The supervisor also tells a child that died of a signal from one 
   so the suite gets it twice. The helper ignores signals while its end runs, so this does no
   harm to it.
 - Each folder is its own item in the Trash. Empty the Trash now and then (the accepted cost in
-  [DELETION_SAFETY.md](DELETION_SAFETY.md)).
+  [DELETION_SAFETY.md](DELETION_SAFETY.md)). The hook adds one small taken file per run
+  that had something pending.
+- A pending file whose Claude has ended stays in `/tmp/claude-<uid>/.test-temp-pending`
+  (a few hundred bytes), and so does a taken file in the staging folder whose run was killed
+  as its session ended; nothing sweeps them. Their folders still go when their session ends.
+- The hook reads lists for what to check, but moves and writes only through the walk; a path a
+  list names is checked again at its move. Lists are trusted to hold real paths, as the
+  helper writes them.
+- The hook acts per list, not per author: every path a session's list holds `refused` moves,
+  whichever test in that session made it.
 - Outside a run, the list lives in your temp folder and grows by two short lines per folder.
 - Lint reads one line at a time. For the mktemp rule it skips quoted text, but reads a `$( )`
   or backtick inside double quotes as code. A template in a variable counts as a template. A
@@ -318,6 +466,20 @@ It runs every arm in `/bin/bash` (3.2), the PATH bash, `/bin/zsh` and the PATH z
 `set -u`. Each arm is paired with a control. It also measures whether the Trash takes a folder
 here, and expects `refused` where it does not (the sandbox). Its fixtures live in one folder of
 its own under `TMPDIR`. That folder is listed like any test's, and goes to the Trash at the end.
+
+The H arms prove the hook against stand-in shims, a session root of the selftest's own and
+session folders with their own owners records: end to end in each shell (Ctrl-C included),
+nothing pending, each check that leaves a path, a CLAUDE_PID mismatch, malformed input, a
+pending file written while it works, `check` after it, the sandbox, and `run`'s own folder.
+The N arms (its third review) prove the heartbeat and the words that wait on it, the
+PostToolUseFailure answer, a run folder holding what was left, stale taken files by name, a
+terminal on stdin (outside the sandbox: it refuses a terminal), a swap after the checks (of
+a folder on the way, and of the list's folder), one pending line per list, and a pending
+file that is a link, or a taken file with nothing pending. The speed is printed as a figure,
+not an arm: on a loaded Mac a wall-clock order can flip, and that nothing pending answers
+first is proved by a copy that cannot be parsed past the no-work test.
+No arm reads or writes the real `.test-temp-pending`; only the selftest's own end does, to
+name its own folder when the sandbox keeps it, as any test's end would.
 
 Its arm S1 checks that neither file names a permanent deleter: `/bin/rm` or `/usr/bin/rm`,
 `unlink`, `find -delete`, `rm -P`, `shutil.rmtree`, `os.remove`, or `/usr/bin/trash` (which

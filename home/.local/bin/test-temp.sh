@@ -48,6 +48,15 @@
 # policy decides it. failed: the Trash would not take it anywhere else; check always fails
 # that. `test-temp check` reads the list.
 #
+# THE HOOK (Gavin's Q1: 2). An end that lists a path refused also puts the list's real path
+# in /tmp/claude-<uid>/.test-temp-pending/$CLAUDE_PID (a folder of mode 700), once, and only
+# when that file does not hold it already; never through a link. Claude Code sets CLAUDE_PID
+# to its own pid for Bash calls and for hooks; without it (not inside Claude Code) nothing is
+# written. `test-temp after-command`, a hook that runs outside the sandbox, then moves those
+# folders to the Trash and lists them gone. It says the hook moves a folder only when the
+# hook has left this CLAUDE_PID its heartbeat (_tt_where): the hook runs only where it is
+# registered. A write that fails never fails the test: it is said once.
+#
 # REFUSED, with exit 2 (return 2 at a prompt, where nothing is set up): at an interactive
 # prompt (its Ctrl-C trap would close the shell); sourced inside a zsh function (an EXIT trap
 # set there fires when the function returns, and emulate -L drops the other traps); a trap of
@@ -59,6 +68,7 @@
 # pattern trash-guard uses, A185).
 
 _TT_SHIM=""                                                   #P: shim (empty: the account's ~/.local/bin/rm)
+_TT_CROOT=""                                                  #P: root (empty: /tmp/claude-<uid>, the hook's)
 _TT_MARK="PATH shim. Deletion goes to the Trash"
 _TT_TAB=$(printf '\t')
 _TT_NL='
@@ -86,6 +96,10 @@ _TT_KIND=""
 _TT_SHARED=""
 _TT_PF=""
 _TT_ONEND_EXIT=""
+_TT_PENDED=""
+_TT_PEND_OK=""
+_TT_UHOME=""
+_TT_W=""
 TT=${TT-}
 
 _tt_say() { printf 'test-temp: %s\n' "$*" >&2; }
@@ -187,6 +201,7 @@ _tt_resolve_rm() {
 			*) _TT_WHY="cannot find the home folder of $_tt_u"; return 1 ;;
 		esac
 		_TT_RM="$_tt_h/.local/bin/rm"
+		_TT_UHOME=$_tt_h
 	fi
 	if [ ! -f "$_TT_RM" ] || [ ! -x "$_TT_RM" ]; then
 		_TT_WHY="no Trash shim at $_TT_RM (it ships in the dotfiles at ~/.local/bin/rm)"
@@ -200,9 +215,8 @@ _tt_resolve_rm() {
 }
 
 # _tt_trash PATH: send PATH to the Trash through the shim, from /; 0 when it is gone after.
-# Never any other route: a path the Trash does not take stays where it is. _TT_WHY says why,
-# and _TT_KIND is refused (the Claude sandbox: SANDBOX_RUNTIME=1, which Claude Code sets
-# there and nowhere else, and an afpAccessDenied) or failed (anything else).
+# Never any other route: a path the Trash does not take stays where it is, and _tt_why_of
+# says why.
 _tt_trash() {
 	local _tt_err
 	_TT_WHY="" _TT_KIND=""
@@ -213,24 +227,32 @@ _tt_trash() {
 	fi
 	_tt_err=$( (CDPATH='' builtin cd / && "$_TT_RM" -rf -- "$1") 2>&1 >/dev/null)
 	if [ -e "$1" ] || [ -L "$1" ]; then
-		_TT_KIND=failed
-		case "$_tt_err" in
-			*afpAccessDenied* | *"permission to access"*)
-				if [ "${SANDBOX_RUNTIME-}" = 1 ]; then
-					_TT_KIND=refused _TT_WHY="the sandbox refused the Trash (afpAccessDenied)"
-				else
-					_TT_WHY="the Trash was refused (afpAccessDenied), and this is not the Claude sandbox"
-				fi
-				;;
-			'') _TT_WHY="still there after the Trash shim, which said nothing" ;;
-			*)
-				_TT_WHY=${_tt_err%%"$_TT_NL"*}
-				_TT_WHY=${_TT_WHY//"$_TT_TAB"/ }
-				_TT_WHY=${_TT_WHY:0:200}
-				;;
-		esac
+		_tt_why_of "$_tt_err"
 		return 1
 	fi
+	return 0
+}
+
+# _tt_why_of ERR: for a path still there after the Trash shim said ERR, _TT_WHY says why, and
+# _TT_KIND is refused (the Claude sandbox: SANDBOX_RUNTIME=1, which Claude Code sets there and
+# nowhere else, and an afpAccessDenied) or failed (anything else).
+_tt_why_of() {
+	_TT_KIND=failed
+	case "$1" in
+		*afpAccessDenied* | *"permission to access"*)
+			if [ "${SANDBOX_RUNTIME-}" = 1 ]; then
+				_TT_KIND=refused _TT_WHY="the sandbox refused the Trash (afpAccessDenied)"
+			else
+				_TT_WHY="the Trash was refused (afpAccessDenied), and this is not the Claude sandbox"
+			fi
+			;;
+		'') _TT_WHY="still there after the Trash shim, which said nothing" ;;
+		*)
+			_TT_WHY=${1%%"$_TT_NL"*}
+			_TT_WHY=${_TT_WHY//"$_TT_TAB"/ }
+			_TT_WHY=${_TT_WHY:0:200}
+			;;
+	esac
 	return 0
 }
 
@@ -246,6 +268,68 @@ _tt_log_to() {
 	return 0
 }
 _tt_log() { _tt_log_to "$_TT_LIST" "$1" "$2" "$_TT_PID" "${3-}"; }
+
+# _tt_pend LIST: name LIST, by its real path, to the after-command hook (Gavin's Q1: 2): one
+# line in <root>/.test-temp-pending/$CLAUDE_PID, once per process, and none when the file holds
+# that line already; never through a link. Not inside Claude Code (no CLAUDE_PID, or not a
+# number): nothing. _TT_PEND_OK is 1 when the line is there after. It never fails the caller:
+# a write that fails is said once.
+_tt_pend() {
+	local _tt_dir _tt_f _tt_l
+	[ -z "$_TT_PENDED" ] || return 0
+	_TT_PENDED=1
+	case "${CLAUDE_PID-}" in '' | *[!0-9]*) return 0 ;; esac
+	_tt_dir="${_TT_CROOT:-/tmp/claude-${UID:-$(id -u)}}/.test-temp-pending"   # test-temp: allow the hook's folder, in the shared root
+	_tt_f="$_tt_dir/$CLAUDE_PID"
+	_tt_real "${1%/*}"
+	if [ -n "$_TT_R" ]; then
+		_tt_l="$_TT_R/${1##*/}"
+		command mkdir -m 700 -- "$_tt_dir" 2>/dev/null
+		if [ -d "$_tt_dir" ] && [ ! -L "$_tt_dir" ] && [ ! -L "$_tt_f" ]; then
+			if [ -f "$_tt_f" ] && command grep -qxF -- "$_tt_l" "$_tt_f" 2>/dev/null; then
+				_TT_PEND_OK=1
+				return 0
+			fi
+			if printf '%s\n' "$_tt_l" >>"$_tt_f" 2>/dev/null; then
+				_TT_PEND_OK=1
+				return 0
+			fi
+		fi
+	fi
+	_tt_say "could not leave the after-command hook a note in $_tt_f (a link, or not writable), so what $1 lists refused stays until the session ends"
+	return 0
+}
+
+# _tt_in_session DIR: 0 when DIR is inside a session's own folder, /tmp/claude-<uid>/pj-<id>,
+# which goes when the session ends.
+_tt_in_session() {
+	case "$1/" in
+		"/private/tmp/claude-${UID:-$(id -u)}"/pj-*/* | "/tmp/claude-${UID:-$(id -u)}"/pj-*/*) return 0 ;;   # test-temp: allow the session folder shape
+	esac
+	return 1
+}
+
+# _tt_hook_seen: 0 when Claude Code has run the after-command hook for this CLAUDE_PID: the
+# hook leaves it a heartbeat, <state>/dotfiles/test-temp/hook/$CLAUDE_PID, in a folder the
+# sandbox cannot write (state: XDG_STATE_HOME, else the account's ~/.local/state).
+_tt_hook_seen() {
+	case "${CLAUDE_PID-}" in '' | *[!0-9]*) return 1 ;; esac
+	[ -e "${XDG_STATE_HOME:-${_TT_UHOME:-$HOME}/.local/state}/dotfiles/test-temp/hook/$CLAUDE_PID" ]
+}
+
+# _tt_where DIR: _TT_W says what becomes of a folder the sandbox kept from the Trash in DIR:
+# hook (DIR is in a session's own folder, and the after-command hook has run for this Claude),
+# session (in a session's own folder, no heartbeat: it goes when the session ends) or stays.
+_tt_where() {
+	if ! _tt_in_session "$1"; then
+		_TT_W=stays
+	elif _tt_hook_seen; then
+		_TT_W=hook
+	else
+		_TT_W=session
+	fi
+	return 0
+}
 
 # _tt_mktemp_shaped NAME: 0 when NAME looks made by mktemp: NAME.XXXXXX, a letter or digit
 # first, 6 or more letters or digits after the last dot.
@@ -532,6 +616,17 @@ _tt_remove_one() {
 		_tt_say "kept $_tt_p for the failed test (exit $_tt_rc)"
 	elif _tt_trash "$_tt_p"; then
 		_tt_log gone "$_tt_p" "to the Trash"
+	elif [ "$_TT_KIND" = refused ]; then
+		_tt_log refused "$_tt_p" "$_TT_WHY"
+		_tt_pend "$_TT_LIST"
+		# What becomes of it, said only on evidence: the hook moves it where it has run.
+		_tt_where "$_tt_p"
+		case "$_TT_W:$_TT_PEND_OK" in
+			hook:1) _tt_say "$_tt_p stays where it is: $_TT_WHY; the after-command hook moves it once this command ends" ;;
+			hook:*) _tt_say "$_tt_p stays where it is: $_TT_WHY; it goes when the session ends (the note for the after-command hook failed, above)" ;;
+			session:*) _tt_say "$_tt_p stays where it is: $_TT_WHY; it goes when the session ends (no after-command hook has run in this session)" ;;
+			*) _tt_say "$_tt_p stays where it is: $_TT_WHY; it stays there until you trash it" ;;
+		esac
 	else
 		_tt_log "$_TT_KIND" "$_tt_p" "$_TT_WHY"
 		_tt_say "$_tt_p stays where it is: $_TT_WHY"

@@ -392,6 +392,39 @@
       },
       "why": "The same guard for the Monitor tool, which runs shell commands too and was guarded by nothing (W-20260924-A71; measured 2026-10-05: a command refused on Bash ran on Monitor). The guard reads tool_input.command, which Monitor has as well.",
       "class": "guard"
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Bash",
+      "script": "test-temp",
+      "script_path": "$HOME/.local/bin/test-temp",
+      "targets": ["user"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.local/bin/test-temp\"; if [ -x \"$h\" ]; then \"$h\" after-command PostToolUse; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: test-temp is registered but ~/.local/bin/test-temp is missing or not executable, so test folders the sandbox would not let go to the Trash stay until the session ends. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"HOOK MISSING: test-temp is registered but ~/.local/bin/test-temp is missing or not executable, so test folders the sandbox would not let go to the Trash stay until the session ends. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
+        "timeout": 60,
+        "async": true
+      },
+      "why": "Record #3989, Gavin's Q1: 2 (25 Oct 2026): after each Bash call that succeeded, outside the sandbox, move to the Trash the test folders the sandbox would not let go there (test-temp.sh lists them refused and names their list in /tmp/claude-<uid>/.test-temp-pending/$CLAUDE_PID; test-temp after-command checks each and moves it; the PostToolUseFailure row below does the same after a call that failed). async: Claude Code runs it in the background and never waits (a Trash call took 6.9 s after a pause, measured 26 Oct 2026); what it says lands a turn later. The no-work test is test-temp's first code, not part of this command: an advisory command may not hold || (the class rule), and the A76 shape arm runs every entry from a Bash call, where CLAUDE_PID is set and nothing is pending, and needs the script to run. legacy_commands[0] is this row before the event argument and async (installed 26 Oct 2026, 1:32 AM), so the sync replaces it in place. User target only: engage sessions read only engage's own settings, so engage and makeitso add their own. docs/TEST_TEMP_FOLDERS.md, The after-command hook",
+      "class": "advisory",
+      "legacy_commands": [
+        "h=\"$HOME/.local/bin/test-temp\"; if [ -x \"$h\" ]; then \"$h\" after-command; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: test-temp is registered but ~/.local/bin/test-temp is missing or not executable, so test folders the sandbox would not let go to the Trash stay until the session ends. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"HOOK MISSING: test-temp is registered but ~/.local/bin/test-temp is missing or not executable, so test folders the sandbox would not let go to the Trash stay until the session ends. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi"
+      ]
+    },
+    {
+      "event": "PostToolUseFailure",
+      "matcher": "Bash",
+      "script": "test-temp",
+      "script_path": "$HOME/.local/bin/test-temp",
+      "targets": ["user"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.local/bin/test-temp\"; if [ -x \"$h\" ]; then \"$h\" after-command PostToolUseFailure; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: test-temp is registered but ~/.local/bin/test-temp is missing or not executable, so test folders the sandbox would not let go to the Trash stay until the session ends. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUseFailure\",\"additionalContext\":\"HOOK MISSING: test-temp is registered but ~/.local/bin/test-temp is missing or not executable, so test folders the sandbox would not let go to the Trash stay until the session ends. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
+        "timeout": 60,
+        "async": true
+      },
+      "why": "Record #3989, Gavin's Q1: 2: the PostToolUse row above, for a Bash call that failed (a test that exits non-zero, times out or is stopped): Claude Code 2.1.310 fires PostToolUse only after a call that succeeded, and PostToolUseFailure after one that failed (its hook table, measured 26 Oct 2026). The same command but for the event it names, in its argument and in its HOOK MISSING line: an answer for one event is not read as one for the other. async, as above. docs/TEST_TEMP_FOLDERS.md, The after-command hook",
+      "class": "advisory"
     }
   ],
   "_traveller_note": [

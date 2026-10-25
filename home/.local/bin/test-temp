@@ -26,8 +26,10 @@
 #         (d) a path listed `failed`: the Trash would not take it, outside the Claude sandbox.
 #       `refused` (the Claude sandbox would not let it go to the Trash) and `kept`
 #       (keep-on-fail) follow TEST_TEMP_REFUSED=pass|fail. pass, the default, lists them and
-#       passes; it says they go when the session ends only when the caller's TMPDIR is a
-#       session's own folder (/tmp/claude-<uid>/pj-<id>), and else that they stay there.
+#       passes. When the caller's TMPDIR is a session's own folder (/tmp/claude-<uid>/pj-<id>)
+#       it says they go when the session ends, and that the after-command hook moves them
+#       sooner only when the hook has left this Claude its heartbeat; elsewhere, that they
+#       stay there.
 #   test-temp lint FILE...
 #       Shell files only (by #! line, or .sh, .bash, .zsh; a file holding NUL bytes is not
 #       shell). Flags: mktemp with no template (a path before it too, /usr/bin/mktemp); a
@@ -36,6 +38,23 @@
 #       exit. A line carrying "# test-temp: allow <reason>", or the line after a comment
 #       line carrying one, is not flagged. Heredoc bodies are data and are not read; a <<
 #       inside quotes is not a heredoc.
+#   test-temp after-command [PostToolUse|PostToolUseFailure]
+#       The hook on Bash (Gavin's Q1: 2), which Claude Code runs outside the sandbox, in the
+#       background (async), once each Bash call ends: PostToolUse after one that succeeded,
+#       PostToolUseFailure after one that failed (the argument; PostToolUse when none). A test
+#       the sandbox kept from the Trash lists its folder refused and names its list in
+#       /tmp/claude-<uid>/.test-temp-pending/$CLAUDE_PID; this moves each such folder to the
+#       Trash and lists it gone, when it is a real folder (no link), this account's, named
+#       NAME.XXXXXX, inside the same session folder as its list, /tmp/claude-<uid>/pj-<id>,
+#       whose .pj-temp/owners names this CLAUDE_PID or the hook's session_id, and holds
+#       nothing that is left. Every path there is reached by a walk from / that follows no
+#       link, and moved through a staging folder the sandbox cannot write. Anything else is
+#       left, listed failed with the reason, and logged. Reads the hook JSON on stdin (never a
+#       terminal); prints nothing unless it left something (then one additionalContext line).
+#       Run as a hook, it leaves its Claude a heartbeat, so a test says the hook moves its
+#       folders only where the hook runs. Run by hand inside the sandbox, it takes nothing.
+#       State: ${XDG_STATE_HOME:-~/.local/state}/dotfiles/test-temp: after.log (its last 500
+#       lines), staging/, hook/ (the heartbeats).
 #   test-temp --selftest
 #       Every arm with a control, in /bin/bash (3.2), the PATH bash, /bin/zsh and the PATH
 #       zsh, under set -u. Fixtures live in one folder of its own under TMPDIR.
@@ -49,10 +68,43 @@
 #   check  0 nothing left | 2 check NOT RUN | 4 something was left behind
 #   lint   0 no findings | 1 findings (file:line: reason) | 2 cannot run: no shell file
 #          among the arguments, an unreadable file, or its canary was not flagged
+#   after-command  0 always (a hook's other codes are errors Claude Code shows)
 #   --selftest  0 every arm passed (skips are named) | 1 an arm failed | 2 could not run
 #
 # Removal is through the Trash only, never for good: the run folder goes through
 # test-temp.sh's own route (the dotfiles Trash shim, run from /, then test -e).
+
+# FIRST, THE HOOK'S NO-WORK TEST. after-command runs after every Bash call in every session,
+# and almost every time nothing is pending: these few tests of files say so, with no program
+# started, before the whole-read below starts a second bash to read all of this file. Stdin
+# is read to the end before it exits (Claude Code 2.1.310 counts a hook that closed its stdin
+# before the input was written as failed: EPIPE), unless it is a terminal (a hand run).
+AFTER_ROOT=""                                                  #P: root (empty: /tmp/claude-<uid>)
+if [ "${1-}" = after-command ]; then
+	_a_s="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/test-temp"
+	_a_p=${CLAUDE_PID:-none}
+	case "$_a_p" in *[!0-9]*) _a_p=none ;; esac
+	# Run as a hook (Claude Code sets CLAUDE_PROJECT_DIR for hooks, never for a Bash call): this
+	# Claude's heartbeat, made once, where the sandbox cannot write, so that a test can say the
+	# hook will move what it leaves (test-temp.sh, _tt_where).
+	if [ -n "${CLAUDE_PROJECT_DIR-}" ] && [ "$_a_p" != none ] && [ ! -e "$_a_s/hook/$_a_p" ]; then
+		[ -d "$_a_s/hook" ] || mkdir -p -m 700 "$_a_s/hook" 2>/dev/null
+		: 2>/dev/null >>"$_a_s/hook/$_a_p"
+	fi
+	# Work is a pending file (a link too: the work says so, and reads nothing), or a taken file
+	# that a killed run left in the staging folder.
+	_a_f="${AFTER_ROOT:-/tmp/claude-$UID}/.test-temp-pending/$_a_p"   # test-temp: allow the hook's folder, in the shared root
+	_a_w=""
+	if [ -s "$_a_f" ] || [ -L "$_a_f" ]; then
+		_a_w=1
+	else
+		for _a_t in "$_a_s/staging/$_a_p".taken.*; do [ -e "$_a_t" ] && _a_w=1; break; done
+	fi
+	if [ -z "$_a_w" ]; then
+		[ -t 0 ] || cat >/dev/null 2>&1
+		exit 0
+	fi
+fi   # the end of the no-work test
 
 # Read this whole file before running any of it, so an edit saved mid-run cannot change
 # the run (W-20260923-A57). A crash under it exits 127 (unbound var) or 1 (bash 3.2 syntax
@@ -65,20 +117,21 @@ set -u
 SELF=$(readlink -f "$0" 2>/dev/null) || SELF=$0
 HERE=$(dirname "$SELF")
 HELPER="$HERE/test-temp.sh"
-# Empty here; the selftest's copies set them, to hold one of run's races open (run_pause).
-RUN_PAUSE_AT=""                                                #P: pause-at (before, after or rewait)
+# Empty here; the selftest's copies set them, to hold one of run's races open (run_pause), or
+# after-command's (taken).
+RUN_PAUSE_AT=""                                                #P: pause-at (before, after, rewait or taken)
 RUN_PAUSE_MARK=""                                              #P: pause-mark (a file run_pause writes)
 TAB=$(printf '\t')
 NL='
 '
 
 usage() {
-	awk 'NR == 1 { next } /^# Read this whole file/ { exit } { sub(/^# ?/, ""); print }' "$SELF"
+	awk 'NR == 1 { next } /^# (FIRST, THE HOOK|Read this whole file)/ { exit } { sub(/^# ?/, ""); print }' "$SELF"
 }
 
-# load_lib: the helper's functions (_tt_strip, _tt_real, _tt_base, _tt_trash, _tt_log_to,
-# _tt_reraise) and its Trash shim when there is one (_TT_RM, else empty and _TT_WHY);
-# no folder and no trap.
+# load_lib: the helper's functions (_tt_strip, _tt_real, _tt_base, _tt_trash, _tt_why_of,
+# _tt_log_to, _tt_pend, _tt_walk, _tt_mktemp_shaped, _tt_reraise) and its Trash shim when
+# there is one (_TT_RM, else empty and _TT_WHY); no folder and no trap.
 load_lib() {
 	if [ ! -f "$HELPER" ]; then
 		echo "test-temp: the helper is missing beside this command: $HELPER" >&2
@@ -115,7 +168,7 @@ policy_ok() {
 # check_run RUNDIR COMPARE_OUTER(0|1): prints its findings, sets the C_* counts, returns
 # 0 clean, 2 check NOT RUN, 4 something left behind.
 check_run() {
-	local run=$1 compare=$2 list states e outer before now uid where
+	local run=$1 compare=$2 list states e outer before now where
 	local endless="" explained="" refused="" kept="" fails=0 notrun=""
 	C_MADE=0 C_GONE=0 C_REFUSED=0 C_FAILED=0 C_KEPT=0 C_ENDLESS=0 C_LEFT=0 C_OUTER="not compared"
 	if [ ! -f "$run/.test-temp/started" ]; then
@@ -165,12 +218,14 @@ check_run() {
 		_tt_walk "${now:+$now$NL}" check_outer_name
 	fi
 	if [ -n "$refused" ]; then
-		# Only a session's own folder goes when the session ends; say so only there.
+		# The hook moves them only where it has run (its heartbeat for this Claude), and only a
+		# session's own folder goes when the session ends; say each only there (_tt_where).
 		outer=$(awk -F'\t' 'NR == 1 { print $4 }' "$run/.test-temp/started")
 		[ -n "$outer" ] || outer="the TMPDIR of the run"
-		uid=$(id -u)
-		case "$outer/" in
-			"/private/tmp/claude-$uid"/pj-*/* | "/tmp/claude-$uid"/pj-*/*) where="they go when the session ends" ;;   # test-temp: allow the session folder shape
+		_tt_where "$outer"
+		case "$_TT_W" in
+			hook) where="the after-command hook moves them once this command ends, or they go when the session ends" ;;
+			session) where="they go when the session ends (no after-command hook has run in this session)" ;;
 			*) where="they stay in $outer until you trash them" ;;
 		esac
 		if [ "${TEST_TEMP_REFUSED:-pass}" = fail ]; then
@@ -312,7 +367,7 @@ run_pause() {
 }
 
 cmd_run() {
-	local outer outer_real run olist src crc rc verdict keep_why pl
+	local outer outer_real run olist src crc rc verdict keep_why pl hk
 	RUN_SIG="" RUN_GOT="" RUN_CHILD=""
 	[ "${1-}" = -- ] && shift
 	if [ $# -eq 0 ]; then
@@ -376,6 +431,7 @@ cmd_run() {
 			_tt_log_to "$olist/list" gone "$run" "$$" "to the Trash" 2>/dev/null
 		else
 			_tt_log_to "$olist/list" "$_TT_KIND" "$run" "$$" "$_TT_WHY" 2>/dev/null
+			[ "$_TT_KIND" != refused ] || _tt_pend "$olist/list"
 			echo "test-temp run: the run folder stays at $run: $_TT_WHY"
 		fi
 		_tt_reraise "$RUN_SIG" 2
@@ -428,10 +484,13 @@ cmd_run() {
 	else
 		rc=0; verdict=CLEAN
 	fi
-	# The run folder: to the Trash when only its own list is in it, else kept for a look.
+	# The run folder: to the Trash when only its own list, and folders the sandbox refused, are
+	# in it; else kept for a look. The sandbox refuses the run folder too, and then it is listed
+	# refused in the caller's list and named to the after-command hook, which moves it after
+	# the folders inside it (their list was named first).
 	keep_why=""
 	[ "$rc" = 2 ] || [ "$rc" = 4 ] && keep_why="kept for a look"
-	[ -z "$keep_why" ] && [ $((C_REFUSED + C_KEPT)) -gt 0 ] && keep_why="kept: it holds the folders listed above"
+	[ -z "$keep_why" ] && [ "$C_KEPT" -gt 0 ] && keep_why="kept: it holds the folders listed above"
 	if [ -n "$keep_why" ]; then
 		_tt_log_to "$olist/list" kept "$run" "$$" "$keep_why" 2>/dev/null
 		echo "test-temp run: the run folder is $keep_why: $run"
@@ -439,7 +498,16 @@ cmd_run() {
 		_tt_log_to "$olist/list" gone "$run" "$$" "to the Trash" 2>/dev/null
 	else
 		_tt_log_to "$olist/list" "$_TT_KIND" "$run" "$$" "$_TT_WHY" 2>/dev/null
-		echo "test-temp run: the run folder stays at $run: $_TT_WHY"
+		hk=""
+		if [ "$_TT_KIND" = refused ]; then
+			_tt_pend "$olist/list"
+			_tt_where "$outer_real"
+			case "$_TT_W:$_TT_PEND_OK" in
+				hook:1) hk="; the after-command hook moves it once this command ends" ;;
+				hook:* | session:*) hk="; it goes when the session ends (no after-command hook will be told of it, or none has run in this session)" ;;
+			esac
+		fi
+		echo "test-temp run: the run folder stays at $run: $_TT_WHY$hk"
 	fi
 	echo "test-temp run: suite exit $src${RUN_SIG:+ (interrupted by SIG$RUN_SIG)}; $(counts) -- $verdict (exit $rc)"
 	if [ -n "$RUN_SIG" ]; then
@@ -447,6 +515,528 @@ cmd_run() {
 		_tt_reraise "$RUN_SIG" "$rc"
 	fi
 	return "$rc"
+}
+
+# ------------------------------------------------------------------------------ after-command
+# Gavin's Q1: 2 (25 Oct 2026, record #3989). Claude Code runs this as a hook on Bash, outside
+# the sandbox and in the background (async), once each Bash call ends: PostToolUse after one
+# that succeeded, PostToolUseFailure after one that failed (the event's name is its argument).
+# It gets here only when the no-work test at the top of this file found work. What it did,
+# path by path, goes in after.log. Guide: docs/TEST_TEMP_FOLDERS.md, "The after-command hook".
+#
+# Code inside the sandbox can change the session folder at any moment, between a check here
+# and the move after it too (swap a folder for a link to one outside it, say). So every touch
+# of a path in the shared temp folder goes through AFTER_PL: from /, one component at a time,
+# never through a link, each folder lstat-ed, entered, and found to be the same folder (dev
+# and inode). The pending file, and each folder to move, is renamed from inside its verified
+# folder into the staging folder, which the sandbox cannot write, and checked again there; the
+# Trash takes it from there. A line for a list is appended the same way, never through a link.
+AFTER_BUDGET=20   # seconds of moving in one run; what is left waits for the next Bash call
+AFTER_PL='
+use strict;
+use Fcntl qw(O_RDONLY O_WRONLY O_APPEND O_CREAT O_NOFOLLOW);
+sub fail { print STDOUT "$_[0]\n"; exit 1 }
+sub walk {
+	my ($dir) = @_;
+	$dir =~ m{\A/} or fail("not an absolute path: $dir");
+	chdir "/" or fail("cannot enter /");
+	my $at = "";
+	for my $c (grep { length } split m{/}, $dir) {
+		$at .= "/$c";
+		fail("a . or .. in $dir") if $c eq "." || $c eq "..";
+		my @l = lstat $c or fail("$at is not there");
+		-d _ or fail("$at is a link, or not a folder");
+		chdir $c or fail("cannot enter $at");
+		my @d = stat ".";
+		$d[0] == $l[0] && $d[1] == $l[1] or fail("$at changed while it was entered");
+	}
+}
+my ($mode, $dir, $name, $arg) = @ARGV;
+my $own = "this account" . chr(39) . "s";
+walk($dir);
+if ($mode eq "move" || $mode eq "take") {
+	my @t = lstat $name;
+	if (!@t) { $mode eq "take" or fail("$dir/$name is not there"); print "none\n"; exit 0 }
+	if ($mode eq "move") { -d _ or fail("$dir/$name is a link, or not a folder") }
+	else { -f _ || -l _ or fail("$dir/$name is not a file") }
+	$t[4] == $< or fail("$dir/$name is not $own");
+	lstat $arg and fail("$arg is taken already");
+	rename $name, $arg or fail("cannot move $dir/$name to $arg: $!");
+	my @s = lstat $arg or fail("nothing reached $arg");
+	$s[0] == $t[0] && $s[1] == $t[1] or fail("what reached $arg is not what was checked");
+	print -l _ ? "link\n" : "moved\n";
+	exit 0;
+}
+if ($mode eq "append" || $mode eq "create") {
+	sysopen(my $fh, $name, O_WRONLY | O_APPEND | O_NOFOLLOW | ($mode eq "create" ? O_CREAT : 0), 0600)
+		or fail("cannot open $dir/$name: $!");
+	my @f = stat $fh;
+	-f _ && $f[4] == $< or fail("$dir/$name is not a file of $own");
+	print {$fh} $arg or fail("cannot write $dir/$name: $!");
+	close $fh or fail("cannot write $dir/$name: $!");
+	exit 0;
+}
+if ($mode eq "read") {
+	sysopen(my $fh, $name, O_RDONLY | O_NOFOLLOW) or fail("cannot open $dir/$name: $!");
+	my @f = stat $fh;
+	-f _ && $f[4] == $< or fail("$dir/$name is not a file of $own");
+	local $/;
+	my $c = <$fh>;
+	print defined $c ? $c : "";
+	exit 0;
+}
+fail("unknown mode $mode");
+'
+
+# after_pl MODE DIR NAME [ARG]: AFTER_PL, its status; what it printed (or why it failed) is in
+# APL_OUT. MODE: take or move (rename DIR/NAME to the path ARG), append or create (write ARG
+# to DIR/NAME), read (print DIR/NAME).
+after_pl() {
+	APL_OUT=$(perl -e "$AFTER_PL" "$@" 2>&1)
+}
+
+# after_log EVENT PATH LIST DETAIL: one line in the log.
+after_log() {
+	local d=${4-}
+	d=${d//"$TAB"/ }
+	d=${d//"$NL"/ }
+	printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${CLAUDE_PID-}" "$1" "$2" "$3" "$d" >>"$ALOG" 2>/dev/null
+	return 0
+}
+
+# after_trim: the log keeps its last 500 lines (disk-watch's way).
+after_trim() {
+	[ -f "$ALOG" ] || return 0
+	[ "$(wc -l <"$ALOG" 2>/dev/null)" -le 500 ] || { tail -n 500 "$ALOG" >"$ALOG.tmp" && command mv -f "$ALOG.tmp" "$ALOG"; } 2>/dev/null
+	return 0
+}
+
+# after_left WHAT: one thing left where it was, for the one line the model sees.
+after_left() {
+	ALEFT=$((ALEFT + 1))
+	[ "$ALEFT" -le 3 ] && ATEXT="$ATEXT${ATEXT:+; }$1"
+	return 0
+}
+
+# json_str TEXT: TEXT as a JSON string, printable ASCII only (anything else becomes ?).
+json_str() {
+	local s
+	s=$(printf '%s' "$1" | LC_ALL=C tr -c '[:print:]' '?')
+	s=${s//\\/\\\\}
+	s=${s//\"/\\\"}
+	printf '"%s"' "$s"
+}
+
+# after_out [TEXT]: TEXT, or the things left, as the one additionalContext line, for the event
+# it runs for; nothing when there is neither.
+after_out() {
+	local t=${1-}
+	if [ -z "$t" ]; then
+		[ "$ALEFT" -gt 0 ] || return 0
+		t="test-temp after-command left $ALEFT where it found them: $ATEXT"
+		[ "$ALEFT" -le 3 ] || t="$t; and $((ALEFT - 3)) more"
+		t="$t. Each one, and why: $ALOG"
+	fi
+	printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":%s}}\n' "$AEVENT" "$(json_str "$t")"
+}
+
+# after_sid: ASID is the hook input's session_id (letters, digits and -), empty when it has
+# none or does not parse. Read once, and only when a pid match has failed.
+after_sid() {
+	[ -z "$ASID_READ" ] || return 0
+	ASID_READ=1
+	ASID=$(printf '%s' "$AJSON" | perl -MJSON::PP -0777 -ne '
+		my $j = eval { JSON::PP->new->decode($_) };
+		my $s = ref $j eq "HASH" ? $j->{session_id} : undef;
+		print $s if defined $s && !ref $s && $s =~ /\A[A-Za-z0-9-]{1,128}\z/' 2>/dev/null) || ASID=""
+	return 0
+}
+
+# after_session PHYS: AS is the session folder, <root>/pj-<id>, that the physical path PHYS is
+# inside, and 0; else AWHY says why, and 1.
+after_session() {
+	local id
+	AS=""
+	case "$1" in
+		"$AROOT"/pj-?*/?*) ;;
+		*) AWHY="not inside a session folder ($AROOT/pj-<id>)"; return 1 ;;
+	esac
+	id=${1#"$AROOT"/pj-}
+	id=${id%%/*}
+	case "$id" in
+		*[!A-Za-z0-9-]*) AWHY="not inside a session folder ($AROOT/pj-<id>)"; return 1 ;;
+	esac
+	AS="$AROOT/pj-$id"
+	return 0
+}
+
+# after_ours S: 0 when S/.pj-temp/owners, a file of this account's and no link, has a line
+# naming this CLAUDE_PID (its second field) or the hook's session_id (its first); else AWHY.
+after_ours() {
+	local o="$1/.pj-temp/owners"
+	case "$NL$AOURS" in *"$NL$1$NL"*) return 0 ;; esac
+	if [ -L "$o" ] || [ ! -f "$o" ] || [ ! -O "$o" ]; then
+		AWHY="its session folder has no owners record of this account's ($o)"
+		return 1
+	fi
+	if LC_ALL=C awk -F'\t' -v p="$CLAUDE_PID" '$2 == p { f = 1 } END { exit !f }' "$o" 2>/dev/null; then
+		AOURS="$AOURS$1$NL"
+		return 0
+	fi
+	after_sid
+	if [ -n "$ASID" ] && LC_ALL=C awk -F'\t' -v s="$ASID" '$1 == s { f = 1 } END { exit !f }' "$o" 2>/dev/null; then
+		AOURS="$AOURS$1$NL"
+		return 0
+	fi
+	AWHY="its session folder ${1##*/} is another Claude's: its owners name neither pid $CLAUDE_PID nor session ${ASID:-(none in the hook input)}"
+	return 1
+}
+
+# after_append LIST EVENT PATH PID DETAIL: one event line in LIST (a real path), as _tt_log_to
+# writes it, but through the walk; a line that cannot be written is logged.
+after_append() {
+	local d=${5-}
+	d=${d//"$TAB"/ }
+	d=${d//"$NL"/ }
+	if ! after_pl append "${1%/*}" "${1##*/}" "$2$TAB$3$TAB$4$TAB$(date +%s)$TAB$d$NL"; then
+		after_log unwritten "$3" "$1" "its $2 line could not be written: $APL_OUT"
+	fi
+	return 0
+}
+
+# after_leave LIST PID PATH REAL WHY: one path left where it is: a failed line in its list, the
+# log, the line the model sees; and REAL is kept, so that no folder holding it moves.
+after_leave() {
+	after_append "$1" failed "$3" "$2" "the after-command hook left it: $5"
+	after_log left "$3" "$1" "$5"
+	after_left "folder $3: $5"
+	ALEFTREAL="$ALEFTREAL$4$NL"
+	return 0
+}
+
+# after_line LINE: one line of a pending file, a list to work through once.
+after_line() {
+	[ -n "$1" ] || return 0
+	case "$NL$ASEEN" in *"$NL$1$NL"*) return 0 ;; esac
+	ASEEN="$ASEEN$1$NL"
+	after_list "$1"
+	return 0
+}
+
+# after_list LIST: the list's own checks (a .test-temp/list file of this account's, inside a
+# session folder that is this Claude's), then each folder whose last line in it is refused.
+after_list() {
+	local l=$1 rows why=""
+	case "$l" in
+		*"$TAB"*) after_log left-list - "${l%%"$TAB"*}" "a tab in the line"; after_left "list ${l%%"$TAB"*}: a tab in the line"; return 0 ;;
+		/*) ;;
+		*) after_log left-list - "$l" "not an absolute path"; after_left "list $l: not an absolute path"; return 0 ;;
+	esac
+	if [ ! -e "$l" ] && [ ! -L "$l" ]; then
+		after_log list-gone - "$l" "no such list now: it went with its run folder, or the session ended"
+		return 0
+	fi
+	case "$l" in */.test-temp/list) ;; *) why="not a test-temp list (.test-temp/list)" ;; esac
+	if [ -z "$why" ] && { [ -L "$l" ] || [ ! -f "$l" ] || [ ! -O "$l" ]; }; then
+		why="a link, not a file, or not this account's"
+	fi
+	if [ -z "$why" ]; then
+		_tt_real "${l%/*}"
+		ALP="$_TT_R/list"
+		if [ -z "$_TT_R" ]; then why="its folder cannot be entered"
+		elif ! after_session "$ALP"; then why=$AWHY
+		elif ! after_ours "$AS"; then why=$AWHY
+		elif ! after_pl read "${ALP%/*}" list; then why="it cannot be read: $APL_OUT"
+		fi
+	fi
+	if [ -n "$why" ]; then
+		after_log left-list - "$l" "$why"
+		after_left "list $l: $why"
+		return 0
+	fi
+	rows=$(printf '%s\n' "$APL_OUT" | LC_ALL=C awk -F'\t' '
+		NF >= 5 && $2 ~ /^\// { if (!($2 in last)) order[++n] = $2; last[$2] = $1; pid[$2] = $3 }
+		END { for (i = 1; i <= n; i++) if (last[order[i]] == "refused") print pid[order[i]] "\t" order[i] }')
+	ALIST=$l
+	_tt_walk "${rows:+$rows$NL}" after_one
+	return 0
+}
+
+# after_one PID<TAB>PATH: one folder whose last line in ALIST (real path ALP, in the session
+# folder AS) is refused. It is queued for the Trash, or left and listed failed, with why.
+after_one() {
+	local pid=${1%%"$TAB"*} p=${1#*"$TAB"} why="" rp=""
+	if [ ! -e "$p" ] && [ ! -L "$p" ]; then
+		after_append "$ALP" gone "$p" "$pid" "not there when the after-command hook looked"
+		after_log gone "$p" "$ALP" "not there when it looked"
+		return 0
+	fi
+	# Its real path first, for every outcome: what is left is kept by its real path, which is
+	# how a folder holding it is checked (after_holds).
+	_tt_real "${p%/*}"
+	[ -z "$_TT_R" ] || rp="$_TT_R/${p##*/}"
+	if [ -L "$p" ]; then why="a link, not a folder"
+	elif [ ! -d "$p" ]; then why="not a folder"
+	elif [ ! -O "$p" ]; then why="not this account's"
+	elif ! _tt_mktemp_shaped "${p##*/}"; then why="not a mktemp-shaped name (NAME.XXXXXX)"
+	elif [ -z "$rp" ]; then why="its folder cannot be entered"
+	else
+		case "$rp" in
+			"$AS"/?*) case "$ALP" in "$rp"/*) why="it holds the list that names it" ;; esac ;;
+			"$AROOT"/pj-?*/*) why="inside another session's folder, not its list's ${AS##*/}" ;;
+			*) why="outside its list's session folder, ${AS##*/}" ;;
+		esac
+	fi
+	if [ -n "$why" ]; then
+		after_leave "$ALP" "$pid" "$p" "${rp:-$p}" "$why"
+		return 0
+	fi
+	AQUEUE="$AQUEUE$ALP$TAB$ALIST$TAB$pid$TAB$p$TAB$rp$NL"
+	return 0
+}
+
+# after_moves: the queue, one Trash call per list, in the order the lists were named, so that
+# a run's own folder goes after the folders inside it; the taken files go with the last call.
+after_moves() {
+	local rest=$AQUEUE line cur=""
+	AGROUP=""
+	while [ -n "$rest" ]; do
+		line=${rest%%"$NL"*}
+		rest=${rest#*"$NL"}
+		if [ -n "$AGROUP" ] && [ "${line%%"$TAB"*}" != "$cur" ]; then
+			after_group
+			AGROUP=""
+		fi
+		cur=${line%%"$TAB"*}
+		AGROUP="$AGROUP$line$NL"
+	done
+	after_group last
+}
+
+# after_group [last]: AGROUP's folders (one list's) into the staging folder, then one call of
+# the Trash shim, from /, for them and, when last, the taken files; then, by test -e, each
+# folder's line in its list. Past the budget, the rest of the list waits for the next call.
+after_group() {
+	local last=${1-} rest line err
+	set --
+	AMOVED=""
+	rest=$AGROUP
+	while [ -n "$rest" ]; do
+		line=${rest%%"$NL"*}
+		rest=${rest#*"$NL"}
+		if [ "$SECONDS" -ge "$AFTER_BUDGET" ]; then
+			line=${line#*"$TAB"}
+			AAGAIN="$AAGAIN${line%%"$TAB"*}$NL"
+			after_log budget - "${AGROUP%%"$TAB"*}" "its $AFTER_BUDGET s were used up: the list waits for the next Bash call"
+			break
+		fi
+		after_stage "$line"
+		if [ -n "$ASTAGED" ]; then
+			set -- "$@" "$ASTAGED"
+			AMOVED="$AMOVED$line$TAB$ASTAGED$NL"
+		fi
+	done
+	if [ -n "$last" ]; then
+		after_late
+		rest=$ATAKEN
+		while [ -n "$rest" ]; do
+			set -- "$@" "${rest%%"$NL"*}"
+			rest=${rest#*"$NL"}
+		done
+	fi
+	[ $# -gt 0 ] || return 0
+	err=$( (CDPATH='' builtin cd / && "$_TT_RM" -rf -- "$@") 2>&1 >/dev/null)
+	_tt_why_of "$err"
+	_tt_walk "$AMOVED" after_moved
+	[ -z "$last" ] || _tt_walk "$ATAKEN" after_taken
+	return 0
+}
+
+# after_stage LIST<TAB>NAMED<TAB>PID<TAB>PATH<TAB>REAL: one queued folder, just before its call:
+# not one that holds something left; else into the staging folder, through the walk. ASTAGED is
+# where it is then, empty when it was left (and why is listed).
+after_stage() {
+	local alp=${1%%"$TAB"*} r=${1#*"$TAB"} pid p rp dest
+	r=${r#*"$TAB"}
+	pid=${r%%"$TAB"*}; r=${r#*"$TAB"}
+	p=${r%%"$TAB"*}; rp=${r#*"$TAB"}
+	ASTAGED=""
+	after_holds "$rp"
+	if [ -n "$AHELD" ]; then
+		after_leave "$alp" "$pid" "$p" "$rp" "it holds $AHELD, which is left"
+		return 0
+	fi
+	dest="$ASTAGE/${rp##*/}"
+	if [ -e "$dest" ] || [ -L "$dest" ]; then dest="$dest.$$.$(date +%s)"; fi
+	if after_pl move "${rp%/*}" "${rp##*/}" "$dest"; then
+		ASTAGED=$dest
+	else
+		after_leave "$alp" "$pid" "$p" "$rp" "$APL_OUT"
+	fi
+	return 0
+}
+
+# after_holds REAL: AHELD is a path inside the folder REAL that stays: one this run left, or one
+# its own list (REAL/.test-temp/list, read through the walk) has not seen gone and that is
+# still there. Empty when there is none.
+after_holds() {
+	local rows
+	AHELD="" AHIN=$1
+	_tt_walk "$ALEFTREAL" after_held_left
+	[ -z "$AHELD" ] || return 0
+	[ -f "$1/.test-temp/list" ] || return 0
+	if ! after_pl read "$1/.test-temp" list; then
+		AHELD="$1/.test-temp/list, which cannot be read ($APL_OUT)"
+		return 0
+	fi
+	rows=$(printf '%s\n' "$APL_OUT" | AHIN_D="$1/" LC_ALL=C awk -F'\t' '
+		BEGIN { d = ENVIRON["AHIN_D"] }
+		NF >= 5 && index($2, d) == 1 { if (!($2 in last)) order[++n] = $2; last[$2] = $1 }
+		END { for (i = 1; i <= n; i++) if (last[order[i]] != "gone") print order[i] }')
+	_tt_walk "${rows:+$rows$NL}" after_held_listed
+	return 0
+}
+after_held_left() { [ -z "$AHELD" ] && case "$1" in "$AHIN"/?*) AHELD=$1 ;; esac; return 0; }
+after_held_listed() { [ -z "$AHELD" ] && { [ -e "$1" ] || [ -L "$1" ]; } && AHELD=$1; return 0; }
+
+# after_moved LIST<TAB>NAMED<TAB>PID<TAB>PATH<TAB>REAL<TAB>STAGED: one staged folder after the
+# call: gone (listed gone), or still in the staging folder (listed failed, saying where).
+after_moved() {
+	local alp=${1%%"$TAB"*} r=${1#*"$TAB"} pid p st
+	r=${r#*"$TAB"}
+	pid=${r%%"$TAB"*}; r=${r#*"$TAB"}
+	p=${r%%"$TAB"*}; r=${r#*"$TAB"}
+	st=${r#*"$TAB"}
+	if [ ! -e "$st" ] && [ ! -L "$st" ]; then
+		after_append "$alp" gone "$p" "$pid" "moved by the after-command hook"
+		after_log moved "$p" "$alp" "to the Trash"
+	else
+		after_append "$alp" failed "$p" "$pid" "the after-command hook could not move it: $_TT_WHY; it waits in $st"
+		after_log failed "$p" "$alp" "$_TT_WHY; it waits in $st"
+		after_left "folder $p: $_TT_WHY; it waits in $st"
+	fi
+	return 0
+}
+after_taken() { if [ -e "$1" ] || [ -L "$1" ]; then after_log left-taken "$1" - "$_TT_WHY"; fi; return 0; }
+
+# after_late: a test that opened the pending file just before the rename may have written into
+# the taken one after it was read; those lines are named again.
+after_late() {
+	local size
+	[ -n "$ATAKE" ] && [ -z "$ATAKE_LINK" ] || return 0
+	size=$(wc -c <"$ATAKE" 2>/dev/null | tr -d ' ')
+	[ "${size:-0}" -le "$AN0" ] || AAGAIN="$AAGAIN$(tail -c +"$((AN0 + 1))" "$ATAKE" 2>/dev/null)$NL"
+	return 0
+}
+after_stale() { [ -L "$1" ] || ACONTENT="$ACONTENT$NL$(cat "$1" 2>/dev/null)"; return 0; }
+
+# after_again: the lists that wait for the next Bash call, named again in the pending file,
+# each once (not one it holds already), through the walk.
+after_again() {
+	local t have=""
+	t=$(printf '%s' "$AAGAIN" | LC_ALL=C awk 'NF && !seen[$0]++')
+	[ -n "$t" ] || return 0
+	if after_pl read "$APDIR" "$CLAUDE_PID"; then have=$APL_OUT; fi
+	t=$(printf '%s\n' "$t" | AHAVE="$have" LC_ALL=C awk 'BEGIN { n = split(ENVIRON["AHAVE"], h, "\n"); for (i = 1; i <= n; i++) in_[h[i]] = 1 } !($0 in in_)')
+	[ -n "$t" ] || return 0
+	if after_pl create "$APDIR" "$CLAUDE_PID" "$t$NL"; then
+		after_log again - - "named again, for the next Bash call: $(printf '%s' "$t" | tr '\n' ' ')"
+	else
+		after_log lost - - "could not name these again ($APL_OUT): $(printf '%s' "$t" | tr '\n' ' ')"
+		after_left "the pending file $APDIR/$CLAUDE_PID: it could not be written ($APL_OUT)"
+	fi
+	return 0
+}
+
+cmd_after() {
+	local stale t e now
+	SECONDS=0
+	AEVENT=PostToolUse
+	[ "${1-}" = PostToolUseFailure ] && AEVENT=PostToolUseFailure
+	AJSON="" ASID="" ASID_READ="" AOURS="" ATEXT="" ALEFT=0 AAGAIN="" ASEEN="" AQUEUE="" AGROUP=""
+	AS="" ALP="" ALIST="" AWHY="" ACONTENT="" ATAKE="" ATAKE_LINK="" ATAKEN="" AN0=0
+	ALEFTREAL="" ASTAGED="" AHELD="" AMOVED="" APL_OUT=""
+	# stdin to the end first (not a terminal): Claude Code counts a hook that closed it early as
+	# failed.
+	if [ ! -t 0 ]; then AJSON=$(cat 2>/dev/null) || AJSON=""; fi
+	case "${CLAUDE_PID-}" in '' | *[!0-9]*) return 0 ;; esac
+	ASTATE="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/test-temp"
+	ALOG="$ASTATE/after.log"
+	ASTAGE="$ASTATE/staging"
+	# The hook runs outside the sandbox. Run by hand inside it, nothing is taken: the sandbox can
+	# reach neither the Trash nor the staging folder, so the work waits for the hook.
+	if [ "${SANDBOX_RUNTIME-}" = 1 ]; then
+		after_out "test-temp after-command did nothing: this is the Claude sandbox, which reaches neither the Trash nor the staging folder. The hook does the work, outside it, after each Bash call."
+		return 0
+	fi
+	command mkdir -p -- "$ASTATE" 2>/dev/null
+	[ -d "$ASTAGE" ] || command mkdir -m 700 -- "$ASTAGE" 2>/dev/null
+	if [ -L "$ASTAGE" ] || [ ! -d "$ASTAGE" ] || [ ! -O "$ASTAGE" ]; then
+		after_log no-staging "$ASTAGE" - "not a folder of this account's"
+		after_out "test-temp after-command moved nothing: its staging folder $ASTAGE is not a folder of this account's."
+		return 0
+	fi
+	if ! load_lib 2>/dev/null; then
+		after_out "test-temp after-command moved nothing: its helper is missing beside it ($HELPER). Folders listed refused stay until the session ends; restow the dotfiles."
+		return 0
+	fi
+	if [ -z "$_TT_RM" ]; then
+		after_log no-shim - - "$_TT_WHY"
+		after_out "test-temp after-command moved nothing: $_TT_WHY. The folders stay listed refused, and named, until that is fixed."
+		return 0
+	fi
+	_tt_real "${AFTER_ROOT:-/tmp/claude-$(id -u)}"   # test-temp: allow the shared root, where the session folders are
+	AROOT=$_TT_R
+	[ -n "$AROOT" ] || return 0
+	APDIR="$AROOT/.test-temp-pending"
+	# Taken files a killed run left (SIGKILL, a timeout). The epoch in the name is when it was
+	# taken (mv keeps the mtime of the last write, which can be days older); one taken more than
+	# two minutes ago is read again. Twice is harmless: only a folder whose last line is refused
+	# moves.
+	now=$(date +%s)
+	stale=""
+	for t in "$ASTAGE/$CLAUDE_PID".taken.*; do
+		[ -e "$t" ] || [ -L "$t" ] || continue
+		e=${t#"$ASTAGE/$CLAUDE_PID".taken.}
+		e=${e%%.*}
+		case "$e" in '' | *[!0-9]*) continue ;; esac
+		[ "$((now - e))" -gt 120 ] && stale="$stale$t$NL"
+	done
+	# Take the pending file: renamed through the walk into the staging folder, where the sandbox
+	# cannot reach it. A test that writes from now on starts a new one, for the next Bash call.
+	ATAKE="$ASTAGE/$CLAUDE_PID.taken.$now.$$"
+	if [ ! -e "$APDIR" ] && [ ! -L "$APDIR" ]; then
+		ATAKE=""
+	elif ! after_pl take "$APDIR" "$CLAUDE_PID" "$ATAKE"; then
+		after_log left-pending "$APDIR/$CLAUDE_PID" - "not taken: $APL_OUT"
+		after_left "the pending file $APDIR/$CLAUDE_PID: not taken ($APL_OUT)"
+		ATAKE=""
+	elif [ "$APL_OUT" = none ]; then
+		ATAKE=""
+	elif [ "$APL_OUT" = link ]; then
+		ATAKE_LINK=1
+		after_log left-pending "$APDIR/$CLAUDE_PID" - "the pending file was a link: it was not read, and it goes to the Trash"
+		after_left "the pending file $APDIR/$CLAUDE_PID: a link, so it was not read"
+	else
+		AN0=$(wc -c <"$ATAKE" | tr -d ' ')
+		ACONTENT=$(head -c "$AN0" "$ATAKE" 2>/dev/null)
+		run_pause taken
+	fi
+	if [ -z "$ATAKE" ] && [ -z "$stale" ]; then
+		after_out
+		return 0
+	fi
+	_tt_walk "$stale" after_stale
+	# The taken files go to the Trash with the last call: what they named is in the lists then,
+	# and in the log.
+	ATAKEN="${ATAKE:+$ATAKE$NL}$stale"
+	_tt_walk "$ACONTENT$NL" after_line
+	run_pause moving
+	after_moves
+	after_again
+	after_trim
+	after_out
+	return 0
 }
 
 # ------------------------------------------------------------------------------ lint
@@ -837,13 +1427,74 @@ no_folder_made() {   # 0 when the arm made no stand-in folder and listed none
 	[ -f "$A/.test-temp/list" ] && command grep -q '^made' "$A/.test-temp/list" && return 1
 	return 0
 }
-# session_where DIR: the words check uses for a refused folder whose run sat in DIR
+# session_where DIR [hook]: the words check uses for a refused folder whose run sat in DIR, with
+# this Claude's heartbeat from the hook (hook) or without. The session-folder shape is written
+# out again here on purpose, apart from test-temp.sh's _tt_in_session and _tt_where: what the
+# arms compare against must not be the code they test.
 session_where() {
 	case "$1/" in
-		"/private/tmp/claude-$(id -u)"/pj-*/* | "/tmp/claude-$(id -u)"/pj-*/*) echo "they go when the session ends" ;;   # test-temp: allow the session folder shape
+		"/private/tmp/claude-$(id -u)"/pj-*/* | "/tmp/claude-$(id -u)"/pj-*/*)   # test-temp: allow the session folder shape
+			if [ "${2-}" = hook ]; then echo "the after-command hook moves them once this command ends, or they go when the session ends"
+			else echo "they go when the session ends (no after-command hook has run in this session)"; fi
+			;;
 		*) echo "they stay in $1 until you trash them" ;;
 	esac
 }
+
+# ---- the after-command hook's arms
+# hook_arm: a fresh TMPDIR (A) inside the selftest's own session folder, pj-$HSID, a folder
+# for what is said (O), and no pending file (one left by the arm before is moved into O).
+hook_arm() {
+	ARM=$((ARM + 1)); A="$CROOT/pj-$HSID/a$ARM"; O="$ROOT/o$ARM"
+	command mkdir -p "$A" "$O"
+	EXTRA=""
+	if [ -e "$HPEND" ]; then command mv -- "$HPEND" "$O/pending-before"; fi
+	return 0
+}
+# after_run [NAME=VALUE...]: after-command as the hook runs it, outside the sandbox
+# (CLAUDE_PID=$HPID unless one is given; the log and the staging folder in ROOT/state),
+# AFTER_TOOL or the tool copy, AFTER_EVENT its argument, stdin from AIN (else /dev/null);
+# RC, and HOUT, a new file holding its stdout.
+after_run() {
+	local tool=${AFTER_TOOL:-$TOOL} in=${AIN:-/dev/null}
+	[ -f "$in" ] || in=/dev/null
+	HN=$((HN + 1)); HOUT="$O/out.$HN"
+	timed 30 env -u SANDBOX_RUNTIME CLAUDE_PID="$HPID" XDG_STATE_HOME="$ROOT/state" "$@" "$tool" after-command ${AFTER_EVENT:+"$AFTER_EVENT"} <"$in" >>"$HOUT" 2>>"$O/said"
+	RC=$?
+}
+# fx_refused DIR NAME LIST: a folder DIR/NAME, listed made and then refused (pid 77) in LIST.
+fx_refused() {
+	command mkdir -p "$1/$2" "${3%/*}"
+	printf 'made\t%s\t77\t0\tnew\nrefused\t%s\t77\t0\tthe sandbox refused the Trash (afpAccessDenied)\n' "$1/$2" "$1/$2" >>"$3"
+}
+# fx_pend PID LIST...: name each LIST, by its real path, in PID's pending file.
+fx_pend() {
+	local p=$1 l
+	shift
+	command mkdir -p -m 700 "$CROOT/.test-temp-pending"
+	for l in "$@"; do
+		_tt_real "${l%/*}"
+		printf '%s/list\n' "$_TT_R" >>"$CROOT/.test-temp-pending/$p"
+	done
+}
+# last_event PATH LIST: "<event> <detail, spaces as _>" of PATH's last line in LIST
+last_event() {
+	awk -F'\t' -v p="$1" '$2 == p { e = $1; d = $5 } END { gsub(/ /, "_", d); print (e == "" ? "-" : e) " " (d == "" ? "-" : d) }' "$2" 2>/dev/null
+}
+# hook_json: 0 when HOUT is one JSON object whose hookSpecificOutput is PostToolUse and
+# carries an additionalContext (perl JSON::PP reads it); the text is in HCTX.
+hook_json() {
+	HCTX=$(perl -MJSON::PP -0777 -ne 'my $j = eval { JSON::PP->new->decode($_) } or exit 1;
+		my $h = $j->{hookSpecificOutput} or exit 1; $h->{hookEventName} eq "PostToolUse" or exit 1;
+		defined $h->{additionalContext} or exit 1; print $h->{additionalContext}' "$HOUT" 2>/dev/null)
+}
+# ms CMD...: CMD's wall time in milliseconds, stdin empty, its output dropped
+ms() {
+	perl -MTime::HiRes=time -e 'my $t = time; my $pid = fork; die "fork: $!" unless defined $pid;
+		if (!$pid) { open(STDIN, "<", "/dev/null"); open(STDOUT, ">", "/dev/null"); open(STDERR, ">", "/dev/null"); exec { $ARGV[0] } @ARGV or exit 127 }
+		waitpid($pid, 0); printf "%d\n", (time - $t) * 1000' "$@"
+}
+median() { tr ' ' '\n' | awk 'NF' | sort -n | awk '{ v[NR] = $1 } END { print v[int((NR + 1) / 2)] + 0 }'; }
 
 write_fixtures() {
 	command mkdir -p "$ROOT/shims/accept" "$ROOT/shims/refuse" "$ROOT/shims/unmarked" "$ROOT/helpers" "$ROOT/tool" "$FAKETRASH"
@@ -875,26 +1526,54 @@ write_fixtures() {
 		printf '%s\n' 'exit 0'
 	} >>"$ROOT/shims/unmarked/rm"
 	chmod +x "$ROOT/shims/accept/rm" "$ROOT/shims/refuse/rm" "$ROOT/shims/unmarked/rm"
+	# Every copy names the selftest's own root (CROOT) for the hook's pending files and session
+	# folders, so no arm reads or writes the real /tmp/claude-<uid>/.test-temp-pending.
+	command mkdir -p -m 700 "$CROOT" || return 1
 	for k in accept refuse unmarked; do
-		awk -v shim="$ROOT/shims/$k/rm" -v q="'" '
-			/#P: shim/ { print "_TT_SHIM=" q shim q "   #P: shim (selftest copy)"; n++; next }
+		awk -v shim="$ROOT/shims/$k/rm" -v root="$CROOT" -v q="'" '
+			/^_TT_SHIM=""/ { print "_TT_SHIM=" q shim q "   #P: shim (selftest copy)"; n++; next }
+			/^_TT_CROOT=""/ { print "_TT_CROOT=" q root q "   #P: root (selftest copy)"; n++; next }
 			{ print }
-			END { exit (n != 1) }' "$HELPER" >>"$ROOT/helpers/$k.sh" || return 1
+			END { exit (n != 2) }' "$HELPER" >>"$ROOT/helpers/$k.sh" || return 1
 	done
-	cp "$SELF" "$ROOT/tool/test-temp" && cp "$ROOT/helpers/accept.sh" "$ROOT/tool/test-temp.sh" || return 1
-	chmod +x "$ROOT/tool/test-temp"
-	# Copies of this command that hold one of run's races open (run_pause), each beside an
-	# accept helper; the #P lines are matched at the start of a line, never this awk itself.
-	for k in before after rewait; do
+	for k in tool tool-refuse; do
+		command mkdir -p "$ROOT/$k"
+		awk -v root="$CROOT" -v q="'" '
+			/^AFTER_ROOT=""/ { print "AFTER_ROOT=" q root q "   #P: root (selftest copy)"; n++; next }
+			{ print }
+			END { exit (n != 1) }' "$SELF" >>"$ROOT/$k/test-temp" || return 1
+		chmod +x "$ROOT/$k/test-temp"
+	done
+	cp "$ROOT/helpers/accept.sh" "$ROOT/tool/test-temp.sh" && cp "$ROOT/helpers/refuse.sh" "$ROOT/tool-refuse/test-temp.sh" || return 1
+	# Copies of this command that hold one of run's races open (run_pause), or after-command's
+	# (taken), each beside an accept helper; the #P lines are matched at the start of a line,
+	# never this awk itself.
+	for k in before after rewait taken moving moving2; do
 		command mkdir -p "$ROOT/race-$k"
-		awk -v at="$k" -v mark="$ROOT/race-$k/paused" -v q="'" '
+		awk -v at="${k%2}" -v mark="$ROOT/race-$k/paused" -v root="$CROOT" -v q="'" '
 			/^RUN_PAUSE_AT=""/ { print "RUN_PAUSE_AT=" q at q "   #P: pause-at (selftest copy)"; n++; next }
 			/^RUN_PAUSE_MARK=""/ { print "RUN_PAUSE_MARK=" q mark q "   #P: pause-mark (selftest copy)"; n++; next }
+			/^AFTER_ROOT=""/ { print "AFTER_ROOT=" q root q "   #P: root (selftest copy)"; n++; next }
 			{ print }
-			END { exit (n != 2) }' "$SELF" >>"$ROOT/race-$k/test-temp" || return 1
+			END { exit (n != 3) }' "$SELF" >>"$ROOT/race-$k/test-temp" || return 1
 		chmod +x "$ROOT/race-$k/test-temp"
 		cp "$ROOT/helpers/accept.sh" "$ROOT/race-$k/test-temp.sh" || return 1
 	done
+	# A copy that is this file down to the no-work test, then a line bash cannot parse: it can
+	# exit 0 only if that test answers before the rest of the file is read.
+	command mkdir -p "$ROOT/broken-after"
+	awk -v root="$CROOT" -v q="'" '
+		/^AFTER_ROOT=""/ { print "AFTER_ROOT=" q root q "   #P: root (selftest copy)"; n++; next }
+		{ print }
+		n && /^fi   # the end of the no-work test$/ { print "if then fi (( ("; m++; exit }
+		END { exit (n != 1 || m != 1) }' "$SELF" >>"$ROOT/broken-after/test-temp" || return 1
+	chmod +x "$ROOT/broken-after/test-temp"
+	cp "$ROOT/helpers/accept.sh" "$ROOT/broken-after/test-temp.sh" || return 1
+	# The selftest's own session folder, and two of other Claudes, each with its owners record.
+	command mkdir -p "$CROOT/pj-$HSID/.pj-temp" "$CROOT/pj-other/.pj-temp" "$CROOT/pj-mis/.pj-temp" || return 1
+	printf '%s\t%s\tSun Oct 25 05:52:08 2026\tstartup\t2026-10-25T05:52:12Z\n' "$HSID" "$HPID" >>"$CROOT/pj-$HSID/.pj-temp/owners"
+	printf '%s\t%s\tSun Oct 25 05:52:08 2026\tstartup\t2026-10-25T05:52:12Z\n' sid-other 515151 >>"$CROOT/pj-other/.pj-temp/owners"
+	printf '%s\t%s\tSun Oct 25 05:52:08 2026\tstartup\t2026-10-25T05:52:12Z\n' sid-mis 616161 >>"$CROOT/pj-mis/.pj-temp/owners"
 	# An awk that fails on one named file and is the real awk for everything else.
 	command mkdir -p "$ROOT/fakeawk"
 	{
@@ -1021,7 +1700,9 @@ selftest() {
 		return 2
 	fi
 	SELF_LIST="$SELF_LIST/list"
-	unset TEST_TEMP_DIR TEST_TEMP_REFUSED TT_STANDIN_U TT_STANDIN_KEEP
+	# The arms set CLAUDE_PID where they mean it; the session's own is kept for st_end.
+	ST_CLAUDE_PID=${CLAUDE_PID-}
+	unset TEST_TEMP_DIR TEST_TEMP_REFUSED TT_STANDIN_U TT_STANDIN_KEEP CLAUDE_PID
 	before=$(names "$base")
 	ROOT=$(command mktemp -d "$base/test-temp-selftest.XXXXXX") || {
 		echo "test-temp --selftest: mktemp failed -- INVALID TRIAL, not a pass" >&2
@@ -1030,14 +1711,18 @@ selftest() {
 	_tt_real "$ROOT"
 	ROOT=$_TT_R
 	_tt_log_to "$SELF_LIST" made "$ROOT" "$$" "test-temp --selftest"
-	KIDS="" ARM=0 ST_DONE=""
+	KIDS="" ARM=0 ST_DONE="" HN=0
 	trap 'st_end' EXIT
 	trap 'st_end; exit 130' INT
 	trap 'st_end; exit 143' TERM
 	trap 'st_end; exit 129' HUP
 	FAKETRASH="$ROOT/faketrash" STANDIN="$ROOT/standin.sh" PLAIN="$ROOT/plain.sh" SUP="$ROOT/sup.pl"
+	# The hook's world: a root of its own, the selftest's session folder in it, whose owners
+	# name the pid the hook arms run as, and that pid's pending file.
+	CROOT="$ROOT/croot" HSID=sid-selftest HPID=424242
+	HPEND="$CROOT/.test-temp-pending/$HPID"
 	if ! write_fixtures; then
-		echo "test-temp --selftest: could not build the fixtures (the #P: shim line must appear once) -- INVALID TRIAL" >&2
+		echo "test-temp --selftest: could not build the fixtures (each #P line must appear once in what it copies) -- INVALID TRIAL" >&2
 		return 2
 	fi
 	HA="$ROOT/helpers/accept.sh" HR="$ROOT/helpers/refuse.sh" HU="$ROOT/helpers/unmarked.sh" TOOL="$ROOT/tool/test-temp"
@@ -1164,6 +1849,31 @@ selftest() {
 		if [ "$RC" = 0 ] && [ -d "$f" ] && [ "$1:$2:$3" = "1:1:failed" ] && has "$6" "not_the_Claude_sandbox"; then
 			ok "B2 $L: the same refusal with SANDBOX_RUNTIME unset -> listed failed, not the sandbox (control: B1)"
 		else bad "B2 $L: refusing shim outside the sandbox" "rc=$RC made $1 ends $2 last $3 detail $6; it said: $(said)"; fi
+		# Gavin's Q1: 2, end to end: a refusal in the sandbox names its list to the hook once, and
+		# after-command, outside it, moves the folder (control: no CLAUDE_PID, no note).
+		hook_arm; EXTRA="SANDBOX_RUNTIME=1 CLAUDE_PID=$HPID"; run_standin "$S" "$HR" ok
+		f=$(folder); _tt_real "$A/.test-temp"; k="$_TT_R/list"
+		got=$(cat "$HPEND" 2>/dev/null)
+		set -- $(last_event "$f" "$A/.test-temp/list")
+		if [ "$RC" = 0 ] && [ -d "$f" ] && [ "$1" = refused ] && [ "$got" = "$k" ]; then
+			after_run
+			set -- $(last_event "$f" "$A/.test-temp/list")
+			if [ "$RC" = 0 ] && [ ! -s "$HOUT" ] && [ ! -e "$f" ] && [ -d "$FAKETRASH/${f##*/}" ] && [ "$1 $2" = "gone moved_by_the_after-command_hook" ] &&
+				[ ! -s "$HPEND" ] && command grep -qF "moved$TAB$f$TAB" "$ROOT/state/dotfiles/test-temp/after.log"; then
+				ok "H1 $L: in a fake sandbox the end lists its folder refused and names the list to the hook once; after-command moves it, lists it gone, logs it, says nothing, exit 0"
+			else bad "H1 $L: after-command" "rc=$RC last=[$*] out=$(cat "$HOUT") pending=$(cat "$HPEND" 2>/dev/null); it said: $(said)"; fi
+		else bad "H1 $L: the note for the hook" "rc=$RC folder=$f last=[$*] pending=[$got], want [$k]; it said: $(said)"; fi
+		hook_arm; EXTRA="SANDBOX_RUNTIME=1"; run_standin "$S" "$HR" ok
+		f=$(folder); set -- $(last_event "$f" "$A/.test-temp/list")
+		if [ "$RC" = 0 ] && [ -d "$f" ] && [ "$1" = refused ] && [ ! -e "$HPEND" ]; then
+			ok "H1 $L: control: the same with no CLAUDE_PID (not inside Claude Code) -> listed refused, and no note"
+		else bad "H1 $L: control" "rc=$RC last=[$*] pending=$(cat "$HPEND" 2>/dev/null); it said: $(said)"; fi
+		hook_arm; sup group INT 10 env TMPDIR="$A" SANDBOX_RUNTIME=1 CLAUDE_PID="$HPID" $sh "$STANDIN" "$HR" wait "$O"
+		f=$(folder); _tt_real "$A/.test-temp"; k="$_TT_R/list"
+		set -- $(last_event "$f" "$A/.test-temp/list")
+		if [ "$RC" = "signal 2" ] && [ "$1" = refused ] && [ "$(cat "$HPEND" 2>/dev/null)" = "$k" ]; then
+			ok "H1s $L: Ctrl-C in a fake sandbox -> the end (in zsh, the fresh shell it hands the end to) names the list to the hook once"
+		else bad "H1s $L: Ctrl-C" "$RC last=[$*] pending=$(cat "$HPEND" 2>/dev/null); it said: $(said)"; fi
 		new_arm; run_standin "$S" "$HA" fn
 		case "$S" in
 			*zsh*)
@@ -1436,7 +2146,7 @@ selftest() {
 	# Finding 5, the words: "they go when the session ends" only for a session's own folder.
 	new_arm
 	got=""
-	for k in "/private/tmp/claude-$uid/pj-standin-session:they go when the session ends" "/var/folders/st/standin/T:they stay in /var/folders/st/standin/T until you trash them"; do   # test-temp: allow two outer folders, written into fixtures only
+	for k in "/private/tmp/claude-$uid/pj-standin-session:they go when the session ends (no after-command hook has run in this session)" "/var/folders/st/standin/T:they stay in /var/folders/st/standin/T until you trash them"; do   # test-temp: allow two outer folders, written into fixtures only
 		n="$A/test-temp-run.w${#got}abcde"
 		command mkdir -p "$n/.test-temp" "$n/standin.Ab12Cd"
 		printf 'started\t0\t0\t%s\n' "${k%%:*}" >>"$n/.test-temp/started"
@@ -1447,8 +2157,367 @@ selftest() {
 		else got="$got[${k%%:*}: rc=$RC] "; fi
 	done
 	if [ "$got" = "ok ok " ]; then
-		ok "D15 check: a refused folder -> \"they go when the session ends\" only when the run's TMPDIR is a session's own folder (claude-<uid>/pj-*); elsewhere \"they stay in\" it"
+		ok "D15 check: a refused folder, with no heartbeat from the hook -> \"they go when the session ends (no after-command hook has run in this session)\" only when the run's TMPDIR is a session's own folder (claude-<uid>/pj-*); elsewhere \"they stay in\" it (N1 has the heartbeat's words)"
 	else bad "D15 check: the words for refused folders" "$got; it said: $(tail -4 "$O/check" | tr '\n' '|')"; fi
+
+	# ---- the after-command hook (Gavin's Q1: 2); H1 is in the per-shell arms above
+	ALOGF="$ROOT/state/dotfiles/test-temp/after.log"
+	hook_arm; fx_refused "$A" keep.Ab12Cd "$A/.test-temp/list"
+	n=$(wc -l <"$ALOGF" 2>/dev/null | tr -d ' ')
+	after_run
+	if [ "$RC" = 0 ] && [ ! -s "$HOUT" ] && [ -d "$A/keep.Ab12Cd" ] && [ "$(wc -l <"$ALOGF" 2>/dev/null | tr -d ' ')" = "$n" ]; then
+		ok "H2 after-command with nothing pending -> exit 0, says nothing, logs nothing; a refused folder no pending file names stays"
+	else bad "H2 nothing pending" "rc=$RC out=$(cat "$HOUT")"; fi
+	timed 30 env -u SANDBOX_RUNTIME CLAUDE_PID="$HPID" XDG_STATE_HOME="$ROOT/state" "$TOOL" after-command <&- >>"$O/closed" 2>&1
+	rc=$?
+	if [ "$rc" = 0 ] && [ ! -s "$O/closed" ]; then ok "H2 nothing pending and stdin closed -> exit 0, nothing said"
+	else bad "H2 stdin closed" "rc=$rc; $(cat "$O/closed")"; fi
+	AFTER_TOOL="$ROOT/broken-after/test-temp" after_run
+	rc=$RC
+	fx_pend "$HPID" "$A/.test-temp/list"
+	AFTER_TOOL="$ROOT/broken-after/test-temp" after_run
+	if [ "$rc" = 0 ] && [ "$RC" != 0 ]; then
+		ok "H2 the no-work test answers before bash reads the rest of this file: a copy that cannot be parsed past it exits 0 with nothing pending (control: with a list pending it reaches the bad line, exit $RC)"
+	else bad "H2 the no-work test comes first" "nothing pending: rc=$rc; a list pending: rc=$RC"; fi
+	[ ! -e "$HPEND" ] || command mv -- "$HPEND" "$O/pending-broken"
+	# The speed: the empty path against the slow one (a pending list that is gone, so only the
+	# reading is timed), ten runs each, interleaved so that the machine's load falls on both.
+	got="" k=""
+	for n in 1 2 3 4 5 6 7 8 9 10; do
+		got="$got $(ms env -u SANDBOX_RUNTIME CLAUDE_PID="$HPID" XDG_STATE_HOME="$ROOT/state" "$TOOL" after-command)"
+		printf '%s\n' "$CROOT/pj-$HSID/no-such.Ab12Cd/.test-temp/list" >>"$HPEND"
+		k="$k $(ms env -u SANDBOX_RUNTIME CLAUDE_PID="$HPID" XDG_STATE_HOME="$ROOT/state" "$TOOL" after-command)"
+	done
+	got=$(printf '%s' "$got" | median)
+	k=$(printf '%s' "$k" | median)
+	# A figure, not an arm: on a loaded Mac a wall-clock order can flip. That nothing pending
+	# answers before the rest of this file is read is proved above, by the copy that cannot be
+	# parsed past the no-work test.
+	printf '  measured: after-command with nothing pending %s ms, with a list pending %s ms (medians of 10, interleaved)\n' "$got" "$k"
+	# H3: each check that leaves a folder, all in one list beside a valid folder (the control).
+	hook_arm; l="$A/.test-temp/list"
+	fx_refused "$A" good.Ab12Cd "$l"
+	command mkdir -p "$A/real.Zz99Yy" && ln -s "$A/real.Zz99Yy" "$A/link.Ab12Cd"
+	printf 'made\t%s\t77\t0\tnew\nrefused\t%s\t77\t0\tthe sandbox refused the Trash (afpAccessDenied)\n' "$A/link.Ab12Cd" "$A/link.Ab12Cd" >>"$l"
+	fx_refused "$A" notmktemp "$l"
+	fx_refused "$CROOT" loose.Ab12Cd "$l"
+	fx_refused "$CROOT/pj-other" theirs.Ab12Cd "$l"
+	fx_pend "$HPID" "$l"
+	after_run
+	set -- $(last_event "$A/good.Ab12Cd" "$l")
+	got=""
+	[ "$RC" = 0 ] || got="$got rc=$RC"
+	{ [ ! -e "$A/good.Ab12Cd" ] && [ "$1" = gone ]; } || got="$got good:[$*]"
+	for k in "$A/link.Ab12Cd:a_link,_not_a_folder" "$A/notmktemp:not_a_mktemp-shaped_name" \
+		"$CROOT/loose.Ab12Cd:outside_its_list's_session_folder" "$CROOT/pj-other/theirs.Ab12Cd:inside_another_session's_folder"; do
+		f=${k%%:*}
+		set -- $(last_event "$f" "$l")
+		if { [ -e "$f" ] || [ -L "$f" ]; } && [ "$1" = failed ] && has "$2" "${k#*:}" && command grep -qF "left$TAB$f$TAB" "$ALOGF"; then :
+		else got="$got ${f##*/}:[$*]"; fi
+	done
+	hook_json || got="$got json:[$(cat "$HOUT")]"
+	{ has "$HCTX" "left 4 where it found them" && has "$HCTX" "and 1 more"; } || got="$got ctx:[$HCTX]"
+	if [ -z "$got" ]; then
+		ok "H3 a link, a name mktemp did not make, a folder in no session folder and one in another session's -> each left, listed failed with the reason, logged; one additionalContext line names them (control: the valid folder in the same list moves)"
+	else bad "H3 the folder checks" "$got"; fi
+	# H4: a list outside any session folder is not read for moves, nor written to.
+	hook_arm; l="$CROOT/loose-list/.test-temp/list"
+	fx_refused "$CROOT/loose-list" y.Ab12Cd "$l"
+	n=$(wc -c <"$l" | tr -d ' ')
+	fx_refused "$A" ok.Ab12Cd "$A/.test-temp/list"
+	fx_pend "$HPID" "$l" "$A/.test-temp/list"
+	after_run
+	set -- $(last_event "$A/ok.Ab12Cd" "$A/.test-temp/list")
+	if [ "$RC" = 0 ] && [ -d "$CROOT/loose-list/y.Ab12Cd" ] && [ "$(wc -c <"$l" | tr -d ' ')" = "$n" ] &&
+		command grep -qF "left-list$TAB-$TAB$l${TAB}not inside a session folder" "$ALOGF" && [ "$1" = gone ] && [ ! -e "$A/ok.Ab12Cd" ]; then
+		ok "H4 a list outside any session folder -> left as it was, its folder too, logged (control: a session folder's list in the same pending file has its folder moved)"
+	else bad "H4 a list outside the session folder" "rc=$RC ok:[$*] list bytes $(wc -c <"$l"), were $n; out=$(cat "$HOUT")"; fi
+	# H5: a CLAUDE_PID mismatch: the list's session folder names another pid and session.
+	hook_arm; d="$CROOT/pj-mis/a$ARM"; l="$d/.test-temp/list"
+	fx_refused "$d" m1.Ab12Cd "$l"
+	fx_pend "$HPID" "$l"
+	printf '{"session_id":"%s","hook_event_name":"PostToolUse"}' "$HSID" >>"$O/stdin-ours"
+	printf '{"session_id":"sid-mis","hook_event_name":"PostToolUse"}' >>"$O/stdin-mis"
+	n=$(wc -c <"$l" | tr -d ' ')
+	AIN="$O/stdin-ours" after_run
+	set -- $(last_event "$d/m1.Ab12Cd" "$l")
+	if [ "$RC" = 0 ] && [ -d "$d/m1.Ab12Cd" ] && [ "$1" = refused ] && [ "$(wc -c <"$l" | tr -d ' ')" = "$n" ] &&
+		command grep -qF "left-list$TAB-$TAB$l${TAB}its session folder pj-mis is another Claude's" "$ALOGF"; then
+		ok "H5 a CLAUDE_PID mismatch (the list's session folder names another pid and another session) -> left as it was, logged"
+	else bad "H5 a CLAUDE_PID mismatch" "rc=$RC m1:[$*] out=$(cat "$HOUT")"; fi
+	fx_pend 616161 "$l"
+	AIN="$O/stdin-ours" after_run CLAUDE_PID=616161
+	set -- $(last_event "$d/m1.Ab12Cd" "$l")
+	if [ "$RC" = 0 ] && [ ! -e "$d/m1.Ab12Cd" ] && [ "$1" = gone ]; then ok "H5 control: the same list, for the pid its owners name -> moved"
+	else bad "H5 control: the owners' pid" "rc=$RC m1:[$*]"; fi
+	fx_refused "$d" m2.Ab12Cd "$l"
+	fx_pend "$HPID" "$l"
+	AIN="$O/stdin-mis" after_run
+	set -- $(last_event "$d/m2.Ab12Cd" "$l")
+	if [ "$RC" = 0 ] && [ ! -e "$d/m2.Ab12Cd" ] && [ "$1" = gone ]; then ok "H5 control: another pid, but the hook input's session_id is the one its owners name -> moved"
+	else bad "H5 control: the owners' session id" "rc=$RC m2:[$*]"; fi
+	# H6: malformed hook JSON, or stdin closed, still exits 0 and still moves on the pid.
+	hook_arm; l="$A/.test-temp/list"
+	printf 'not json {' >>"$O/stdin-bad"
+	fx_refused "$A" j1.Ab12Cd "$l"
+	fx_pend "$HPID" "$l"
+	AIN="$O/stdin-bad" after_run
+	got="$RC:$([ -e "$A/j1.Ab12Cd" ] && echo left || echo moved)"
+	fx_refused "$A" j2.Ab12Cd "$l"
+	fx_pend "$HPID" "$l"
+	timed 30 env -u SANDBOX_RUNTIME CLAUDE_PID="$HPID" XDG_STATE_HOME="$ROOT/state" "$TOOL" after-command <&- >>"$O/closed" 2>>"$O/said"
+	got="$got $?:$([ -e "$A/j2.Ab12Cd" ] && echo left || echo moved)"
+	d="$CROOT/pj-mis/a$ARM"
+	fx_refused "$d" j3.Ab12Cd "$d/.test-temp/list"
+	fx_pend "$HPID" "$d/.test-temp/list"
+	AIN="$O/stdin-bad" after_run
+	got="$got $RC:$([ -e "$d/j3.Ab12Cd" ] && echo left || echo moved)"
+	if [ "$got" = "0:moved 0:moved 0:left" ]; then
+		ok "H6 malformed hook JSON, and stdin closed -> exit 0, and the folder moves on the pid (control: where only the session id could match, bad JSON leaves it)"
+	else bad "H6 malformed JSON or no stdin" "$got, want 0:moved 0:moved 0:left"; fi
+	# H7: a pending file written while after-command works on the one it took.
+	hook_arm
+	for k in r1 r2 r3; do fx_refused "$A/$k" "f$k.Ab12Cd" "$A/$k/.test-temp/list"; done
+	fx_pend "$HPID" "$A/r1/.test-temp/list"
+	timed 30 env -u SANDBOX_RUNTIME CLAUDE_PID="$HPID" XDG_STATE_HOME="$ROOT/state" "$ROOT/race-taken/test-temp" after-command </dev/null >>"$O/race" 2>>"$O/said" &
+	k=$!
+	if wait_for "$ROOT/race-taken/paused" 10; then
+		fx_pend "$HPID" "$A/r2/.test-temp/list"
+		set -- "$ROOT/state/dotfiles/test-temp/staging/$HPID".taken.*
+		_tt_real "$A/r3/.test-temp"
+		printf '%s/list\n' "$_TT_R" >>"$1"
+		wait "$k"
+		RC=$?
+		got=$(tr '\n' ' ' <"$HPEND" 2>/dev/null)
+		_tt_real "$A/r2/.test-temp"; n="$_TT_R/list"
+		_tt_real "$A/r3/.test-temp"; s="$_TT_R/list"
+		if [ "$RC" = 0 ] && [ ! -e "$A/r1/fr1.Ab12Cd" ] && [ -d "$A/r2/fr2.Ab12Cd" ] && [ -d "$A/r3/fr3.Ab12Cd" ] && [ "$got" = "$n $s " ]; then
+			ok "H7 written while it works: a line in a new pending file is kept, and one written into the file it took is named again, each once, for the next call (the list it took has its folder moved)"
+		else bad "H7 written while it works" "rc=$RC pending=[$got], want [$n $s ]; r1 $([ -e "$A/r1/fr1.Ab12Cd" ] && echo left || echo moved)"; fi
+		after_run
+		if [ "$RC" = 0 ] && [ ! -e "$A/r2/fr2.Ab12Cd" ] && [ ! -e "$A/r3/fr3.Ab12Cd" ]; then ok "H7 control: the next call moves both"
+		else bad "H7 control: the next call" "rc=$RC"; fi
+	else
+		kill "$k" 2>/dev/null
+		wait "$k" 2>/dev/null
+		bad "H7 written while it works" "the copy never reached its pause -- INVALID TRIAL"
+	fi
+	# H8: the gone line is one check reads.
+	hook_arm; r="$A/test-temp-run.Hk8Abc"
+	command mkdir -p "$r/.test-temp"
+	printf 'started\t0\t0\t%s\n' "$A" >>"$r/.test-temp/started"
+	fx_refused "$r" standin.Hk8Def "$r/.test-temp/list"
+	timed 60 "$TOOL" check "$r" >>"$O/check1" 2>&1
+	rc=$?
+	fx_pend "$HPID" "$r/.test-temp/list"
+	after_run
+	timed 60 "$TOOL" check "$r" >>"$O/check2" 2>&1
+	rc2=$?
+	if [ "$rc" = 0 ] && command grep -q 'refused 1,' "$O/check1" && [ "$rc2" = 0 ] && command grep -q 'to the Trash 1, refused 0,.*CLEAN (exit 0)' "$O/check2"; then
+		ok "H8 check after the hook counts its folder gone: to the Trash 1, refused 0, CLEAN (control: before the hook, refused 1)"
+	else bad "H8 check after the hook" "before rc=$rc: $(tail -1 "$O/check1"); after rc=$rc2: $(tail -1 "$O/check2")"; fi
+	# H9: run by hand inside the sandbox (SANDBOX_RUNTIME=1) it takes nothing: the sandbox reaches
+	# neither the Trash nor the staging folder, so the work waits for the hook outside it.
+	hook_arm; l="$A/.test-temp/list"
+	fx_refused "$A" sb.Ab12Cd "$l"
+	fx_pend "$HPID" "$l"
+	n=$(wc -c <"$l" | tr -d ' ')
+	k=$(cat "$HPEND" 2>/dev/null)
+	AFTER_TOOL="$ROOT/tool-refuse/test-temp" after_run SANDBOX_RUNTIME=1
+	got=$(cat "$HPEND" 2>/dev/null)
+	if [ "$RC" = 0 ] && [ -d "$A/sb.Ab12Cd" ] && [ "$(wc -c <"$l" | tr -d ' ')" = "$n" ] && [ -n "$k" ] && [ "$got" = "$k" ] && hook_json && has "$HCTX" "this is the Claude sandbox"; then
+		ok "H9 after-command run by hand inside the sandbox -> takes nothing (the pending file, the folder and its list as they were) and says so"
+	else bad "H9 inside the sandbox" "rc=$RC pending=[$got] out=$(cat "$HOUT")"; fi
+	AFTER_TOOL="$ROOT/tool-refuse/test-temp" after_run SANDBOX_RUNTIME=
+	set -- $(last_event "$A/sb.Ab12Cd" "$l")
+	st="$ROOT/state/dotfiles/test-temp/staging"
+	if [ "$RC" = 0 ] && [ -d "$st/sb.Ab12Cd" ] && [ ! -e "$A/sb.Ab12Cd" ] && [ "$1" = failed ] && has "$2" could_not_move_it && has "$2" "waits_in" && [ ! -e "$HPEND" ]; then
+		ok "H9 control: outside the sandbox, a Trash that refuses -> listed failed, saying it waits in the staging folder; not named again"
+	else bad "H9 control: outside the sandbox" "rc=$RC last=[$*] staged=$([ -d "$st/sb.Ab12Cd" ] && echo yes || echo no) pending=$(cat "$HPEND" 2>/dev/null)"; fi
+	# What that refusing Trash also kept, its taken file, goes into O, out of the later arms' way.
+	for k in "$st/$HPID".taken.*; do [ -e "$k" ] && command mv -- "$k" "$O/"; done
+	# H10: run in a fake sandbox: its run folder is refused too, named after its suite's list.
+	hook_arm
+	timed 60 env TMPDIR="$A" SANDBOX_RUNTIME=1 CLAUDE_PID="$HPID" "$ROOT/tool-refuse/test-temp" run -- /bin/bash "$STANDIN" "$HR" ok "$O" >>"$O/run" 2>&1
+	RC=$?
+	r=$(awk -F'\t' '$1 == "made" && $5 == "test-temp run" { print $2; exit }' "$A/.test-temp/list" 2>/dev/null)
+	f=$(folder)
+	_tt_real "$A/.test-temp"; k="$_TT_R/list"
+	got=$(tr '\n' ' ' <"$HPEND" 2>/dev/null)
+	set -- $(last_event "$r" "$A/.test-temp/list")
+	if [ "$RC" = 0 ] && [ -n "$r" ] && [ -d "$r" ] && [ "$1" = refused ] && [ "$got" = "$r/.test-temp/list $k " ]; then
+		after_run
+		set -- $(last_event "$r" "$A/.test-temp/list")
+		e=$(last_event "$f" "$FAKETRASH/${r##*/}/.test-temp/list")
+		if [ "$RC" = 0 ] && [ ! -e "$r" ] && [ "$1" = gone ] && [ -d "$FAKETRASH/${f##*/}" ] && [ "${e%% *}" = gone ]; then
+			ok "H10 run in a fake sandbox: the run folder is refused too, named after its suite's list; after-command moves the suite's folder first (gone in the run folder's own list), then the run folder (control: D1, a clean run, keeps none)"
+		else bad "H10 after-command on a run" "rc=$RC run:[$*] inner:[$e] out=$(cat "$HOUT")"; fi
+	else bad "H10 run in a fake sandbox" "rc=$RC run=$r last=[$*] pending=[$got]; run said: $(tail -3 "$O/run" | tr '\n' '|')"; fi
+
+	# ---- the third review of the hook
+	st="$ROOT/state/dotfiles/test-temp/staging"
+	hb="$ROOT/state/dotfiles/test-temp/hook"
+	# N1 (item 1): the hook leaves its Claude a heartbeat, and only that lets the words promise.
+	hook_arm
+	after_run CLAUDE_PID=515515
+	got=$([ -e "$hb/515515" ] && echo made || echo none)
+	after_run CLAUDE_PID=525525 CLAUDE_PROJECT_DIR="$A"
+	k=$([ -e "$hb/525525" ] && echo made || echo none)
+	if [ "$got:$k" = "none:made" ]; then
+		ok "N1 a run as a hook (Claude Code sets CLAUDE_PROJECT_DIR for hooks) leaves its Claude a heartbeat in the state folder (control: a hand run from a Bash call, which has no CLAUDE_PROJECT_DIR, leaves none)"
+	else bad "N1 the heartbeat" "hand run: $got; run as a hook: $k"; fi
+	n="$A/test-temp-run.Nb1Abc"
+	command mkdir -p "$n/.test-temp" "$n/standin.Nb1Def"
+	printf 'started\t0\t0\t%s\n' "/private/tmp/claude-$uid/pj-standin-session" >>"$n/.test-temp/started"   # test-temp: allow a session-shaped outer folder, written into a fixture only
+	printf 'made\t%s\t1\t0\tnew\nrefused\t%s\t1\t0\tthe sandbox refused the Trash (afpAccessDenied)\n' "$n/standin.Nb1Def" "$n/standin.Nb1Def" >>"$n/.test-temp/list"
+	timed 60 env CLAUDE_PID=525525 XDG_STATE_HOME="$ROOT/state" "$TOOL" check "$n" >>"$O/check-hook" 2>&1
+	timed 60 env CLAUDE_PID=515515 XDG_STATE_HOME="$ROOT/state" "$TOOL" check "$n" >>"$O/check-none" 2>&1
+	if command grep -qF "; $(session_where "/private/tmp/claude-$uid/pj-standin-session" hook):" "$O/check-hook" &&   # test-temp: allow the session-shaped outer folder above
+		command grep -qF "; $(session_where "/private/tmp/claude-$uid/pj-standin-session"):" "$O/check-none"; then   # test-temp: allow the session-shaped outer folder above
+		ok "N1 check says the after-command hook moves them only with this Claude's heartbeat (control: a Claude with none -> they go when the session ends, no hook has run)"
+	else bad "N1 check's words" "with: $(command grep 'would not let' "$O/check-hook"); without: $(command grep 'would not let' "$O/check-none")"; fi
+	EXTRA="SANDBOX_RUNTIME=1 CLAUDE_PID=525525 XDG_STATE_HOME=$ROOT/state"; run_standin /bin/bash "$HR" ok
+	got=$(said)
+	hook_arm; EXTRA="SANDBOX_RUNTIME=1 CLAUDE_PID=515515 XDG_STATE_HOME=$ROOT/state"; run_standin /bin/bash "$HR" ok
+	k=$(said)
+	case "$A/" in
+		"/private/tmp/claude-$uid"/pj-*/* | "/tmp/claude-$uid"/pj-*/*)   # test-temp: allow the session folder shape, the oracle for the words
+			if has "$got" "the after-command hook moves it once this command ends" && has "$k" "it goes when the session ends (no after-command hook has run in this session)"; then
+				ok "N1 a test's own end says the hook moves its refused folder only with its Claude's heartbeat (control: without one, it goes when the session ends)"
+			else bad "N1 the helper's words" "with: $got; without: $k"; fi
+			;;
+		*) skip "N1 the helper's words" "this selftest's folders ($A) are not inside a session's own folder (claude-<uid>/pj-<id> in the shared temp folder), where those words are said" ;;
+	esac
+	# N2 (item 2): the event's name comes back in the hook's answer.
+	hook_arm; l="$A/.test-temp/list"
+	command mkdir -p "${l%/*}"
+	for k in a b; do
+		command mkdir -p "$A/real$k.Nc2Abc" && ln -s "$A/real$k.Nc2Abc" "$A/link$k.Nc2Def"
+		printf 'made\t%s\t77\t0\tnew\nrefused\t%s\t77\t0\tx\n' "$A/link$k.Nc2Def" "$A/link$k.Nc2Def" >>"$l"
+	done
+	fx_pend "$HPID" "$l"
+	AFTER_EVENT=PostToolUseFailure after_run
+	got=$(perl -MJSON::PP -0777 -ne 'my $j = eval { JSON::PP->new->decode($_) }; print $j ? ($j->{hookSpecificOutput}{hookEventName} // "none") : "not JSON"' "$HOUT" 2>/dev/null)
+	printf 'made\t%s\t77\t0\tnew\nrefused\t%s\t77\t0\tx\n' "$A/linka.Nc2Def" "$A/linka.Nc2Def" >>"$l"
+	fx_pend "$HPID" "$l"
+	after_run
+	k=$(perl -MJSON::PP -0777 -ne 'my $j = eval { JSON::PP->new->decode($_) }; print $j ? ($j->{hookSpecificOutput}{hookEventName} // "none") : "not JSON"' "$HOUT" 2>/dev/null)
+	if [ "$got:$k" = "PostToolUseFailure:PostToolUse" ]; then
+		ok "N2 after-command PostToolUseFailure answers for that event (control: with no argument, PostToolUse)"
+	else bad "N2 the event's name" "with the argument: $got; without: $k"; fi
+	# N3 (item 3): a run folder holding a folder the checks left is left too.
+	hook_arm; r="$A/test-temp-run.Nd3Abc"
+	command mkdir -p "$r/.test-temp" "$A/elsewhere.Nd3Def" && ln -s "$A/elsewhere.Nd3Def" "$r/link.Nd3Ghi"
+	printf 'made\t%s\t77\t0\tnew\nrefused\t%s\t77\t0\tx\n' "$r/link.Nd3Ghi" "$r/link.Nd3Ghi" >>"$r/.test-temp/list"
+	fx_refused "$A" test-temp-run.Nd3Abc "$A/.test-temp/list"
+	fx_pend "$HPID" "$r/.test-temp/list" "$A/.test-temp/list"
+	after_run
+	set -- $(last_event "$r" "$A/.test-temp/list")
+	if [ "$RC" = 0 ] && [ -d "$r" ] && [ -L "$r/link.Nd3Ghi" ] && [ "$1" = failed ] && has "$2" "it_holds" && hook_json && has "$HCTX" "it holds"; then
+		ok "N3 a run folder that holds a folder the checks left (a link) -> it is left too, listed failed with why, and said (control: H10, where everything inside it moves, the run folder goes)"
+	else bad "N3 a run folder holding what was left" "rc=$RC run folder:[$*] out=$(cat "$HOUT")"; fi
+	# N4 (item 4): a taken file is stale by the time in its name, not by its mtime.
+	hook_arm; command mkdir -p "$st"
+	for k in fresh old; do fx_refused "$A/$k" "f$k.Ne4Abc" "$A/$k/.test-temp/list"; done
+	now=$(date +%s)
+	_tt_real "$A/fresh/.test-temp"; printf '%s/list\n' "$_TT_R" >>"$st/$HPID.taken.$now.999991"
+	touch -t 202601010000 "$st/$HPID.taken.$now.999991"
+	_tt_real "$A/old/.test-temp"; printf '%s/list\n' "$_TT_R" >>"$st/$HPID.taken.$((now - 600)).999992"
+	fx_refused "$A" trigger.Ne4Def "$A/.test-temp/list"
+	fx_pend "$HPID" "$A/.test-temp/list"
+	after_run
+	if [ "$RC" = 0 ] && [ -d "$A/fresh/ffresh.Ne4Abc" ] && [ -e "$st/$HPID.taken.$now.999991" ] && [ ! -e "$A/old/fold.Ne4Abc" ] && [ ! -e "$st/$HPID.taken.$((now - 600)).999992" ]; then
+		ok "N4 a taken file named seconds ago is not read again, though its mtime is months old (another run has it) (control: one named ten minutes ago is, and its folder moves)"
+	else bad "N4 stale taken files" "fresh folder $([ -d "$A/fresh/ffresh.Ne4Abc" ] && echo stayed || echo moved), old folder $([ -e "$A/old/fold.Ne4Abc" ] && echo stayed || echo moved)"; fi
+	command mv -- "$st/$HPID.taken.$now.999991" "$O/" 2>/dev/null
+	# N5 (item 5): a terminal on stdin is not read (a hand run would wait on it for good).
+	hook_arm
+	if script -q /dev/null true </dev/null >/dev/null 2>&1; then
+		sleep 8 | timed 4 script -q /dev/null env -u SANDBOX_RUNTIME CLAUDE_PID=535535 XDG_STATE_HOME="$ROOT/state" "$TOOL" after-command >>"$O/tty" 2>&1
+		got=${PIPESTATUS[1]}
+		sleep 8 | timed 4 env -u SANDBOX_RUNTIME CLAUDE_PID=535535 XDG_STATE_HOME="$ROOT/state" "$TOOL" after-command >>"$O/pipe" 2>&1
+		k=${PIPESTATUS[1]}
+		if [ "$got" = 0 ] && [ "$k" = 142 ]; then
+			ok "N5 nothing pending and a terminal on stdin (a hand run) -> exit 0 at once (control: a pipe that stays open is read to its end, so it waits, and is stopped after 4 s)"
+		else bad "N5 a terminal on stdin" "terminal: exit $got; an open pipe: exit $k"; fi
+	else
+		skip "N5 a terminal on stdin" "no terminal can be opened here (script: openpty is refused, as the Claude sandbox does)"
+	fi
+	# N6 (item 6): code in the sandbox swaps a folder for a link between the checks and the move.
+	hook_arm; o="$ROOT/outside$ARM"
+	command mkdir -p "$o/mid/t.Nf6Abc" && printf 'not the test folder\n' >>"$o/mid/t.Nf6Abc/marker"
+	fx_refused "$A/mid" t.Nf6Abc "$A/.test-temp/list"
+	fx_pend "$HPID" "$A/.test-temp/list"
+	timed 30 env -u SANDBOX_RUNTIME CLAUDE_PID="$HPID" XDG_STATE_HOME="$ROOT/state" "$ROOT/race-moving/test-temp" after-command </dev/null >>"$O/race" 2>>"$O/said" &
+	k=$!
+	if wait_for "$ROOT/race-moving/paused" 10; then
+		command mv "$A/mid" "$A/mid.orig" && ln -s "$o/mid" "$A/mid"
+		wait "$k"
+		RC=$?
+		set -- $(last_event "$A/mid/t.Nf6Abc" "$A/.test-temp/list")
+		if [ "$RC" = 0 ] && [ -e "$o/mid/t.Nf6Abc/marker" ] && [ -d "$A/mid.orig/t.Nf6Abc" ] && [ "$1" = failed ] && has "$2" "is_a_link"; then
+			ok "N6 a folder on the way swapped for a link to one outside, after the checks -> nothing outside moves; the folder is left, listed failed (the walk found the link)"
+		else bad "N6 a swap after the checks" "rc=$RC outside $([ -e "$o/mid/t.Nf6Abc/marker" ] && echo stayed || echo MOVED), last=[$*]"; fi
+	else
+		kill "$k" 2>/dev/null
+		wait "$k" 2>/dev/null
+		bad "N6 a swap after the checks" "the copy never reached its pause -- INVALID TRIAL"
+	fi
+	# (Names of its own: the stand-in Trash is one flat folder, and a broken walk would already
+	# have put the swap arm's outside folder there.)
+	hook_arm; o="$ROOT/outside$ARM"
+	command mkdir -p "$o/mid/t.Nf6Ctl" && printf 'not the test folder\n' >>"$o/mid/t.Nf6Ctl/marker"
+	fx_refused "$A/mid" t.Nf6Ctl "$A/.test-temp/list"
+	fx_pend "$HPID" "$A/.test-temp/list"
+	after_run
+	set -- $(last_event "$A/mid/t.Nf6Ctl" "$A/.test-temp/list")
+	if [ "$RC" = 0 ] && [ ! -e "$A/mid/t.Nf6Ctl" ] && [ "$1" = gone ] && [ -e "$o/mid/t.Nf6Ctl/marker" ]; then
+		ok "N6 control: the same with no swap -> the folder moves, listed gone; the one outside as it was"
+	else bad "N6 control: no swap" "rc=$RC last=[$*]"; fi
+	hook_arm; o="$ROOT/outside$ARM"
+	command mkdir -p "$o/.test-temp" && printf 'outside list\n' >>"$o/.test-temp/list"
+	n=$(wc -c <"$o/.test-temp/list" | tr -d ' ')
+	fx_refused "$A" t.Ng7Abc "$A/.test-temp/list"
+	fx_pend "$HPID" "$A/.test-temp/list"
+	timed 30 env -u SANDBOX_RUNTIME CLAUDE_PID="$HPID" XDG_STATE_HOME="$ROOT/state" "$ROOT/race-moving2/test-temp" after-command </dev/null >>"$O/race" 2>>"$O/said" &
+	k=$!
+	if wait_for "$ROOT/race-moving2/paused" 10; then
+		command mv "$A/.test-temp" "$A/.test-temp.orig" && ln -s "$o/.test-temp" "$A/.test-temp"
+		wait "$k"
+		RC=$?
+		if [ "$RC" = 0 ] && [ "$(wc -c <"$o/.test-temp/list" | tr -d ' ')" = "$n" ] && command grep -qF "unwritten$TAB$A/t.Ng7Abc$TAB" "$ALOGF"; then
+			ok "N6 the list's folder swapped for a link to one outside -> its gone line is not written there (the list outside as it was), and that is logged (control: N6's no-swap arm, whose gone line is written)"
+		else bad "N6 a list swapped for a link" "rc=$RC outside list $(wc -c <"$o/.test-temp/list") bytes, were $n; log: $(command grep -c unwritten "$ALOGF")"; fi
+	else
+		kill "$k" 2>/dev/null
+		wait "$k" 2>/dev/null
+		bad "N6 a list swapped for a link" "the copy never reached its pause -- INVALID TRIAL"
+	fi
+	# N7 (item 7): one line per list in the pending file, however many tests refuse in it.
+	hook_arm
+	EXTRA="SANDBOX_RUNTIME=1 CLAUDE_PID=$HPID"; run_standin /bin/bash "$HR" ok; run_standin /bin/bash "$HR" ok
+	got=$(awk 'END { print NR }' "$HPEND" 2>/dev/null)
+	A="$CROOT/pj-$HSID/b$ARM"; command mkdir -p "$A"
+	run_standin /bin/bash "$HR" ok
+	k=$(awk 'END { print NR }' "$HPEND" 2>/dev/null)
+	if [ "$got:$k" = "1:2" ]; then
+		ok "N7 two tests refusing in one list leave the pending file one line for it (control: a test in a second list adds a second line)"
+	else bad "N7 duplicate pending lines" "one list: $got line(s); two lists: $k"; fi
+	# N8 (item 8): the no-work test and the work agree.
+	hook_arm; o="$ROOT/outside$ARM"
+	command mkdir -p "$o" && printf 'keep me\n' >>"$o/data"
+	ln -s "$o/data" "$HPEND"
+	after_run
+	if [ "$RC" = 0 ] && [ ! -e "$HPEND" ] && [ ! -L "$HPEND" ] && [ "$(cat "$o/data")" = "keep me" ] && command grep -qF "the pending file was a link" "$ALOGF" && hook_json && has "$HCTX" "a link, so it was not read"; then
+		ok "N8 a pending file that is a link -> taken out of the way to the Trash, never read or followed (what it points at as it was), logged and said (control: H1, a real pending file, is read)"
+	else bad "N8 a pending file that is a link" "rc=$RC link $([ -L "$HPEND" ] && echo stayed || echo went) data [$(cat "$o/data")] out=$(cat "$HOUT")"; fi
+	hook_arm; command mkdir -p "$st"
+	fx_refused "$A" left.Nh8Abc "$A/.test-temp/list"
+	_tt_real "$A/.test-temp"; printf '%s/list\n' "$_TT_R" >>"$st/$HPID.taken.$(( $(date +%s) - 600 )).999993"
+	after_run
+	if [ "$RC" = 0 ] && [ ! -e "$HPEND" ] && [ ! -e "$A/left.Nh8Abc" ]; then
+		ok "N8 a taken file a killed run left, with nothing pending -> the no-work test sends it on, and its folder moves (control: H2, with neither, does nothing)"
+	else bad "N8 a leftover taken file" "rc=$RC folder $([ -e "$A/left.Nh8Abc" ] && echo stayed || echo moved)"; fi
 
 	# ---- lint
 	command mkdir -p "$ROOT/lint"
@@ -1625,11 +2694,18 @@ FIXTURE
 	if [ -z "$got" ]; then ok "S2 both files parse under bash -n ($(echo /bin/bash $B)); test-temp.sh under zsh -n ($(echo /bin/zsh $Z))"
 	else bad "S2 parse" "$got: $(cat "$ROOT/parse")"; fi
 	if [ -x "$HERE/selftest-whole-read" ]; then
-		command mkdir -p "$ROOT/wr"
-		cp "$SELF" "$ROOT/wr/test-temp-selftest"
+		command mkdir -p "$ROOT/wr" "$ROOT/wr2"
+		# The hook's no-work test is the one thing allowed before it: cut those two code lines
+		# (and their comment) and the header must be the first code; left in, it is not.
+		awk '/^# FIRST, THE HOOK/ { cut = 1 } cut && /^fi   # the end of the no-work test$/ { cut = 0; n++; next } !cut { print } END { exit (n != 1) }' \
+			"$SELF" >>"$ROOT/wr/test-temp-selftest"
+		rc2=$?
+		cp "$SELF" "$ROOT/wr2/test-temp-selftest"
 		out=$("$HERE/selftest-whole-read" --check "$ROOT/wr" 2>&1); rc=$?
-		if [ "$rc" = 0 ] && has "$out" "1 of 1 bash suite(s) pass"; then ok "S3 the whole-read header is test-temp's first code (selftest-whole-read --check on a copy named *-selftest)"
-		else bad "S3 the whole-read header" "rc=$rc; $out"; fi
+		out2=$("$HERE/selftest-whole-read" --check "$ROOT/wr2" 2>&1)
+		if [ "$rc2" = 0 ] && [ "$rc" = 0 ] && has "$out" "1 of 1 bash suite(s) pass" && has "$out2" "MISSING"; then
+			ok "S3 the whole-read header is test-temp's first code but for the hook's no-work test (selftest-whole-read --check on a copy without it, named *-selftest; control: with it, the check says MISSING)"
+		else bad "S3 the whole-read header" "cut rc=$rc2; rc=$rc; $out | with the test: $out2"; fi
 	else
 		skip "S3 the whole-read header" "no selftest-whole-read beside this file ($HERE)"
 	fi
@@ -1658,7 +2734,11 @@ EOF
 	if [ ! -e "$ROOT" ]; then
 		ok "S5 the selftest's own folder went to the Trash (test -e: gone)"
 	elif [ "$TRASH" = refused ]; then
-		skip "S5 the selftest's own folder" "the Trash refused it here (the sandbox): it stays at $ROOT until the session ends"
+		if CLAUDE_PID=${ST_CLAUDE_PID-} _tt_hook_seen; then
+			skip "S5 the selftest's own folder" "the Trash refused it here (the sandbox): it stays at $ROOT until the after-command hook moves it, once this command ends"
+		else
+			skip "S5 the selftest's own folder" "the Trash refused it here (the sandbox): it stays at $ROOT until the session ends (no after-command hook has run for this Claude)"
+		fi
 	else
 		bad "S5 the selftest's own folder" "still there: $ROOT"
 	fi
@@ -1677,7 +2757,18 @@ st_end() {
 			_tt_log_to "$SELF_LIST" gone "$ROOT" "$$" "to the Trash"
 		else
 			_tt_log_to "$SELF_LIST" "$_TT_KIND" "$ROOT" "$$" "$_TT_WHY"
-			echo "  note: the selftest's own folder stays at $ROOT: $_TT_WHY (inside the sandbox it goes when the session ends)"
+			# Named to the session's own after-command hook, like any test's refused folder, and
+			# the words say the hook moves it only on its heartbeat (_tt_where).
+			_TT_W=""
+			if [ "$_TT_KIND" = refused ] && [ -n "${ST_CLAUDE_PID-}" ]; then
+				CLAUDE_PID=$ST_CLAUDE_PID _tt_pend "$SELF_LIST"
+				CLAUDE_PID=$ST_CLAUDE_PID _tt_where "$ROOT"
+			fi
+			case "$_TT_W:$_TT_PEND_OK" in
+				hook:1) echo "  note: the selftest's own folder stays at $ROOT: $_TT_WHY (the after-command hook moves it once this command ends)" ;;
+				hook:* | session:*) echo "  note: the selftest's own folder stays at $ROOT: $_TT_WHY (it goes when the session ends; no after-command hook has run for this Claude)" ;;
+				*) echo "  note: the selftest's own folder stays at $ROOT: $_TT_WHY (it stays there until you trash it)" ;;
+			esac
 		fi
 	fi
 	return 0
@@ -1687,7 +2778,9 @@ case "${1-}" in
 	run) shift; cmd_run "$@"; exit $? ;;
 	check) shift; cmd_check "$@"; exit $? ;;
 	lint) shift; cmd_lint "$@"; exit $? ;;
+	# A subshell, so that even a fault of its own cannot give the hook another exit code.
+	after-command) shift; (cmd_after "$@"); exit 0 ;;
 	--selftest) selftest; exit $? ;;
 	-h | --help | "") usage; exit 0 ;;
-	*) echo "test-temp: unknown command '$1' (run, check, lint, --selftest, --help)" >&2; exit 2 ;;
+	*) echo "test-temp: unknown command '$1' (run, check, lint, after-command, --selftest, --help)" >&2; exit 2 ;;
 esac
