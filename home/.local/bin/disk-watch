@@ -20,7 +20,8 @@
 # WHAT IT READS. Free space: `df -k /System/Volumes/Data`, the Available column (the reading
 # e-conductor takes by hand with df -h, so 6 GB means 6 GiB, 6291456 KB). The shared temp folder:
 # one `du -k -x -d 1` of /private/tmp/claude-<uid> (launchd runs it at background priority), cut
-# off after 240 s, and a size for each loose file at its top. A du with no line for the folder
+# off after 600 s, and a size for each loose file at its top. (240 s was too short: at 1:36 AM
+# on 26 Oct 2026, on a busy Mac, du ran out of time and the folder went unmeasured.) A du with no line for the folder
 # itself means "temp not measured", never "small". For a ping or a report it also measures the
 # Trash, which on 25 Oct 2026 was what filled the disk: engage's test runs move their folders
 # there, and the Trash keeps them until it is emptied.
@@ -86,7 +87,7 @@ PING="${DISK_WATCH_PING:-$HOME/.local/bin/engage-ping}"
 SESSION_DIRS="${DISK_WATCH_SESSIONS:-$HOME/.claude/sessions:$HOME/.claude_v2/sessions}"
 PROJECT_DIRS="${DISK_WATCH_PROJECTS:-$HOME/.claude/projects:$HOME/.claude_v2/projects}"
 TRASH="${DISK_WATCH_TRASH:-$HOME/.Trash}"
-DU_SECONDS=240
+DU_SECONDS=600   # inside launchd's 900 s interval, which never overlaps runs
 SEARCH_SECONDS=20
 TOP_N="${DISK_WATCH_TOP_N:-8}"
 TAB=$(printf '\t')
