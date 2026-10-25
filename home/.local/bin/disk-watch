@@ -25,9 +25,9 @@
 # Trash, which on 25 Oct 2026 was what filled the disk: engage's test runs move their folders
 # there, and the Trash keeps them until it is emptied.
 #
-# THE LIMITS. Free space under 6 GiB (Gavin's limit for starting workers). The temp folder's
-# limit is TEMP_LIMIT_KB below: empty means none yet, so the size is measured and reported but
-# never pings (Gavin's question Q2 in dotfiles-main, 25 Oct 2026, picks it).
+# THE LIMITS. Free space under 6 GiB (Gavin's limit for starting workers). The shared temp folder
+# over 6 GiB too (Gavin, dotfiles-main Q2: "6 GB", 25 Oct 2026). Empty TEMP_LIMIT_KB would mean
+# no temp limit: the size measured and reported, never pinged.
 #
 # WHEN IT PINGS. Once when a limit is crossed. Again only when it gets 1 GiB worse, after 6 hours
 # still over, or (once an hour) when the last ping did not reach a phone. "Back to normal" needs
@@ -73,7 +73,7 @@ PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:
 
 GIB=1048576
 FREE_LIMIT_KB="${DISK_WATCH_FREE_LIMIT_KB:-6291456}"   # 6 GiB: Gavin's limit for starting workers
-TEMP_LIMIT_KB="${DISK_WATCH_TEMP_LIMIT_KB-}"           # none until Gavin picks one (Q2)
+TEMP_LIMIT_KB="${DISK_WATCH_TEMP_LIMIT_KB-6291456}"    # 6 GiB (Gavin, dotfiles-main Q2, 25 Oct 2026)
 STEP_KB=$GIB                                           # ping again when 1 GiB worse
 QUIET_S=21600                                          # ... or after 6 hours still over
 MARGIN_KB=524288                                       # 512 MiB of room before "back to normal"

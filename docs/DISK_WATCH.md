@@ -10,9 +10,8 @@ Every 15 minutes, launchd runs `disk-watch` once. It reads two numbers:
 
 - **Free space** on `/System/Volumes/Data`, from `df -k`. It pings under 6 GB, Gavin's limit
   for starting workers. That is 6 GiB, because e-conductor reads the same number with `df -h`.
-- **The shared temp folder** `/private/tmp/claude-<uid>`, from `du`. Its limit waits for
-  Gavin's answer to Q2 in dotfiles-main; until then the size is measured and logged, and never
-  pings.
+- **The shared temp folder** `/private/tmp/claude-<uid>`, from `du`. It pings over 6 GB, also
+  6 GiB (Gavin, dotfiles-main Q2, 25 Oct 2026).
 
 When a limit is crossed, it pings once through `engage-ping alarm`. The ping gives the size of
 the Trash beside the temp folder's, and names the biggest folders in the shared temp folder and
