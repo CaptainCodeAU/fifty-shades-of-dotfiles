@@ -4102,6 +4102,7 @@ _snapshot_links() {
     fi
     _install_links_watch "$dir"
     _install_stuck_watch
+    _install_disk_watch
     _zshenv_links_warning
     _zshenv_colours_block
     _zshenv_optouts_block
@@ -4311,6 +4312,49 @@ PLIST
             info "herdr-stuck-watch running (launchd $label): a stuck Claude row is marked in herdr's sidebar"
         else
             warn "herdr-stuck-watch NOT started: launchctl bootstrap gui/$uid $plist failed (run it by hand to see why)"
+        fi
+    fi
+}
+
+# Run disk-watch every 15 minutes as a launchd agent (macOS; Gavin, dotfiles-main, 25 Oct 2026,
+# record #3989): it pings when free space falls under 6 GB or the shared Claude temp folder grows
+# past its limit, naming the biggest folders and the session that made each, and it moves and
+# deletes nothing. Background priority: its du of the shared temp folder took 19 to 26 s on a busy
+# Mac. Runs through the ~/.local/bin link. The plist is a real file; reloaded only when it
+# changed, so a re-run is a no-op.
+_install_disk_watch() {
+    local dir="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/disk-watch" label="com.captaincodeau.disk-watch" plist tmp changed=0 uid
+    [[ "$(check_os)" == "macos" ]] || { verbose "disk-watch: launchd agent is macOS only (skipped)"; return 0; }
+    plist="$HOME/Library/LaunchAgents/$label.plist"
+    mkdir -p "$HOME/Library/LaunchAgents" "$dir" || return 0
+    tmp="$plist.tmp.$$"
+    cat > "$tmp" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key><array><string>/bin/bash</string><string>$HOME/.local/bin/disk-watch</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>900</integer>
+  <key>ProcessType</key><string>Background</string>
+  <key>StandardErrorPath</key><string>$dir/watch.err</string>
+</dict>
+</plist>
+PLIST
+    cmp -s "$tmp" "$plist" 2>/dev/null || changed=1
+    mv -f "$tmp" "$plist"   # identical bytes when unchanged; never a delete
+    if ! _home_is_this_account; then
+        warn "disk-watch: HOME ($HOME) is not this account's home, so the launchd agent was left alone (launchd is per account, not per HOME)."
+        return 0
+    fi
+    uid=$(id -u)
+    if (( changed )) || ! launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
+        launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+        if launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null; then
+            info "disk-watch running (launchd $label): pings when free space is under 6 GB or the shared temp folder is over its limit"
+        else
+            warn "disk-watch NOT started: launchctl bootstrap gui/$uid $plist failed (run it by hand to see why)"
         fi
     fi
 }
@@ -5118,6 +5162,15 @@ uninstall() {
                 run_cmd launchctl bootout "gui/$(id -u)/com.captaincodeau.dotlinks-watch" 2>/dev/null || true
                 run_cmd mv -f "$wl" "$wl.retired-$(date +%Y%m%d-%H%M%S)"
             fi
+            # The two watches that run through the ~/.local/bin links stop with them.
+            local wj wp
+            for wj in com.captaincodeau.disk-watch com.captaincodeau.herdr-stuck-watch; do
+                wp="$HOME/Library/LaunchAgents/$wj.plist"
+                if [[ -f "$wp" ]] && _home_is_this_account; then
+                    run_cmd launchctl bootout "gui/$(id -u)/$wj" 2>/dev/null || true
+                    run_cmd mv -f "$wp" "$wp.retired-$(date +%Y%m%d-%H%M%S)"
+                fi
+            done
         else
             error "stow -D failed"
             return 1

@@ -462,6 +462,41 @@ uninst="$(code_of "$(sed -n '/^uninstall() {/,/^}/p' "$INSTALL_SH")")"
 if grep -q 'launchctl bootout' <<<"$uninst" && grep -q '_home_is_this_account' <<<"$uninst"; then ok "launchd guard: uninstall's bootout is guarded too"
 else bad "launchd guard: uninstall's bootout is guarded too" "$(grep -n -e 'launchctl bootout' -e _home_is_this_account <<<"$uninst" | head -2)"; fi
 
+# --- disk-watch's launchd agent (record #3989, 25 Oct 2026) ----------------------------
+# The same guard, the plist's schedule and priority, and no reload when nothing changed.
+dw_drive() {   # dw_drive <real|fake> <tag> : run _install_disk_watch in a fake home; print the stand-in launchctl's calls
+    local H="$WORK/dw-$2"; mkdir -p "$H/bin" "$H/home"
+    [ -x "$H/bin/launchctl" ] || { printf '#!/bin/sh\necho "launchctl $*" >> "%s/calls"\nexit 0\n' "$H" > "$H/bin/launchctl"; chmod +x "$H/bin/launchctl"; }
+    : > "$H/calls"
+    HOME="$H/home" PATH="$H/bin:$PATH" bash -c '
+        GREEN=""; RED=""; YELLOW=""; RESET=""; DIM=""; CYAN=""; BOLD=""
+        info(){ :; }; success(){ :; }; warn(){ echo "WARN $*"; }; verbose(){ :; }; check_os(){ echo macos; }
+        pretty_path(){ echo "$1"; }
+        source <(sed -n "/^_home_is_this_account() {/,/^}/p;/^_install_disk_watch() {/,/^}/p" "$1")
+        [[ "$2" == real ]] && _home_is_this_account(){ return 0; }
+        _install_disk_watch' _ "$INSTALL_SH" "$1" >/dev/null 2>&1
+    cat "$H/calls"
+}
+if grep -q '^_install_disk_watch() {' "$INSTALL_SH"; then ok "disk-watch: _install_disk_watch is defined"
+else bad "disk-watch: _install_disk_watch is defined" "not found"; fi
+if grep -qE '^[[:space:]]+_install_disk_watch$' "$INSTALL_SH"; then ok "disk-watch: the link step calls it"
+else bad "disk-watch: the link step calls it" "no call found"; fi
+dw_fake="$(dw_drive fake f)"
+if [[ -z "$dw_fake" ]]; then ok "disk-watch: a fake HOME makes no launchctl call"
+else bad "disk-watch: a fake HOME makes no launchctl call" "$(head -2 <<<"$dw_fake")"; fi
+dw_real="$(dw_drive real r)"
+if grep -q 'launchctl bootstrap' <<<"$dw_real"; then ok "disk-watch CONTROL: told the home is real, it bootstraps the agent"
+else bad "disk-watch CONTROL: told the home is real, it bootstraps the agent" "calls: ${dw_real:-none}"; fi
+dw_pl="$WORK/dw-r/home/Library/LaunchAgents/com.captaincodeau.disk-watch.plist"
+if grep -q '<key>StartInterval</key><integer>900</integer>' "$dw_pl" 2>/dev/null && grep -q '<key>ProcessType</key><string>Background</string>' "$dw_pl"; then
+    ok "disk-watch: every 900 s, at background priority"
+else bad "disk-watch: every 900 s, at background priority" "$(cat "$dw_pl" 2>&1 | head -12)"; fi
+dw_again="$(dw_drive real r)"
+if ! grep -q 'bootstrap' <<<"$dw_again" && grep -q 'launchctl print' <<<"$dw_again"; then ok "disk-watch: a re-run with the same plist only asks launchd, no reload"
+else bad "disk-watch: a re-run with the same plist only asks launchd, no reload" "calls: ${dw_again:-none}"; fi
+if grep -q 'com.captaincodeau.disk-watch' <<<"$uninst"; then ok "disk-watch: uninstall stops it too"
+else bad "disk-watch: uninstall stops it too" "not in uninstall()"; fi
+
 # --- setup_pnpm_audit_hooks: ~/.gitconfig.private may spell our hooks dir with a `~/`
 # (W-20261006-A32). Our dir by any spelling is "already active"; a foreign dir still
 # warns and an unset key still prompts, so the fix cannot pass by silencing everything.

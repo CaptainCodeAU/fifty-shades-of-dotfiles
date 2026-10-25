@@ -1,0 +1,717 @@
+#!/bin/bash
+# disk-watch -- ping Gavin before the disk fills: when free space falls under a limit, or the
+# shared Claude temp folder grows past one. The ping names the biggest folders there and the
+# session that made each. It moves and deletes NOTHING.
+#
+#   disk-watch                         one pass (launchd runs it every 15 minutes)
+#   disk-watch report [--cached] [--all]
+#                                      the shared temp folder, biggest first: size, age, live or
+#                                      ended, who made it, and the line that would move it to the
+#                                      Trash once Gavin says so. It prints those lines, never runs them.
+#   disk-watch --selftest
+#
+# WHY (record #3989; Gavin, dotfiles-main, 25 Oct 2026). Sessions of makeitso left 31 test
+# folders, 170 to 480 MB each, in the shared /tmp/claude-501, and free space fell to 4.3 GB
+# before anyone noticed. "A disk watch on a schedule that pings me when free space falls under a
+# limit (I use 6 GB for starting workers) or the shared temp folder grows past a size, naming the
+# biggest folders and which session made each. It moves and deletes nothing on its own: deletes
+# go only through the Trash, and only with my word."
+#
+# WHAT IT READS. Free space: `df -k /System/Volumes/Data`, the Available column (the reading
+# e-conductor takes by hand with df -h, so 6 GB means 6 GiB, 6291456 KB). The shared temp folder:
+# one `du -k -x -d 1` of /private/tmp/claude-<uid> (launchd runs it at background priority), cut
+# off after 240 s, and a size for each loose file at its top. A du with no line for the folder
+# itself means "temp not measured", never "small". For a ping or a report it also measures the
+# Trash, which on 25 Oct 2026 was what filled the disk: engage's test runs move their folders
+# there, and the Trash keeps them until it is emptied.
+#
+# THE LIMITS. Free space under 6 GiB (Gavin's limit for starting workers). The temp folder's
+# limit is TEMP_LIMIT_KB below: empty means none yet, so the size is measured and reported but
+# never pings (Gavin's question Q2 in dotfiles-main, 25 Oct 2026, picks it).
+#
+# WHEN IT PINGS. Once when a limit is crossed. Again only when it gets 1 GiB worse, after 6 hours
+# still over, or (once an hour) when the last ping did not reach a phone. "Back to normal" needs
+# 512 MiB of room past the limit, so a value sitting on the line does not ping again and again;
+# inside that margin no 6-hour reminder goes out, and coming back is logged, never pinged.
+# State: <state>/alerts, append-only, one line per change:
+#   <epoch> <metric free|temp> <class ok|over> <KB> <step> <notified 0|1> <began> <pinged step> <last attempt>
+# The log: <state>/watch.log, its last 500 lines. <state> is
+# ${XDG_STATE_HOME:-~/.local/state}/dotfiles/disk-watch.
+#
+# THE PING. engage-ping alarm, from the dotfiles repo (so the title starts "dotfiles"), topic
+# agents. Its lines: free space and its limit; the Trash and the temp folder; the biggest folder
+# and its maker; "Do: empty Trash, or say what to move". The next rows show when it is opened.
+# Sent with ENGAGE_PING_PUSH_ONLY=1 (a launchd job has no iMessage address: the push and the
+# Mac's sounds only) and ENGAGE_PING_NO_FOLD=1 (so this run moves nothing, not even engage-ping's
+# own pending file). Delivered means engage-ping exit 0, or 4 (sent, but it did not fit).
+#
+# WHO MADE A FOLDER, three answers, never a guess:
+#   found      a pj-<session id> folder (engage's per-session folder: its .pj-temp/owners), a
+#              Claude Code project folder (-Users-...), a known shared cache, or the earliest
+#              transcript line that names the folder, from an hour before its birth time to two
+#              minutes after it (`stat -f %B`). The name: the live session file
+#              (~/.claude/sessions, ~/.claude_v2/sessions), else the transcript's custom title,
+#              else "unnamed".
+#   unknown    searched N transcripts changed since then and none names it. Said only when the
+#              same search found the newest transcript's own session id inside it (the control).
+#   not searched (<why>)  retried next time, never remembered.
+# A loose folder is searched for only when it is among the 4 biggest rows of a ping or the 8
+# biggest of a report (report --all: every row). A found answer, and an unknown one from a complete
+# search made more than 10 minutes after the folder's birth, are remembered in <state>/makers.tsv
+# by name and birth time. The report prints a Trash line only for a row that was looked up and is
+# not live, a shared cache, or Claude Code's own; never for a group of loose files.
+#
+# EXIT 0 measured (with or without a ping that reached a phone); 1 free space could not be read,
+#      the temp folder could not be measured, or a due ping reached no phone; 2 usage.
+#
+# SEAMS (selftest only): DISK_WATCH_DF, DISK_WATCH_DU, DISK_WATCH_PING (stand-in tools);
+# DISK_WATCH_ROOT, DISK_WATCH_STATE, DISK_WATCH_TRASH, DISK_WATCH_SESSIONS, DISK_WATCH_PROJECTS (folders, the last
+# two colon-separated); DISK_WATCH_NOW (epoch seconds); DISK_WATCH_FREE_LIMIT_KB,
+# DISK_WATCH_TEMP_LIMIT_KB, DISK_WATCH_REPO, DISK_WATCH_TOP_N.
+set -u
+PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+GIB=1048576
+FREE_LIMIT_KB="${DISK_WATCH_FREE_LIMIT_KB:-6291456}"   # 6 GiB: Gavin's limit for starting workers
+TEMP_LIMIT_KB="${DISK_WATCH_TEMP_LIMIT_KB-}"           # none until Gavin picks one (Q2)
+STEP_KB=$GIB                                           # ping again when 1 GiB worse
+QUIET_S=21600                                          # ... or after 6 hours still over
+MARGIN_KB=524288                                       # 512 MiB of room before "back to normal"
+VOLUME="/System/Volumes/Data"
+ROOT="${DISK_WATCH_ROOT:-/private/tmp/claude-$(id -u)}"
+STATE="${DISK_WATCH_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/disk-watch}"
+DF="${DISK_WATCH_DF:-df}"
+DU="${DISK_WATCH_DU:-du}"
+PING="${DISK_WATCH_PING:-$HOME/.local/bin/engage-ping}"
+SESSION_DIRS="${DISK_WATCH_SESSIONS:-$HOME/.claude/sessions:$HOME/.claude_v2/sessions}"
+PROJECT_DIRS="${DISK_WATCH_PROJECTS:-$HOME/.claude/projects:$HOME/.claude_v2/projects}"
+TRASH="${DISK_WATCH_TRASH:-$HOME/.Trash}"
+DU_SECONDS=240
+SEARCH_SECONDS=20
+TOP_N="${DISK_WATCH_TOP_N:-8}"
+TAB=$(printf '\t')
+
+now() { if [ -n "${DISK_WATCH_NOW:-}" ]; then printf '%s' "$DISK_WATCH_NOW"; else date +%s; fi; }
+
+# The dotfiles repo, so engage-ping's title says "dotfiles": this file's real path, minus
+# /home/.local/bin/disk-watch.
+repo_dir() {
+    local self
+    [ -n "${DISK_WATCH_REPO:-}" ] && { printf '%s' "$DISK_WATCH_REPO"; return 0; }
+    self=$(/usr/bin/perl -MCwd=abs_path -e 'print abs_path(shift)' "$0" 2>/dev/null)
+    case "$self" in
+        */home/.local/bin/disk-watch) printf '%s' "${self%/home/.local/bin/disk-watch}" ;;
+        *) printf '%s' "$HOME" ;;
+    esac
+}
+
+# One line in watch.log, kept to its last 500 lines (herdr-stuck-watch's way).
+note() {
+    local log="$STATE/watch.log"
+    printf '%s %s\n' "$(date '+%FT%T%z')" "$*" >> "$log" 2>/dev/null || return 0
+    [ "$(wc -l < "$log" 2>/dev/null)" -le 500 ] || { tail -n 500 "$log" > "$log.tmp" && command mv -f "$log.tmp" "$log"; } 2>/dev/null
+}
+
+kb_h() { # <KB> -> "5.8 GB", "365 MB" or "12 KB" (binary units, as df -h counts)
+    awk -v k="$1" 'BEGIN { if (k >= 1048576) printf "%.1f GB", k / 1048576; else if (k >= 1024) printf "%d MB", k / 1024; else printf "%d KB", k }'
+}
+
+age_h() { # <seconds> -> "3m", "5h", "2d"
+    awk -v s="$1" 'BEGIN { if (s < 0) s = 0; if (s < 3600) printf "%dm", s / 60; else if (s < 172800) printf "%dh", s / 3600; else printf "%dd", s / 86400 }'
+}
+
+# ------------------------------------------------------------------ measuring
+read_free() { # -> FREE_KB; rc 1 when df gave no number
+    local out
+    FREE_KB=""
+    out=$("$DF" -k "$VOLUME" 2>/dev/null) || return 1
+    FREE_KB=$(printf '%s\n' "$out" | awk 'NR == 2 { print $4 }')
+    case "$FREE_KB" in '' | *[!0-9]*) FREE_KB=""; return 1 ;; esac
+    return 0
+}
+
+# measure_temp -> TEMP_KB and <state>/du.out; rc 0 measured, 1 not measured (no line for the
+# folder itself: du was cut off or failed), 2 the folder does not exist (TEMP_KB 0). macOS du will
+# not take -a with -d, so du lists the folders and build_table measures the loose files itself.
+measure_temp() {
+    local out="$STATE/du.out.$$" err="$STATE/du.err.$$"
+    TEMP_KB=""; TEMP_GONE=0
+    if [ ! -d "$ROOT" ]; then TEMP_KB=0; : > "$STATE/du.out"; return 2; fi
+    /usr/bin/perl -e 'alarm shift; exec @ARGV or exit 127' "$DU_SECONDS" "$DU" -k -x -d 1 "$ROOT" > "$out" 2> "$err"
+    TEMP_GONE=$(grep -c 'No such file' "$err" 2>/dev/null) || TEMP_GONE=0
+    TEMP_KB=$(awk -F"$TAB" -v r="$ROOT" '$2 == r { k = $1 } END { print k }' "$out")
+    command mv -f "$out" "$STATE/du.out"; command mv -f "$err" "$STATE/du.err"
+    case "$TEMP_KB" in '' | *[!0-9]*) TEMP_KB=""; return 1 ;; esac
+    return 0
+}
+
+# measure_trash -> TRASH_KB, the size of the Trash (du, cut off after 60 s); rc 1 when it could not
+# be read (a launchd job may not be allowed to read ~/.Trash). Measured only for a ping or a report.
+measure_trash() {
+    local out
+    TRASH_KB=""
+    out=$(/usr/bin/perl -e 'alarm shift; exec @ARGV or exit 127' 60 "$DU" -sk "$TRASH" 2>/dev/null)
+    TRASH_KB=$(printf '%s\n' "$out" | awk -F"$TAB" 'NR == 1 { print $1 }')
+    case "$TRASH_KB" in '' | *[!0-9]*) TRASH_KB=""; return 1 ;; esac
+    return 0
+}
+
+# build_table: <state>/du.out (the folders) plus the loose entries read here -> <state>/table.tsv,
+# biggest first, one row per folder and one per group of loose files (the name up to its first
+# digit: makeitso-pending-proj-1.123 and makeitso-pending-proj-2.456 are one row):
+#   <KB> <kind folder|file|files> <name> <count> <path or pattern> <newest change, for files>
+# A loose file counts its allocated blocks, as du does; a folder made after du ran counts 0.
+build_table() {
+    /usr/bin/perl -e '
+        my $root = shift; my (%du, %kb, %n, %first, %newest, @rows);
+        while (<STDIN>) {
+            chomp; my ($k, $p) = split /\t/, $_, 2;
+            next unless defined $p && $p ne $root && $k =~ /^\d+$/;
+            (my $name = $p) =~ s{^.*/}{}; $du{$name} = $k;
+        }
+        opendir(my $dh, $root) or exit 0;
+        while (defined(my $name = readdir $dh)) {
+            next if $name eq "." || $name eq "..";
+            my $p = "$root/$name";
+            if (-d $p && !-l $p) { push @rows, [$du{$name} // 0, "folder", $name, 1, $p, 0]; next }
+            my @st = lstat $p or next;
+            my $k = int((($st[12] // 0) + 1) / 2);
+            (my $f = $name) =~ s/[0-9].*$//s; $f =~ s/[-._]+$//; $f = $name if $f eq "";
+            $kb{$f} += $k; $n{$f}++; $first{$f} //= $name;
+            $newest{$f} = $st[9] if !defined $newest{$f} || $st[9] > $newest{$f};
+        }
+        closedir $dh;
+        for my $f (keys %kb) {
+            if ($n{$f} > 1) { push @rows, [$kb{$f}, "files", "$f*", $n{$f}, "$root/$f*", $newest{$f}] }
+            else { push @rows, [$kb{$f}, "file", $first{$f}, 1, "$root/$first{$f}", $newest{$f}] }
+        }
+        print join("\t", @$_), "\n" for sort { $b->[0] <=> $a->[0] || $a->[2] cmp $b->[2] } @rows;
+    ' "$ROOT" < "$STATE/du.out" > "$STATE/table.tsv.$$" && command mv -f "$STATE/table.tsv.$$" "$STATE/table.tsv"
+}
+
+# ------------------------------------------------------------------ who made it
+# session_file <sid> -> the live session file whose sessionId is <sid>, or nothing
+session_file() {
+    local d f oldifs="$IFS"
+    IFS=:
+    for d in $SESSION_DIRS; do
+        IFS="$oldifs"
+        for f in "$d"/*.json; do
+            [ -f "$f" ] || continue
+            grep -q "\"sessionId\":\"$1\"" "$f" 2>/dev/null && { printf '%s' "$f"; return 0; }
+        done
+    done
+    IFS="$oldifs"
+    return 0
+}
+
+# session_live <sid>: its session file exists and its pid answers (a refusal, EPERM, means the
+# process exists; only "No such process" means it is gone).
+session_live() {
+    local f pid msg
+    f=$(session_file "$1"); [ -n "$f" ] || return 1
+    pid=$(jq -r '.pid // empty' "$f" 2>/dev/null)
+    case "$pid" in '' | *[!0-9]*) return 1 ;; esac
+    msg=$(kill -0 "$pid" 2>&1) && return 0
+    case "$msg" in *"not permitted"*) return 0 ;; esac
+    return 1
+}
+
+# session_name <sid> -> the live session file's name, else the transcript's last custom title (or
+# agent name), else "unnamed"
+session_name() {
+    local f n d t oldifs="$IFS"
+    f=$(session_file "$1")
+    if [ -n "$f" ]; then
+        n=$(jq -r '.name // empty' "$f" 2>/dev/null)
+        [ -n "$n" ] && { printf '%s' "$n"; return 0; }
+    fi
+    IFS=:
+    for d in $PROJECT_DIRS; do
+        IFS="$oldifs"
+        for t in "$d"/*/"$1".jsonl; do
+            [ -f "$t" ] || continue
+            n=$(/usr/bin/perl -ne 'if (/"type":"(?:custom-title|agent-name)","(?:customTitle|agentName)":"([^"]{1,80})"/) { $n = $1 } END { print $n // "" }' "$t" 2>/dev/null)
+            [ -n "$n" ] && { printf '%s' "$n"; return 0; }
+        done
+    done
+    IFS="$oldifs"
+    printf 'unnamed'
+}
+
+# search_maker <name> <birth epoch> -> "found <sid> <epoch>" | "unknown <n> <since epoch>" |
+# "not searched <why>". The earliest line in a transcript changed since birth-10min that names
+# the folder as a path part (/<name> not followed by a name character, so fwb3 never matches
+# fwb3x or a1fwb3c), between birth-1h and birth+2min.
+search_maker() {
+    SEARCH_NAME="$1" SEARCH_BIRTH="$2" SEARCH_DIRS="$PROJECT_DIRS" \
+    /usr/bin/perl -MTime::Local=timegm -MFile::Glob=bsd_glob -e '
+        my ($name, $birth) = ($ENV{SEARCH_NAME}, $ENV{SEARCH_BIRTH});
+        my $since = $birth - 600; my @files;
+        alarm shift;
+        local $SIG{ALRM} = sub { print "not searched over the time budget\n"; exit 0 };
+        for my $d (split /:/, $ENV{SEARCH_DIRS}) {
+            next unless -d $d;
+            for my $f (bsd_glob("$d/*/*.jsonl"), bsd_glob("$d/*/*/subagents/*.jsonl")) {
+                my $m = (stat $f)[9]; push @files, [$f, $m] if defined $m && $m >= $since;
+            }
+        }
+        unless (@files) { print "not searched: no transcript changed since then\n"; exit 0 }
+        my $total = @files;
+        @files = sort { $b->[1] <=> $a->[1] } @files; @files = @files[0 .. 399] if @files > 400;
+        # The control: the newest top-level transcript must contain its own session id.
+        my ($ctl) = grep { $_->[0] =~ m{/[0-9a-f-]{36}\.jsonl$} } @files;
+        unless ($ctl) { print "not searched: no session transcript to check the search with\n"; exit 0 }
+        (my $csid = $ctl->[0]) =~ s{^.*/|\.jsonl$}{}g;
+        my $seen = 0;
+        if (open my $fh, "<", $ctl->[0]) { while (<$fh>) { if (index($_, $csid) >= 0) { $seen = 1; last } } close $fh }
+        unless ($seen) { print "not searched: the search could not find a known session id (control)\n"; exit 0 }
+        my $re = qr{/\Q$name\E(?![A-Za-z0-9._-])};
+        my ($best, $bsid, $bts);
+        for my $e (@files) {
+            open my $fh, "<", $e->[0] or next;
+            while (my $l = <$fh>) {
+                next unless index($l, $name) >= 0 && $l =~ $re;
+                next unless $l =~ /"timestamp":"(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)/;
+                my $ts = timegm($6, $5, $4, $3, $2 - 1, $1);
+                next if $ts < $birth - 3600 || $ts > $birth + 120;
+                my ($sid) = $l =~ /"sessionId":"([0-9a-f-]{36})"/;
+                ($sid = $e->[0]) =~ s{^.*/|\.jsonl$}{}g unless $sid;
+                if (!defined $bts || $ts < $bts) { ($bts, $bsid) = ($ts, $sid) }
+                last;
+            }
+            close $fh;
+        }
+        if (defined $bts) { print "found $bsid $bts\n" } else { printf "unknown %d %d %d\n", scalar @files, $since, $total }
+    ' "$SEARCH_SECONDS" 2>/dev/null || printf 'not searched: the search failed\n'
+}
+
+# cheap_kind <name>: maker() answers it without a transcript search
+cheap_kind() {
+    case "$1" in pj-* | -Users-* | uvcache | pnpm-runtime | zsh | .DS_Store | .pj-temp-sweep.lock | engage-ping-refused.log) return 0 ;; esac
+    return 1
+}
+
+# maker <kind> <name> <path> -> "<state>\t<made by>" (state live, ended or -)
+maker() {
+    local kind="$1" name="$2" path="$3" sid birth hit res f
+    case "$name" in
+        pj-*)
+            sid="${name#pj-}"
+            if [ -r "$path/.pj-temp/owners" ]; then
+                f=$(awk -F"$TAB" 'NR == 1 { print $1 }' "$path/.pj-temp/owners" 2>/dev/null)
+                [ -n "$f" ] && sid="$f"
+            fi
+            if session_live "$sid"; then printf 'live\t%s (its own folder)' "$(session_name "$sid")"
+            else printf 'ended\t%s (its own folder)' "$(session_name "$sid")"; fi
+            return 0 ;;
+        -Users-*)
+            printf -- '-\tClaude Code task files for %s' "$(printf '%s' "$name" | sed -E 's/^-Users-[^-]+-(CODE-)?//')"
+            return 0 ;;
+        uvcache | pnpm-runtime | zsh)
+            printf -- '-\ta shared cache every session uses'
+            return 0 ;;
+        .DS_Store) printf -- '-\tmacOS Finder'; return 0 ;;
+        .pj-temp-sweep.lock) printf -- "-\tengage's temp sweep (its lock)"; return 0 ;;
+        engage-ping-refused.log) printf -- "-\tengage-ping (pings refused inside the sandbox)"; return 0 ;;
+    esac
+    [ "$kind" = folder ] || [ "$kind" = file ] || { printf -- "-\ta group of loose files: who made them is not looked up"; return 0; }
+    birth=$(stat -f %B "$path" 2>/dev/null)
+    case "$birth" in '' | *[!0-9]*) printf -- '-\tnot searched: no birth time'; return 0 ;; esac
+    hit=$(awk -F"$TAB" -v n="$name" -v b="$birth" '$1 == n && $2 == b { r = $3 } END { print r }' "$STATE/makers.tsv" 2>/dev/null)
+    if [ -n "$hit" ]; then res="$hit"
+    else
+        res=$(search_maker "$name" "$birth")
+        # Remember a found answer; an unknown one only from a complete search (not cut to the
+        # newest 400) made more than 10 minutes after the folder's birth, when the creating line
+        # can no longer be still on its way into a transcript.
+        set -- $res
+        case "$1" in
+            found) printf '%s\t%s\t%s\n' "$name" "$birth" "$res" >> "$STATE/makers.tsv" ;;
+            unknown) [ "${4:-0}" -le "${2:-0}" ] && [ $(( $(now) - birth )) -gt 600 ] \
+                         && printf '%s\t%s\t%s\n' "$name" "$birth" "$res" >> "$STATE/makers.tsv" ;;
+        esac
+    fi
+    case "$res" in
+        found*)
+            set -- $res
+            if session_live "$2"; then printf 'live\t%s (at %s)' "$(session_name "$2")" "$(date -r "$3" '+%-I:%M %p')"
+            else printf 'ended\t%s (at %s)' "$(session_name "$2")" "$(date -r "$3" '+%-I:%M %p')"; fi ;;
+        unknown*)
+            set -- $res
+            if [ "${4:-0}" -gt "${2:-0}" ]; then
+                printf -- '-\tunknown (searched the newest %s of %s transcripts since %s)' "$2" "$4" "$(date -r "$3" '+%-I:%M %p')"
+            else
+                printf -- '-\tunknown (searched %s transcripts since %s)' "$2" "$(date -r "$3" '+%-I:%M %p')"
+            fi ;;
+        *) printf -- '-\t%s' "$res" ;;
+    esac
+}
+
+# ------------------------------------------------------------------ deciding
+last_alert() { awk -F"$TAB" -v m="$1" '$2 == m { l = $0 } END { print l }' "$STATE/alerts" 2>/dev/null; }
+
+# judge <metric> <KB> <limit KB> -> J_CLASS J_STEP J_DUE (1 when a ping is due) J_WHY, from the
+# metric's last alert line. free is over below its limit; temp is over above it.
+judge() {
+    local m="$1" v="$2" lim="$3" prev pclass pnot ppstep plast t over back step
+    prev=$(last_alert "$m")
+    pclass=$(printf '%s' "$prev" | cut -f3); pnot=$(printf '%s' "$prev" | cut -f6)
+    ppstep=$(printf '%s' "$prev" | cut -f8); plast=$(printf '%s' "$prev" | cut -f9)
+    [ -n "$pclass" ] || pclass=ok
+    case "$ppstep" in '' | *[!0-9-]*) ppstep=-1 ;; esac
+    case "$plast" in '' | *[!0-9]*) plast=0 ;; esac
+    t=$(now)
+    if [ "$m" = free ]; then
+        over=$(( v < lim )); back=$(( v >= lim + MARGIN_KB )); step=$(( (lim - v) / STEP_KB ))
+    else
+        over=$(( v > lim )); back=$(( v <= lim - MARGIN_KB )); step=$(( (v - lim) / STEP_KB ))
+    fi
+    [ "$step" -ge 0 ] || step=0
+    J_DUE=0; J_WHY=""; J_STEP=$step
+    if [ "$pclass" = over ]; then
+        if [ "$back" -eq 1 ]; then J_CLASS=ok; return 0; fi
+        J_CLASS=over
+        # A failed ping is tried again once an hour, not every pass: engage-ping can fail every
+        # time (a log it cannot write, ntfy switched off), and four alarm sounds every 15 minutes
+        # would be the result. Inside the margin, back on the good side of the limit, no reminder.
+        if [ "$step" -gt "$ppstep" ]; then J_DUE=1; J_WHY="worse"
+        elif [ "$pnot" = 0 ]; then
+            [ $(( t - plast )) -ge 3600 ] && { J_DUE=1; J_WHY="the last ping did not arrive (tried again hourly)"; }
+        elif [ "$over" -eq 1 ] && [ $(( t - plast )) -ge "$QUIET_S" ]; then J_DUE=1; J_WHY="still over after 6 hours"; fi
+    elif [ "$over" -eq 1 ]; then
+        J_CLASS=over; J_DUE=1; J_WHY="crossed"
+    else
+        J_CLASS=ok
+    fi
+    return 0
+}
+
+# alert <metric> <class> <KB> <step> <notified> <pinged step> <last attempt>: one alerts line; began
+# carries over while the class stays over.
+alert() {
+    local prev pclass pbegan began t
+    t=$(now); prev=$(last_alert "$1")
+    pclass=$(printf '%s' "$prev" | cut -f3); pbegan=$(printf '%s' "$prev" | cut -f7)
+    began=$t; [ "$pclass" = "$2" ] && [ -n "$pbegan" ] && began=$pbegan
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$t" "$1" "$2" "$3" "$4" "$5" "$began" "$6" "$7" >> "$STATE/alerts"
+}
+
+cut40() { printf '%s' "$1" | /usr/bin/perl -CSD -ne 'chomp; print substr($_, 0, 40)'; }
+
+# row_line <n> -> "<name> <size>, <made by>" for table row n (1-based), or nothing
+row_line() {
+    local line kb kind name count path st mk
+    line=$(sed -n "${1}p" "$STATE/table.tsv" 2>/dev/null); [ -n "$line" ] || return 0
+    IFS="$TAB" read -r kb kind name count path newest <<EOF
+$line
+EOF
+    mk=$(maker "$kind" "$name" "$path"); mk="${mk#*"$TAB"}"; mk="${mk% (its own folder)}"; mk="${mk% (at *}"
+    [ "$kind" = files ] && name="$name x$count"
+    printf '%s %s, %s' "$name" "$(kb_h "$kb")" "$mk"
+}
+
+# ping_now <free over 0|1> <temp over 0|1> -> rc 0 when it reached a phone
+ping_now() {
+    local fo="$1" to="$2" summary l1 l2 l3 r2 r3 r4 rc tr tl
+    if [ "$fo" -eq 1 ]; then summary="$(kb_h "$FREE_KB") free on disk"; else summary="temp folder $(kb_h "$TEMP_KB")"; fi
+    l1="Free: $(kb_h "$FREE_KB"), limit $(kb_h "$FREE_LIMIT_KB")"
+    # The Trash and the temp folder share a line: on 25 Oct 2026 the Trash, not the temp folder,
+    # was what filled the disk (engage's test runs move their folders there).
+    if measure_trash; then tr="$(kb_h "$TRASH_KB")"; else tr="not readable"; fi
+    if [ -n "$TEMP_KB" ]; then tl="$(kb_h "$TEMP_KB")"; else tl="not measured"; fi
+    l2=$(cut40 "Trash: $tr; temp folder $tl")
+    l3=$(cut40 "Top: $(row_line 1)")
+    r2=$(row_line 2); r3=$(row_line 3); r4=$(row_line 4)
+    ( builtin cd "$(repo_dir)" 2>/dev/null || builtin cd "$HOME"
+      ENGAGE_PING_PUSH_ONLY=1 ENGAGE_PING_NO_FOLD=1 "$PING" alarm "$summary" \
+        --line "$l1" --line "$l2" --line "$l3" --you "empty Trash, or say what to move" \
+        ${r2:+--more "Next: $r2"} ${r3:+--more "Then: $r3"} ${r4:+--more "Then: $r4"} \
+        ${TEMP_LIMIT_KB:+--more "Limit: the temp folder pings over $(kb_h "$TEMP_LIMIT_KB")"} \
+        --more "Note: the Trash frees space only once emptied" \
+        --next "disk-watch report lists every folder" --topic agents ) > "$STATE/ping.out" 2>&1
+    rc=$?
+    note "ping rc=$rc: $summary | $l1 | $l2 | $l3"
+    [ "$rc" -eq 4 ] && note "ping did not fit the lock screen: $(tr '\n' ' ' < "$STATE/ping.out" | cut -c1-300)"
+    [ "$rc" -eq 0 ] || [ "$rc" -eq 4 ]
+}
+
+# ------------------------------------------------------------------ one pass
+pass() {
+    local rc=0 temp_rc fd=0 td=0 fo=0 to=0 fwhy="" twhy="" delivered fclass="" fstep=0 tclass="" tstep=0
+    mkdir -p "$STATE" 2>/dev/null || { echo "disk-watch: cannot make $STATE" >&2; return 1; }
+    if ! read_free; then
+        note "free not measured: $DF -k $VOLUME gave no number"
+        echo "disk-watch: free space not measured ($DF -k $VOLUME gave no number)" >&2
+        return 1
+    fi
+    measure_temp; temp_rc=$?
+    if [ "$temp_rc" -eq 1 ]; then
+        note "temp not measured: du gave no line for $ROOT (cut off after ${DU_SECONDS}s, or failed): $(tr '\n' ' ' < "$STATE/du.err" 2>/dev/null | cut -c1-200)"
+        rc=1
+    fi
+    note "free=$FREE_KB temp=${TEMP_KB:-unmeasured} gone-mid-scan=${TEMP_GONE:-0}"
+    build_table   # every pass, so `report --cached` is at most 15 minutes old
+
+    judge free "$FREE_KB" "$FREE_LIMIT_KB"; fclass=$J_CLASS; fstep=$J_STEP; fd=$J_DUE; fwhy=$J_WHY
+    [ "$fclass" = over ] && fo=1
+    if [ -n "$TEMP_KB" ] && [ -n "$TEMP_LIMIT_KB" ]; then
+        judge temp "$TEMP_KB" "$TEMP_LIMIT_KB"; tclass=$J_CLASS; tstep=$J_STEP; td=$J_DUE; twhy=$J_WHY
+        [ "$tclass" = over ] && to=1
+    fi
+
+    if [ "$fd" -eq 1 ] || [ "$td" -eq 1 ]; then
+        if ping_now "$fo" "$to"; then delivered=1; else delivered=0; rc=1; fi
+        note "pinged (free: ${fwhy:-not due}; temp: ${twhy:-not due}), delivered=$delivered"
+        # The step and the time are those of this attempt, delivered or not, so a ping that keeps
+        # failing is tried again hourly (judge), not on every pass.
+        [ "$fo" -eq 1 ] && alert free over "$FREE_KB" "$fstep" "$delivered" "$fstep" "$(now)"
+        [ "$to" -eq 1 ] && alert temp over "$TEMP_KB" "$tstep" "$delivered" "$tstep" "$(now)"
+    fi
+    # Back to normal: logged, never pinged.
+    if [ "$fclass" = ok ] && [ "$(last_alert free | cut -f3)" = over ]; then alert free ok "$FREE_KB" 0 1 -1 0; note "free back to normal: $(kb_h "$FREE_KB")"; fi
+    if [ "$tclass" = ok ] && [ "$(last_alert temp | cut -f3)" = over ]; then alert temp ok "$TEMP_KB" 0 1 -1 0; note "temp back to normal: $(kb_h "$TEMP_KB")"; fi
+    return "$rc"
+}
+
+# ------------------------------------------------------------------ report
+report() {
+    local cached=0 all=0 a n=0 total shown kb kind name count path mk st made t cmd
+    for a in "$@"; do
+        case "$a" in --cached) cached=1 ;; --all) all=1 ;; *) echo "disk-watch: unknown report option: $a" >&2; return 2 ;; esac
+    done
+    mkdir -p "$STATE" 2>/dev/null
+    read_free || FREE_KB=""
+    if [ "$cached" -eq 1 ] && [ -s "$STATE/table.tsv" ]; then
+        TEMP_KB=$(awk -F"$TAB" -v r="$ROOT" '$2 == r { k = $1 } END { print k }' "$STATE/du.out" 2>/dev/null)
+        echo "From the last measurement, $(date -r "$STATE/table.tsv" '+%-I:%M %p %-d %b'):"
+    else
+        measure_temp || true
+        build_table
+    fi
+    printf 'Free space: %s on %s (pings under %s).\n' "$( [ -n "$FREE_KB" ] && kb_h "$FREE_KB" || echo "NOT MEASURED")" "$VOLUME" "$(kb_h "$FREE_LIMIT_KB")"
+    printf 'Shared temp folder %s: %s (%s).\n' "$ROOT" "$( [ -n "${TEMP_KB:-}" ] && kb_h "$TEMP_KB" || echo "NOT MEASURED")" \
+        "$( [ -n "$TEMP_LIMIT_KB" ] && echo "pings over $(kb_h "$TEMP_LIMIT_KB")" || echo "no size limit set yet")"
+    if [ "$cached" -eq 0 ]; then
+        if measure_trash; then printf 'The Trash: %s (it frees space only once emptied).\n' "$(kb_h "$TRASH_KB")"
+        else echo "The Trash: not readable here."; fi
+    fi
+    total=$(grep -c . "$STATE/table.tsv" 2>/dev/null) || total=0
+    t=$(now)
+    printf '%-9s %-5s %-12s %-6s %-46s %s\n' SIZE AGE KIND STATE NAME "MADE BY"
+    : > "$STATE/report.cmds"
+    while IFS="$TAB" read -r kb kind name count path newest; do
+        [ -n "$kb" ] || continue
+        n=$((n + 1))
+        if [ "$all" -eq 0 ] && [ "$n" -gt 20 ]; then continue; fi
+        # A session's own folder and the known kinds cost no search, so they are always looked up:
+        # a Trash line is never offered for a folder whose session was not checked.
+        if [ "$all" -eq 1 ] || [ "$n" -le "$TOP_N" ] || cheap_kind "$name"; then mk=$(maker "$kind" "$name" "$path")
+        else mk="-${TAB}not looked up (report --all looks up every row)"; fi
+        st="${mk%%"$TAB"*}"; mk="${mk#*"$TAB"}"
+        if [ "$kind" = files ]; then made="${newest:-}"; kind="files x$count"    # its newest file
+        else made=$(stat -f %B "$path" 2>/dev/null); fi                            # its birth
+        case "$made" in '' | *[!0-9]*) made="?" ;; *) made=$(age_h $(( t - made ))) ;; esac
+        printf '%-9s %-5s %-12s %-6s %-46s %s\n' "$(kb_h "$kb")" "$made" "$kind" "$st" "$name" "$mk"
+        # A Trash line only for one folder or file that was looked up and found ended, or searched
+        # and unknown. Never for a group of loose files (a pattern can catch files outside the
+        # group), a live session, a shared cache, Claude Code's own folder, or a row not checked.
+        case "$st:$mk" in
+            live:* | *"shared cache"* | *"Claude Code task files"* | *"not looked up"* | *"not searched"* | *"macOS Finder"* | *"temp sweep"* | *"engage-ping ("*) ;;
+            *)  case "$kind" in
+                    folder) printf '  rm -rf %s\n' "$(printf '%q' "$path")" >> "$STATE/report.cmds" ;;
+                    file) printf '  rm -f %s\n' "$(printf '%q' "$path")" >> "$STATE/report.cmds" ;;
+                esac ;;
+        esac
+    done < "$STATE/table.tsv"
+    shown=$n; [ "$all" -eq 0 ] && [ "$n" -gt 20 ] && shown=20
+    if [ "$shown" -eq "$total" ]; then printf 'showed all %s rows (nothing hidden)\n' "$total"
+    else printf 'showed %s of %s rows -- %s HIDDEN (report --all shows every row)\n' "$shown" "$total" "$(( total - shown ))"; fi
+    if [ -s "$STATE/report.cmds" ]; then
+        echo "To move one of these to the Trash, only once Gavin says so (bare rm and find's rm are the Trash):"
+        cat "$STATE/report.cmds"
+    fi
+    echo "Moving to the Trash frees no space until the Trash is emptied."
+}
+
+# ------------------------------------------------------------------ selftest
+selftest() {
+    local fx pass_n=0 fail_n=0 t0 out c rc before after sid1 sid2 sid3 sidA sidB iso pl base="${TMPDIR:-/tmp}"
+    fx=$(mktemp -d "${base%/}/disk-watch-selftest.XXXXXX") || { echo "disk-watch selftest: cannot make a temp folder" >&2; exit 2; }
+    # shellcheck disable=SC2064
+    trap "builtin cd /; rm -rf '$fx' >/dev/null 2>&1; test -e '$fx' && echo 'disk-watch selftest: its fixture folder could not go to the Trash (the sandbox refuses it), left in $fx'" EXIT
+    trap 'exit 130' INT; trap 'exit 143' TERM; trap 'exit 129' HUP
+    ok() { pass_n=$((pass_n + 1)); echo "  ok   $1"; }
+    bad() { fail_n=$((fail_n + 1)); echo "  FAIL $1"; }
+    mkdir -p "$fx/bin" "$fx/root" "$fx/state" "$fx/sessions" "$fx/projects/-proj-a" "$fx/projects/-proj-b" "$fx/repo" "$fx/trash"
+    dd if=/dev/zero of="$fx/trash/old-run" bs=1024 count=2048 2>/dev/null
+    # Stand-ins. df prints $FX_FREE as the Available column, or fails with FX_DF_FAIL=1. du runs the
+    # real du and logs each call; FX_DU_NOTOTAL=1 drops the line for the folder itself. ping logs
+    # its arguments, folder and two switches, then exits $FX_PING_RC.
+    cat > "$fx/bin/df" <<'EOF'
+#!/bin/bash
+[ "${FX_DF_FAIL:-0}" = 1 ] && exit 1
+printf 'Filesystem 1024-blocks Used Available Capacity iused ifree %%iused Mounted on\n/dev/disk3s5 239362496 200000000 %s 94%% 1 1 1%% /System/Volumes/Data\n' "$FX_FREE"
+EOF
+    cat > "$fx/bin/du" <<EOF
+#!/bin/bash
+echo call >> "$fx/du.calls"
+if [ "\${FX_DU_NOTOTAL:-0}" = 1 ]; then /usr/bin/du "\$@" | grep -v "	$fx/root\$"; else /usr/bin/du "\$@"; fi
+EOF
+    cat > "$fx/bin/ping" <<EOF
+#!/bin/bash
+n=\$(( \$(cat "$fx/ping.n" 2>/dev/null || echo 0) + 1 )); echo \$n > "$fx/ping.n"
+{ echo "PWD=\$PWD"; echo "PUSH_ONLY=\${ENGAGE_PING_PUSH_ONLY:-}"; echo "NO_FOLD=\${ENGAGE_PING_NO_FOLD:-}"; for a in "\$@"; do printf 'ARG=%s\n' "\$a"; done; } > "$fx/ping.\$n"
+exit "\${FX_PING_RC:-0}"
+EOF
+    chmod +x "$fx/bin/df" "$fx/bin/du" "$fx/bin/ping"
+    export DISK_WATCH_DF="$fx/bin/df" DISK_WATCH_DU="$fx/bin/du" DISK_WATCH_PING="$fx/bin/ping" \
+        DISK_WATCH_ROOT="$fx/root" DISK_WATCH_STATE="$fx/state" DISK_WATCH_SESSIONS="$fx/sessions" \
+        DISK_WATCH_PROJECTS="$fx/projects" DISK_WATCH_REPO="$fx/repo" DISK_WATCH_TEMP_LIMIT_KB="" \
+        DISK_WATCH_TRASH="$fx/trash"
+    pings() { cat "$fx/ping.n" 2>/dev/null || echo 0; }
+    lastping() { cat "$fx/ping.$(pings)" 2>/dev/null; }
+    t0=$(date +%s)
+    sid1=11111111-1111-4111-8111-111111111111; sid2=22222222-2222-4222-8222-222222222222
+    sid3=33333333-3333-4333-8333-333333333333; sidA=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+    sidB=bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
+    # The temp folder: fwb3 is the biggest; a live pj folder; an ended pj folder named only by its
+    # transcript; one with no name anywhere; a Claude Code folder; a shared cache; a lonely folder
+    # nobody names; a decoy whose name only starts with fwb3; a group of loose files.
+    mkdir -p "$fx/root/fwb3/home" "$fx/root/pj-$sid1/.pj-temp" "$fx/root/pj-$sid2" "$fx/root/pj-$sid3" \
+        "$fx/root/-Users-x-CODE-proj/$sid1/tasks" "$fx/root/uvcache" "$fx/root/lonely" "$fx/root/fwb3x" "$fx/root/my build"
+    dd if=/dev/zero of="$fx/root/fwb3/home/blob" bs=1024 count=3072 2>/dev/null
+    dd if=/dev/zero of="$fx/root/pj-$sid1/blob" bs=1024 count=1024 2>/dev/null
+    printf '%s\t%s\tMon Oct 26 10:00:00 2026\tstartup\t2026-10-26T10:00:00Z\n' "$sid1" "$$" > "$fx/root/pj-$sid1/.pj-temp/owners"
+    for i in 1 2 3; do echo x > "$fx/root/makeitso-pending-proj-$i.12$i"; done
+    printf '{"pid":%s,"sessionId":"%s","name":"sess-one"}\n' "$$" "$sid1" > "$fx/sessions/$$.json"
+    iso=$(date -u -r $(( t0 - 1 )) '+%Y-%m-%dT%H:%M:%S.000Z')
+    { printf '{"type":"custom-title","customTitle":"maker-a","sessionId":"%s"}\n' "$sidA"
+      printf '{"type":"assistant","message":{"content":[{"type":"tool_use","input":{"command":"W=$TMPDIR/fwb3; mkdir -p $W/home"}}]},"sessionId":"%s","timestamp":"%s"}\n' "$sidA" "$iso"
+    } > "$fx/projects/-proj-a/$sidA.jsonl"
+    { printf '{"type":"custom-title","customTitle":"titled-two","sessionId":"%s"}\n' "$sid2"
+    } > "$fx/projects/-proj-a/$sid2.jsonl"
+    { printf '{"type":"assistant","message":{"content":"mkdir $TMPDIR/fwb3x and id a1fwb3c"},"sessionId":"%s","timestamp":"%s"}\n' "$sidB" "$iso"
+      printf '{"type":"assistant","message":{"content":"old /fwb3 talk"},"sessionId":"%s","timestamp":"%s"}\n' "$sidB" "$(date -u -r $(( t0 - 86400 )) '+%Y-%m-%dT%H:%M:%S.000Z')"
+    } > "$fx/projects/-proj-b/$sidB.jsonl"
+    touch "$fx/projects/-proj-a/$sidA.jsonl"   # the newest transcript: the search's control
+
+    echo "disk-watch selftest"
+    # 1. df is read (control: df fails, so exit 1 and no ping).
+    FX_FREE=20000000 "$0"; rc=$?
+    grep -q 'free=20000000 ' "$fx/state/watch.log" && [ "$rc" -eq 0 ] && ok "1 df's Available column is read and logged" || bad "1 df read rc=$rc"
+    FX_DF_FAIL=1 FX_FREE=1 "$0" 2>/dev/null; rc=$?
+    [ "$rc" -eq 1 ] && [ "$(pings)" = 0 ] && grep -q 'free not measured' "$fx/state/watch.log" && ok "1 control: df gives nothing, so exit 1, no ping" || bad "1 control rc=$rc pings=$(pings)"
+    # 2. Under both limits: quiet.
+    FX_FREE=20000000 DISK_WATCH_TEMP_LIMIT_KB=99999999 "$0"
+    [ "$(pings)" = 0 ] && ok "2 under both limits: no ping" || bad "2 quiet pings=$(pings)"
+    # 3. Free under its limit: one ping, the right shape.
+    FX_FREE=5000000 "$0"; c=$(lastping)
+    [ "$(pings)" = 1 ] && ok "3 free under 6 GiB: one ping" || bad "3 one ping pings=$(pings)"
+    printf '%s\n' "$c" | grep -qx 'ARG=alarm' && printf '%s\n' "$c" | grep -qx 'ARG=agents' && ok "3 an alarm, topic agents" || bad "3 kind/topic"
+    printf '%s\n' "$c" | grep -qx "PWD=$fx/repo" && printf '%s\n' "$c" | grep -qx 'PUSH_ONLY=1' && printf '%s\n' "$c" | grep -qx 'NO_FOLD=1' \
+        && ok "3 sent from the repo, push only, nothing folded" || bad "3 folder/switches"
+    printf '%s\n' "$c" | grep -q '^ARG=Top: fwb3 3 MB, maker-a$' && ok "3 the top line names the biggest folder and its maker" || bad "3 top line: $(printf '%s\n' "$c" | grep '^ARG=Top' )"
+    printf '%s\n' "$c" | grep -q '^ARG=Trash: 2 MB; temp folder [0-9]' && ok "3 a line gives the Trash's size beside the temp folder's" || bad "3 trash line: $(printf '%s\n' "$c" | grep '^ARG=Trash' )"
+    # The arguments in order (after PWD and the two switches): the kind, the summary, then flag and
+    # value pairs. The summary has 20 characters next to "dotfiles"; a --line, and "Do: " + --you, 40.
+    out=$(printf '%s\n' "$c" | awk '/^ARG=/ { a[++n] = substr($0, 5) }
+        END { if (length(a[2]) > 20) print "summary(" length(a[2]) ")"
+              for (i = 3; i < n; i++) { if (a[i] == "--line" && length(a[i+1]) > 40) print "line(" a[i+1] ")"
+                                         if (a[i] == "--you" && length(a[i+1]) + 4 > 40) print "you(" a[i+1] ")" }
+              if (n < 12) print "only " n " arguments" }')
+    [ -z "$out" ] && ok "3 summary within 20 characters, each line and the Do line within 40" || bad "3 widths: $out"
+    printf '%s\n' "$c" | grep -q '^ARG=Next: [^ ]* [0-9]' && ! printf '%s\n' "$c" | grep -qx 'ARG=Next:' \
+        && ok "3 the next biggest rows go in as --more lines, each one argument" || bad "3 more lines"
+    # 4. Same value: quiet; 1 GiB worse: ping; quiet period edges, measured from the recorded ping.
+    FX_FREE=5000000 "$0"
+    [ "$(pings)" = 1 ] && ok "4 the same value again: no ping" || bad "4 same pings=$(pings)"
+    FX_FREE=3900000 "$0"
+    [ "$(pings)" = 2 ] && ok "4 one GiB worse: a ping" || bad "4 worse pings=$(pings)"
+    pl=$(awk -F'\t' '$2 == "free" { l = $9 } END { print l }' "$fx/state/alerts")
+    FX_FREE=3900000 DISK_WATCH_NOW=$(( pl + 21600 - 60 )) "$0"
+    [ "$(pings)" = 2 ] && ok "4 still over, a minute short of 6 hours: no ping" || bad "4 quiet edge pings=$(pings)"
+    FX_FREE=3900000 DISK_WATCH_NOW=$(( pl + 21600 + 60 )) "$0"
+    [ "$(pings)" = 3 ] && ok "4 still over a minute past 6 hours: a ping" || bad "4 reminder pings=$(pings)"
+    # 5. The margin: 100 MB past the limit stays over; 600 MB past it is back to normal, logged, no ping.
+    FX_FREE=$(( 6291456 + 102400 )) "$0"
+    ! grep -q 'free back to normal' "$fx/state/watch.log" && [ "$(pings)" = 3 ] && ok "5 100 MB past the limit: still over, no ping" || bad "5 margin"
+    pl=$(awk -F'\t' '$2 == "free" { l = $9 } END { print l }' "$fx/state/alerts")
+    FX_FREE=$(( 6291456 + 102400 )) DISK_WATCH_NOW=$(( pl + 21600 + 60 )) "$0"
+    [ "$(pings)" = 3 ] && ok "5 inside the margin 6 hours on: no reminder, since it is not under the limit" || bad "5 band reminder pings=$(pings)"
+    FX_FREE=$(( 6291456 + 614400 )) "$0"
+    grep -q 'free back to normal' "$fx/state/watch.log" && [ "$(pings)" = 3 ] && ok "5 600 MB past it: back to normal, logged, not pinged" || bad "5 back"
+    # 6. The temp limit alone pings; both over send one ping, not two.
+    FX_FREE=20000000 DISK_WATCH_TEMP_LIMIT_KB=1 "$0"
+    [ "$(pings)" = 4 ] && grep -q '^ARG=temp folder ' "$fx/ping.4" && ok "6 temp over its limit alone: one ping" || bad "6 temp pings=$(pings)"
+    FX_FREE=1000 DISK_WATCH_TEMP_LIMIT_KB=1 "$0"
+    [ "$(pings)" = 5 ] && grep -q '^ARG=Free: ' "$fx/ping.5" && grep -q '^ARG=Limit: the temp folder pings over 1 KB$' "$fx/ping.5" \
+        && ok "6 both over: one ping naming both limits" || bad "6 both pings=$(pings) $(grep -e '^ARG=Free' -e '^ARG=Limit' "$fx/ping.5" | tr '\n' '|')"
+    # 7. du with no line for the folder: temp not measured (exit 1); free is still judged (control: measured).
+    FX_FREE=20000000 FX_DU_NOTOTAL=1 "$0"; rc=$?
+    [ "$rc" -eq 1 ] && grep -q 'temp=unmeasured' "$fx/state/watch.log" && ok "7 du without the folder's own line: temp not measured, exit 1" || bad "7 rc=$rc"
+    tail -n 3 "$fx/state/watch.log" | grep -q 'free=20000000 temp=unmeasured' && ok "7 ...and free space was still read" || bad "7 free still judged"
+    FX_FREE=20000000 "$0"
+    tail -n 1 "$fx/state/watch.log" | grep -Eq 'temp=[0-9]+ ' && ok "7 control: with that line, temp is measured" || bad "7 control"
+    # 8 and 9. Who made each folder, and the name fallbacks.
+    out=$("$0" report --all 2>&1)
+    printf '%s\n' "$out" | grep ' fwb3 ' | grep ' ended ' | grep -q 'maker-a (at ' && ok "8 fwb3: found by its transcript line (maker-a)" || bad "8 fwb3: $(printf '%s\n' "$out" | grep ' fwb3 ')"
+    printf '%s\n' "$out" | grep " pj-$sid1 " | grep ' live ' | grep -q 'sess-one (its own folder)' && ok "8 a live session's own folder: live, named from its session file" || bad "8 pj live: $(printf '%s\n' "$out" | grep "pj-$sid1")"
+    printf '%s\n' "$out" | grep -E " lonely " | grep -q 'unknown (searched ' && ok "8 a folder no transcript names: unknown, with the count searched" || bad "8 unknown: $(printf '%s\n' "$out" | grep ' lonely ')"
+    printf '%s\n' "$out" | grep -E " fwb3x " | grep -qv 'maker-a' && ok "8 decoy: fwb3x is not given fwb3's maker" || bad "8 decoy"
+    printf '%s\n' "$out" | grep -q 'Claude Code task files for proj' && printf '%s\n' "$out" | grep -q 'a shared cache every session uses' && ok "8 Claude Code's own folder and the shared cache are named as such" || bad "8 known kinds"
+    printf '%s\n' "$out" | grep " pj-$sid2 " | grep ' ended ' | grep -q 'titled-two' && ok "9 an ended session's folder: named from its transcript's title" || bad "9 titled: $(printf '%s\n' "$out" | grep "pj-$sid2")"
+    printf '%s\n' "$out" | grep " pj-$sid3 " | grep -q 'unnamed' && ok "9 no name anywhere: unnamed" || bad "9 unnamed"
+    printf '%s\n' "$out" | grep -q "makeitso-pending-proj\\* " && ok "9 loose files with one stem are one row" || bad "9 group"
+    ! printf '%s\n' "$out" | grep -q 'makeitso-pending-proj.*rm' && ok "9 a group of loose files gets no Trash line (a pattern can catch other files)" || bad "9 group line"
+    printf '%s\n' "$out" | grep -qxF "  rm -rf $(printf '%q' "$fx/root/my build")" && ok "9 a name with a space is quoted in its Trash line" || bad "9 quoting: $(printf '%s\n' "$out" | grep 'my')"
+    DISK_WATCH_PROJECTS="$fx/no-such" DISK_WATCH_STATE="$fx/state2" "$0" report --all > "$fx/r2" 2>&1
+    grep -E ' lonely ' "$fx/r2" | grep -q 'not searched' && ok "8 no transcripts at all: not searched, never unknown" || bad "8 not searched: $(grep ' lonely ' "$fx/r2")"
+    ! grep -q $'^lonely\t' "$fx/state2/makers.tsv" 2>/dev/null && ok "8 ...and that answer is not remembered" || bad "8 cached not-searched"
+    ! grep -q 'rm -rf .*/lonely$' "$fx/r2" && ok "8 ...and a folder not searched gets no Trash line" || bad "8 not-searched line"
+    # 10. Delivery: exit 4 (sent, did not fit) counts; exit 1 is tried again an hour later, not on
+    # the very next pass (control: after a delivered ping, the next pass is quiet).
+    : > "$fx/state/alerts"
+    FX_FREE=5000000 FX_PING_RC=4 "$0"; FX_FREE=5000000 "$0"
+    [ "$(pings)" = 6 ] && ok "10 exit 4 counts as delivered: no retry" || bad "10 rc4 pings=$(pings)"
+    : > "$fx/state/alerts"
+    FX_FREE=5000000 FX_PING_RC=1 "$0"; rc=$?; FX_FREE=5000000 "$0"
+    [ "$rc" -eq 1 ] && [ "$(pings)" = 7 ] && ok "10 a ping that reached no phone: exit 1, and not sent again on the next pass" || bad "10 no hammering rc=$rc pings=$(pings)"
+    pl=$(awk -F'\t' '$2 == "free" { l = $9 } END { print l }' "$fx/state/alerts")
+    FX_FREE=5000000 DISK_WATCH_NOW=$(( pl + 3660 )) "$0"
+    [ "$(pings)" = 8 ] && ok "10 ...sent again an hour later" || bad "10 hourly retry pings=$(pings)"
+    FX_FREE=5000000 DISK_WATCH_NOW=$(( pl + 3720 )) "$0"
+    [ "$(pings)" = 8 ] && ok "10 control: after that delivered ping, the next pass is quiet" || bad "10 control pings=$(pings)"
+    # 11. Nothing moves (control: touching one file changes the fingerprint).
+    snap() { find "$fx/root" -exec stat -f '%N %z %m %i' {} + 2>/dev/null | sort | shasum | cut -c1-16; }
+    before=$(snap); FX_FREE=1000 DISK_WATCH_TEMP_LIMIT_KB=1 "$0"; "$0" report --all >/dev/null 2>&1; after=$(snap)
+    [ "$before" = "$after" ] && ok "11 a pass and a report move, change and delete nothing in the folder" || bad "11 changed"
+    sleep 1; touch "$fx/root/lonely"; [ "$(snap)" != "$after" ] && ok "11 control: touching one entry changes the fingerprint" || bad "11 control"
+    # 12. report --cached runs no du.
+    c=$(grep -c . "$fx/du.calls"); out=$("$0" report --cached 2>&1)
+    [ "$(grep -c . "$fx/du.calls")" = "$c" ] && printf '%s\n' "$out" | grep -q 'showed all .* rows (nothing hidden)' && ok "12 report --cached: no du, and it says it showed every row" || bad "12 cached"
+    # 13. A session's own folder is always looked up, so no Trash line is offered for a live one;
+    # a loose folder that was not looked up gets no Trash line either (control: --all offers one).
+    out=$(DISK_WATCH_TOP_N=1 "$0" report --cached 2>&1)
+    printf '%s\n' "$out" | grep " pj-$sid1 " | grep -q ' live ' && ! printf '%s\n' "$out" | grep -q "rm -rf .*pj-$sid1" \
+        && ok "13 past the top rows, a live session's folder is still checked, and gets no Trash line" || bad "13 live pj: $(printf '%s\n' "$out" | grep "pj-$sid1")"
+    printf '%s\n' "$out" | grep ' lonely ' | grep -q 'not looked up' && ! printf '%s\n' "$out" | grep -q 'rm -rf .*/lonely$' \
+        && ok "13 a loose folder not looked up gets no Trash line" || bad "13 lonely: $(printf '%s\n' "$out" | grep -e lonely)"
+    "$0" report --cached --all 2>&1 | grep -q 'rm -rf .*/lonely$' && ok "13 control: looked up (--all), it gets one" || bad "13 control"
+    # 14. A Trash that cannot be read says so; it is never shown as small (control: readable, a size).
+    : > "$fx/state/alerts"
+    FX_FREE=5000000 DISK_WATCH_TRASH="$fx/no-such-trash" "$0"
+    grep -q '^ARG=Trash: not readable; temp folder ' "$fx/ping.$(pings)" && ok "14 a Trash that cannot be read: \"not readable\", not a size" || bad "14 trash unreadable: $(grep '^ARG=Trash' "$fx/ping.$(pings)")"
+    out=$("$0" report 2>&1)
+    printf '%s\n' "$out" | grep -q '^The Trash: 2 MB ' && ok "14 control: the report gives a readable Trash's size" || bad "14 control: $(printf '%s\n' "$out" | grep -i trash | head -n 2)"
+    echo "disk-watch selftest: $pass_n passed, $fail_n failed"
+    [ "$fail_n" -eq 0 ]
+}
+
+case "${1:-}" in
+    --selftest) selftest; exit ;;
+    report) shift; report "$@"; exit ;;
+    --help | -h) sed -n '2,/^set -u$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
+    "") pass; exit ;;
+    *) echo "disk-watch: unknown argument: $1 (try --help)" >&2; exit 2 ;;
+esac

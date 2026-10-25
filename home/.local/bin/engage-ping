@@ -126,6 +126,11 @@
 #         (see A MESSAGE THAT DOES NOT FIT; never with --detach; 1 wins over 4)
 # stdout is the message's time; nothing for PJ_NO_PING, PING-1 or a refusal.
 # PJ_NO_PING=1 is the kill switch: exit 0, nothing sent, nothing logged.
+# ENGAGE_PING_PUSH_ONLY=1: the push (ntfy) and the sounds only, never an iMessage, so IMSG_TO is
+# not needed; exit 0 when the push took it. For a launchd job, which has no IMSG_TO (disk-watch,
+# record #3989, 25 Oct 2026).
+# ENGAGE_PING_NO_FOLD=1: leave the sandbox pending file where it is (see SANDBOX), so this run
+# moves nothing (disk-watch moves and deletes nothing, Gavin 25 Oct 2026).
 # PING-1 (Gavin 2026-09-29): with PJ_LAUNCHED_BY set (a worker or a subagent), nothing is sent;
 # one silent log line names the launcher.
 #
@@ -410,7 +415,7 @@ if [ "${SANDBOX_RUNTIME:-}" = 1 ]; then
   fi
   exit 3
 fi
-fold_pending
+[ "${ENGAGE_PING_NO_FOLD:-}" = 1 ] || fold_pending
 
 PROJECT="${PROJECT:-engage}"
 if [ "$HAVE_YOU" -eq 0 ]; then
@@ -505,8 +510,12 @@ IMSG=$(resolve PJ_PING_IMSG imsg)
 CURL=""; [ "$NTFY" -eq 1 ] && CURL=$(resolve ENGAGE_PING_CURL curl)
 MISSING=""
 [ -n "$AFPLAY" ] || MISSING="$MISSING afplay missing;"
-[ -n "$IMSG" ] || MISSING="$MISSING imsg missing;"
-if [ -n "$IMSG" ] && [ -z "${IMSG_TO:-}" ]; then MISSING="$MISSING IMSG_TO unset;"; IMSG=""; fi
+if [ "${ENGAGE_PING_PUSH_ONLY:-}" = 1 ]; then
+  IMSG=""   # push and sounds only: no iMessage, so neither imsg nor IMSG_TO is missing
+else
+  [ -n "$IMSG" ] || MISSING="$MISSING imsg missing;"
+  if [ -n "$IMSG" ] && [ -z "${IMSG_TO:-}" ]; then MISSING="$MISSING IMSG_TO unset;"; IMSG=""; fi
+fi
 [ "$NTFY" -eq 0 ] || [ -n "$CURL" ] || MISSING="$MISSING curl missing;"
 MISSING="${MISSING# }"
 RC=0

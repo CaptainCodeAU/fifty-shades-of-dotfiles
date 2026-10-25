@@ -111,7 +111,8 @@ export IMSG_TO="selftest@example.invalid" ENGAGE_PING_SESSIONS="$ROOT/sessions"
 # SANDBOX_RUNTIME too: inside the Bash sandbox it is 1, and every arm but section 16's would
 # then be refused (#3640).
 unset PJ_NO_PING PJ_PING_LOG PJ_PING_FAKE_IMSG_RC PJ_LAUNCHED_BY CLAUDE_CODE_SESSION_NAME PJ_SESSION_NAME \
-  ENGAGE_PING_FAKE_HTTP ENGAGE_PING_FAKE_SLEEP HERDR_PANE_ID PJ_PING_BIN ENGAGE_PING_BIN SANDBOX_RUNTIME
+  ENGAGE_PING_FAKE_HTTP ENGAGE_PING_FAKE_SLEEP HERDR_PANE_ID PJ_PING_BIN ENGAGE_PING_BIN SANDBOX_RUNTIME \
+  ENGAGE_PING_PUSH_ONLY ENGAGE_PING_NO_FOLD
 
 # arm <name>: fresh state, logs and the default pins for one arm.
 arm() {
@@ -656,6 +657,27 @@ arm sbx-none
 SANDBOX_RUNTIME=1 PJ_PING_LOG="$ROOT/a-file/p.log" ENGAGE_PING_PENDING="$ROOT/a-file/r.log" run done "d"
 [ "$RC" -eq 3 ] && [ "$(ncalls)" -eq 0 ] && grep -q 'could not be logged' <<<"$ERR" \
   && ok "16 neither writable: still refused, exit 3, and stderr says it could not be logged" || bad "16 none" "rc=$RC err=$ERR"
+
+# ---- 17. Two switches for disk-watch (record #3989, 25 Oct 2026) -----------------------
+# A launchd job has no IMSG_TO, and disk-watch moves nothing: ENGAGE_PING_PUSH_ONLY=1 sends the
+# push and the sounds only; ENGAGE_PING_NO_FOLD=1 leaves the sandbox pending file alone.
+arm push-only
+( unset IMSG_TO; ENGAGE_PING_PUSH_ONLY=1 "$TOOL" alarm "a" --you "x" >/dev/null 2>"$ROOT/err" ); RC=$?; settle
+[ "$RC" -eq 0 ] && [ "$(nof imsg)" -eq 0 ] && [ "$(nof curl)" -eq 1 ] && [ "$(nof afplay)" -eq 4 ] && ! grep -q "IMSG_TO unset" "$LOG" \
+  && ok "17 PUSH_ONLY with no IMSG_TO: the push and 4 sounds, no imsg, exit 0" || bad "17 push only" "rc=$RC calls=$(calls) err=$(cat "$ROOT/err") $(cat "$LOG")"
+arm push-only-ctl
+( unset IMSG_TO; "$TOOL" alarm "a" --you "x" >/dev/null 2>"$ROOT/err" ); RC=$?; settle
+[ "$RC" -eq 1 ] && grep -q "IMSG_TO unset" "$LOG" && ok "17 control: without it, a missing IMSG_TO is still exit 1" || bad "17 push only control" "rc=$RC $(cat "$LOG")"
+arm push-only-403
+( unset IMSG_TO; ENGAGE_PING_PUSH_ONLY=1 ENGAGE_PING_FAKE_HTTP=403 "$TOOL" alarm "a" --you "x" >/dev/null 2>"$ROOT/err" ); RC=$?; settle
+[ "$RC" -eq 1 ] && [ "$(nof imsg)" -eq 0 ] && ok "17 PUSH_ONLY and the push refused: no phone route, exit 1, no imsg fallback" || bad "17 push only 403" "rc=$RC calls=$(calls)"
+arm no-fold
+mkdir -p "$(dirname "$PEND")"; printf "x\tt\tdone\ts\trefused\tsandbox\n" >"$PEND"; before=$(shasum <"$PEND")
+ENGAGE_PING_NO_FOLD=1 run done "d"
+[ "$RC" -eq 0 ] && [ -e "$PEND" ] && [ "$(shasum <"$PEND")" = "$before" ] && ! grep -q refused "$LOG" \
+  && ok "17 NO_FOLD: the pending file stays as it was, nothing folded into the log" || bad "17 no fold" "rc=$RC pend=$(cat "$PEND" 2>&1) $(cat "$LOG")"
+run done "d"
+[ ! -e "$PEND" ] && grep -q refused "$LOG" && ok "17 control: the next run without it folds the pending line" || bad "17 no fold control" "pend=$(cat "$PEND" 2>&1) $(cat "$LOG")"
 
 printf 'engage-ping-selftest: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
