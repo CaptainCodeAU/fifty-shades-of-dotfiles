@@ -1,0 +1,1693 @@
+#!/usr/bin/env bash
+# test-temp -- run a test suite with a temp folder of its own, then check it left nothing behind
+#
+# Gavin, 25 Oct 2026 (record #3989): tests in every project make their temp folders with
+# mktemp, remove them on exit with a trap that runs on success, on failure and on Ctrl-C,
+# and end each run with a check that nothing is left behind. Sessions of another project had
+# left 31 test folders (8.8 GB) in the shared temp folder. A test sources test-temp.sh
+# (beside this file) for its folder and its trap; this command runs the suite and checks.
+# Guide: docs/TEST_TEMP_FOLDERS.md.
+#
+#   test-temp run [--] CMD [ARG...]
+#       Makes a private run folder, test-temp-run.XXXXXX, inside the caller's TMPDIR (with
+#       TMPDIR unset: the macOS user temp folder, else /tmp; never the shared
+#       /tmp/claude-<uid>), runs CMD with TMPDIR and TEST_TEMP_DIR set to it, checks it, and
+#       prints one summary line. The run folder goes to the Trash when nothing is left in it;
+#       otherwise it is kept, and the line says where. CMD is a child run waits on: Ctrl-C
+#       reaches it directly, and an INT, TERM or HUP sent to run alone is passed on to it.
+#       Either way run still checks, then ends by that same signal, so a loop that ran it
+#       stops too.
+#   test-temp check [RUNDIR]
+#       Checks a run folder that run kept (default: $TEST_TEMP_DIR). It fails:
+#         (a) a path listed `made` with no gone, refused, failed or kept: its end never ran;
+#         (b) anything left in the run folder that the list does not explain;
+#         (c) a new entry in the caller's TMPDIR since the run began (run only, right
+#             after the suite: later, other work has moved on);
+#         (d) a path listed `failed`: the Trash would not take it, outside the Claude sandbox.
+#       `refused` (the Claude sandbox would not let it go to the Trash) and `kept`
+#       (keep-on-fail) follow TEST_TEMP_REFUSED=pass|fail. pass, the default, lists them and
+#       passes; it says they go when the session ends only when the caller's TMPDIR is a
+#       session's own folder (/tmp/claude-<uid>/pj-<id>), and else that they stay there.
+#   test-temp lint FILE...
+#       Shell files only (by #! line, or .sh, .bash, .zsh; a file holding NUL bytes is not
+#       shell). Flags: mktemp with no template (a path before it too, /usr/bin/mktemp); a
+#       literal temp path (/tmp/..., /private/tmp, /var/folders; ${TMPDIR:-/tmp} is fine);
+#       in zsh, an EXIT trap with no INT and TERM traps, and a signal trap that does not
+#       exit. A line carrying "# test-temp: allow <reason>", or the line after a comment
+#       line carrying one, is not flagged. Heredoc bodies are data and are not read; a <<
+#       inside quotes is not a heredoc.
+#   test-temp --selftest
+#       Every arm with a control, in /bin/bash (3.2), the PATH bash, /bin/zsh and the PATH
+#       zsh, under set -u. Fixtures live in one folder of its own under TMPDIR.
+#
+# EXIT CODES
+#   run    0 suite passed, nothing left | 1 suite failed, nothing left | 2 cannot check,
+#          or cannot run (usage, no temp folder, no Trash shim, no such command) | 3 TMPDIR
+#          is the shared /tmp/claude-<uid>: the suite never ran | 4 something was left
+#          behind, whether the suite passed or failed (the line says which). After a signal,
+#          run ends by that signal instead, once the line is printed.
+#   check  0 nothing left | 2 check NOT RUN | 4 something was left behind
+#   lint   0 no findings | 1 findings (file:line: reason) | 2 cannot run: no shell file
+#          among the arguments, an unreadable file, or its canary was not flagged
+#   --selftest  0 every arm passed (skips are named) | 1 an arm failed | 2 could not run
+#
+# Removal is through the Trash only, never for good: the run folder goes through
+# test-temp.sh's own route (the dotfiles Trash shim, run from /, then test -e).
+
+# Read this whole file before running any of it, so an edit saved mid-run cannot change
+# the run (W-20260923-A57). A crash under it exits 127 (unbound var) or 1 (bash 3.2 syntax
+# error); `selftest-whole-read --help` has the map. Do not move or reword these lines.
+[ -n "${SELFTEST_WHOLE_READ-}" ] || SELFTEST_WHOLE_READ=1 exec "$BASH" -c 'shopt -u sourcepath; . "$0"' "$0" "$@"
+unset SELFTEST_WHOLE_READ
+
+set -u
+
+SELF=$(readlink -f "$0" 2>/dev/null) || SELF=$0
+HERE=$(dirname "$SELF")
+HELPER="$HERE/test-temp.sh"
+# Empty here; the selftest's copies set them, to hold one of run's races open (run_pause).
+RUN_PAUSE_AT=""                                                #P: pause-at (before, after or rewait)
+RUN_PAUSE_MARK=""                                              #P: pause-mark (a file run_pause writes)
+TAB=$(printf '\t')
+NL='
+'
+
+usage() {
+	awk 'NR == 1 { next } /^# Read this whole file/ { exit } { sub(/^# ?/, ""); print }' "$SELF"
+}
+
+# load_lib: the helper's functions (_tt_strip, _tt_real, _tt_base, _tt_trash, _tt_log_to,
+# _tt_reraise) and its Trash shim when there is one (_TT_RM, else empty and _TT_WHY);
+# no folder and no trap.
+load_lib() {
+	if [ ! -f "$HELPER" ]; then
+		echo "test-temp: the helper is missing beside this command: $HELPER" >&2
+		return 2
+	fi
+	# shellcheck source=/dev/null
+	if ! . "$HELPER" lib; then
+		echo "test-temp: the helper would not load: $HELPER" >&2
+		return 2
+	fi
+	return 0
+}
+
+# names DIR: the names of DIR's top-level entries, dot names too, one per line.
+names() {
+	local e n
+	for e in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+		[ -e "$e" ] || [ -L "$e" ] || continue
+		n=${e##*/}
+		case "$n" in *"$NL"*) continue ;; esac
+		printf '%s\n' "$n"
+	done
+}
+
+policy_ok() {
+	case "${TEST_TEMP_REFUSED:-pass}" in
+		pass | fail) return 0 ;;
+	esac
+	echo "test-temp: TEST_TEMP_REFUSED must be pass or fail, not '${TEST_TEMP_REFUSED}'" >&2
+	return 1
+}
+
+# ------------------------------------------------------------------------------ check
+# check_run RUNDIR COMPARE_OUTER(0|1): prints its findings, sets the C_* counts, returns
+# 0 clean, 2 check NOT RUN, 4 something left behind.
+check_run() {
+	local run=$1 compare=$2 list states e outer before now uid where
+	local endless="" explained="" refused="" kept="" fails=0 notrun=""
+	C_MADE=0 C_GONE=0 C_REFUSED=0 C_FAILED=0 C_KEPT=0 C_ENDLESS=0 C_LEFT=0 C_OUTER="not compared"
+	if [ ! -f "$run/.test-temp/started" ]; then
+		echo "test-temp check: check NOT RUN: $run/.test-temp/started is missing, so this is not a folder test-temp run made"
+		return 2
+	fi
+	list="$run/.test-temp/list"
+	states=""
+	if [ -e "$list" ]; then
+		if [ ! -r "$list" ]; then
+			echo "test-temp check: check NOT RUN: cannot read $list"
+			return 2
+		fi
+		states=$(LC_ALL=C awk -F'\t' '
+			NF == 0 { next }
+			{
+				if (NF < 5 || ($1 != "made" && $1 != "gone" && $1 != "refused" && $1 != "failed" && $1 != "kept") || $2 !~ /^\//) { bad++; next }
+				k = $2 SUBSEP $3
+				if ($1 == "made") { if (!(k in st)) order[++n] = k; st[k] = "made"; det[k] = $5; next }
+				if (!(k in st)) { bad++; next }
+				st[k] = $1; det[k] = $5
+			}
+			END {
+				for (i = 1; i <= n; i++) { split(order[i], a, SUBSEP); print st[order[i]] "\t" a[1] "\t" a[2] "\t" det[order[i]] }
+				if (bad) print "bad\t" bad "\t-\t-"
+			}' "$list")
+	fi
+	_tt_walk "${states:+$states$NL}" check_state
+	if [ -n "$notrun" ]; then
+		echo "test-temp check: check NOT RUN: $notrun line(s) in $list are not test-temp events"
+		return 2
+	fi
+	# (b) everything in the run folder must be explained by the list
+	for e in "$run"/* "$run"/.[!.]* "$run"/..?*; do
+		[ -e "$e" ] || [ -L "$e" ] || continue
+		[ "${e##*/}" = .test-temp ] && continue
+		case "$NL$explained$endless" in *"$NL$e$NL"*) continue ;; esac
+		C_LEFT=$((C_LEFT + 1)); fails=$((fails + 1))
+		echo "test-temp check: FAIL left behind in the run folder, not made through test-temp.sh: $e"
+	done
+	# (c) nothing new in the caller's TMPDIR since the run began
+	if [ "$compare" = 1 ] && [ -f "$run/.test-temp/outer-before" ]; then
+		outer=$(dirname "$run")
+		before=$(cat "$run/.test-temp/outer-before")
+		now=$(names "$outer")
+		C_OUTER=compared
+		_tt_walk "${now:+$now$NL}" check_outer_name
+	fi
+	if [ -n "$refused" ]; then
+		# Only a session's own folder goes when the session ends; say so only there.
+		outer=$(awk -F'\t' 'NR == 1 { print $4 }' "$run/.test-temp/started")
+		[ -n "$outer" ] || outer="the TMPDIR of the run"
+		uid=$(id -u)
+		case "$outer/" in
+			"/private/tmp/claude-$uid"/pj-*/* | "/tmp/claude-$uid"/pj-*/*) where="they go when the session ends" ;;   # test-temp: allow the session folder shape
+			*) where="they stay in $outer until you trash them" ;;
+		esac
+		if [ "${TEST_TEMP_REFUSED:-pass}" = fail ]; then
+			fails=$((fails + C_REFUSED))
+			echo "test-temp check: FAIL (TEST_TEMP_REFUSED=fail) $C_REFUSED folder(s) the sandbox would not let the test move to the Trash:"
+		else
+			echo "test-temp check: $C_REFUSED folder(s) the sandbox would not let the test move to the Trash; $where:"
+		fi
+		printf '%s' "$refused"
+	fi
+	if [ -n "$kept" ]; then
+		if [ "${TEST_TEMP_REFUSED:-pass}" = fail ]; then
+			fails=$((fails + C_KEPT))
+			echo "test-temp check: FAIL (TEST_TEMP_REFUSED=fail) $C_KEPT folder(s) kept for a failed test (keep-on-fail):"
+		else
+			echo "test-temp check: $C_KEPT folder(s) kept for a failed test (keep-on-fail); trash them when done:"
+		fi
+		printf '%s' "$kept"
+	fi
+	[ "$fails" -eq 0 ] && return 0
+	return 4
+}
+
+# check_state LINE: one path's last event (state TAB path TAB pid TAB detail), for check_run,
+# whose counts and lists it adds to.
+check_state() {
+	local line=$1 ev p pid det n
+	ev=${line%%"$TAB"*}; line=${line#*"$TAB"}
+	p=${line%%"$TAB"*}; line=${line#*"$TAB"}
+	pid=${line%%"$TAB"*}; det=${line#*"$TAB"}
+	case "$ev" in
+		bad) notrun=$p ;;
+		made)
+			C_MADE=$((C_MADE + 1)); C_ENDLESS=$((C_ENDLESS + 1)); fails=$((fails + 1))
+			endless="$endless$p$NL"
+			if [ -e "$p" ] || [ -L "$p" ]; then n="it is still there"; else n="it is gone now"; fi
+			echo "test-temp check: FAIL end never ran for $p (pid $pid): the test was killed (SIGKILL?), or its EXIT trap was replaced; $n"
+			;;
+		gone)
+			C_MADE=$((C_MADE + 1))
+			if [ -e "$p" ] || [ -L "$p" ]; then
+				C_LEFT=$((C_LEFT + 1)); fails=$((fails + 1)); explained="$explained$p$NL"
+				echo "test-temp check: FAIL listed gone but still there: $p"
+			else
+				C_GONE=$((C_GONE + 1))
+			fi
+			;;
+		failed)
+			C_MADE=$((C_MADE + 1))
+			if [ -e "$p" ] || [ -L "$p" ]; then
+				C_FAILED=$((C_FAILED + 1)); fails=$((fails + 1)); explained="$explained$p$NL"
+				echo "test-temp check: FAIL the Trash did not take $p: $det"
+			else
+				C_GONE=$((C_GONE + 1))
+			fi
+			;;
+		refused | kept)
+			C_MADE=$((C_MADE + 1))
+			if [ -e "$p" ] || [ -L "$p" ]; then
+				explained="$explained$p$NL"
+				if [ "$ev" = refused ]; then
+					C_REFUSED=$((C_REFUSED + 1)); refused="$refused  refused  $p  ($det)$NL"
+				else
+					C_KEPT=$((C_KEPT + 1)); kept="$kept  kept     $p  ($det)$NL"
+				fi
+			else
+				C_GONE=$((C_GONE + 1))
+			fi
+			;;
+	esac
+	return 0
+}
+
+# check_outer_name NAME: one top-level name in the caller's TMPDIR now, for check_run: new
+# since the snapshot (and not the run folder itself) is a finding.
+check_outer_name() {
+	[ "$1" = "${run##*/}" ] && return 0
+	case "$NL$before$NL" in *"$NL$1$NL"*) return 0 ;; esac
+	C_LEFT=$((C_LEFT + 1)); fails=$((fails + 1))
+	echo "test-temp check: FAIL new in the caller's TMPDIR since the run began: $outer/$1"
+	return 0
+}
+
+counts() {
+	printf 'made %s (to the Trash %s, refused %s, failed %s, kept %s, end never ran %s); left behind %s; outer folder %s' \
+		"$C_MADE" "$C_GONE" "$C_REFUSED" "$C_FAILED" "$C_KEPT" "$C_ENDLESS" "$C_LEFT" "$C_OUTER"
+}
+
+cmd_check() {
+	local run=${1-} crc verdict
+	load_lib || return 2
+	[ -n "$run" ] || run=${TEST_TEMP_DIR-}
+	if [ -z "$run" ]; then
+		echo "test-temp check: check NOT RUN: no run folder given, and TEST_TEMP_DIR is not set"
+		return 2
+	fi
+	policy_ok || return 2
+	_tt_real "$run"
+	if [ -z "$_TT_R" ]; then
+		echo "test-temp check: check NOT RUN: not a folder: $run"
+		return 2
+	fi
+	check_run "$_TT_R" 0
+	crc=$?
+	case "$crc" in
+		0) verdict=CLEAN ;;
+		4) verdict=LEAK ;;
+		*) return 2 ;;
+	esac
+	echo "test-temp check: $(counts) (only run compares it, right after the suite) -- $verdict (exit $crc)"
+	return "$crc"
+}
+
+# ------------------------------------------------------------------------------ run
+# run_fwd SIG: run got SIG (an INT from the terminal, or a signal sent to run alone): pass it
+# to the suite, and remember it, so run ends by it once the check is done.
+run_fwd() {
+	RUN_GOT=$1
+	RUN_SIG=$1
+	[ -n "$RUN_CHILD" ] && kill "-$1" "$RUN_CHILD" 2>/dev/null
+	return 0
+}
+
+sig_num() {
+	case "$1" in
+		HUP) echo 1 ;;
+		INT) echo 2 ;;
+		TERM) echo 15 ;;
+		*) echo 0 ;;
+	esac
+}
+
+# run_pause WHERE: a copy the selftest makes pauses here for 2 s, to open a race on purpose,
+# and first writes WHERE to RUN_PAUSE_MARK; in this file RUN_PAUSE_AT is empty, so nothing.
+run_pause() {
+	[ "$RUN_PAUSE_AT" = "$1" ] || return 0
+	[ -z "$RUN_PAUSE_MARK" ] || printf '%s\n' "$1" >>"$RUN_PAUSE_MARK"
+	sleep 2
+}
+
+cmd_run() {
+	local outer outer_real run olist src crc rc verdict keep_why pl
+	RUN_SIG="" RUN_GOT="" RUN_CHILD=""
+	[ "${1-}" = -- ] && shift
+	if [ $# -eq 0 ]; then
+		echo "test-temp run: no command given (test-temp run [--] CMD [ARG...])" >&2
+		return 2
+	fi
+	policy_ok || return 2
+	# From here a signal is never lost: before the suite starts it stops the start (and the run
+	# folder goes again); once the suite runs it is passed on, and run still checks; either
+	# way run ends by it. Set first, or a TERM during the setup would leave a bare run folder.
+	trap 'run_fwd INT' INT
+	trap 'run_fwd TERM' TERM
+	trap 'run_fwd HUP' HUP
+	load_lib || return 2
+	if ! _tt_base; then
+		if [ "$_TT_SHARED" = 1 ]; then
+			echo "test-temp run: REFUSED: $_TT_WHY. The suite never ran. (exit 3)" >&2
+			return 3
+		fi
+		echo "test-temp run: $_TT_WHY (the suite never ran)" >&2
+		return 2
+	fi
+	outer=$_TT_BASE
+	_tt_real "$outer"
+	outer_real=$_TT_R
+	if [ -z "$outer_real" ]; then
+		echo "test-temp run: the temp folder cannot be entered: $outer (the suite never ran)" >&2
+		return 2
+	fi
+	if ! command -v -- "$1" >/dev/null 2>&1; then
+		echo "test-temp run: no such command: $1 (the suite never ran)" >&2
+		return 2
+	fi
+	if [ -z "$_TT_RM" ]; then
+		echo "test-temp run: $_TT_WHY; nothing would move the run folder to the Trash (the suite never ran)" >&2
+		return 2
+	fi
+	run=$(command mktemp -d "$outer_real/test-temp-run.XXXXXX" 2>/dev/null) || run=""
+	if [ -z "$run" ]; then
+		echo "test-temp run: cannot make a run folder in $outer_real (the suite never ran)" >&2
+		return 2
+	fi
+	_tt_real "$run"
+	run=$_TT_R
+	if ! command mkdir -- "$run/.test-temp" ||
+		! printf 'started\t%s\t%s\t%s\n' "$(date +%s)" "$$" "$outer_real" >>"$run/.test-temp/started"; then
+		echo "test-temp run: cannot write in the run folder $run (the suite never ran)" >&2
+		return 2
+	fi
+	# The run folder's own life goes in the caller's list, written before the snapshot so the
+	# list's folder is in it; a run inside a run is then explained to the outer check.
+	_tt_strip "${TEST_TEMP_DIR:-$outer_real}"
+	olist="$_TT_S/.test-temp"
+	command mkdir -p -- "$olist" 2>/dev/null && command touch -- "$olist/list" 2>/dev/null &&
+		_tt_log_to "$olist/list" made "$run" "$$" "test-temp run"
+	names "$outer_real" >>"$run/.test-temp/outer-before"
+	run_pause before
+	if [ -n "$RUN_SIG" ]; then
+		echo "test-temp run: SIG$RUN_SIG came before the suite started, so it never ran"
+		if _tt_trash "$run"; then
+			_tt_log_to "$olist/list" gone "$run" "$$" "to the Trash" 2>/dev/null
+		else
+			_tt_log_to "$olist/list" "$_TT_KIND" "$run" "$$" "$_TT_WHY" 2>/dev/null
+			echo "test-temp run: the run folder stays at $run: $_TT_WHY"
+		fi
+		_tt_reraise "$RUN_SIG" 2
+	fi
+	# The suite is a child run waits on, so a signal sent to run alone can be passed on (a
+	# foreground child would hold run's trap until it ended). perl puts INT and QUIT back to
+	# their default, which a script's background child would otherwise ignore, and 0<&0
+	# keeps stdin, which it would otherwise lose. exec { $ARGV[0] } never goes through a
+	# shell: a lone argument (a path with a space, a * or a $) stays one word, as given.
+	pl=""
+	[ -x /usr/bin/perl ] && pl=/usr/bin/perl
+	[ -n "$pl" ] || pl=$(command -v perl 2>/dev/null) || pl=""
+	if [ -n "$pl" ]; then
+		TMPDIR="$run" TEST_TEMP_DIR="$run" "$pl" -e '$SIG{INT} = $SIG{QUIT} = "DEFAULT"; exec { $ARGV[0] } @ARGV or exit 127' -- "$@" 0<&0 &
+		run_pause after
+		RUN_CHILD=$!
+		# A signal that came while the suite was starting, before its pid was known, goes now.
+		[ -z "$RUN_SIG" ] || kill "-$RUN_SIG" "$RUN_CHILD" 2>/dev/null
+		while :; do
+			RUN_GOT=""
+			wait "$RUN_CHILD"
+			src=$?
+			[ -n "$RUN_GOT" ] || break
+			# A signal of run's own came in. Unless it cut the wait short (the wait then returns
+			# 128 plus its number), the wait has already returned the suite's own status.
+			[ "$src" = "$((128 + $(sig_num "$RUN_GOT")))" ] || break
+			run_pause rewait
+			kill -0 "$RUN_CHILD" 2>/dev/null && continue
+			# Cut short, and the suite has ended since: one more wait returns its saved status,
+			# 127 included (measured on bash 3.2 and 5.3).
+			wait "$RUN_CHILD" 2>/dev/null
+			src=$?
+			break
+		done
+	else
+		echo "test-temp run: no perl here, so the suite runs in front, and a TERM or HUP sent to run alone waits for it to end" >&2
+		TMPDIR="$run" TEST_TEMP_DIR="$run" "$@"
+		src=$?
+	fi
+	RUN_CHILD=""
+	check_run "$run" 1
+	crc=$?
+	if [ "$crc" = 2 ]; then
+		rc=2; verdict="CHECK NOT RUN"
+	elif [ "$crc" = 4 ]; then
+		rc=4
+		if [ "$src" = 0 ]; then verdict=LEAK; else verdict="LEAK, and the suite FAILED"; fi
+	elif [ "$src" != 0 ]; then
+		rc=1; verdict="SUITE FAILED"
+	else
+		rc=0; verdict=CLEAN
+	fi
+	# The run folder: to the Trash when only its own list is in it, else kept for a look.
+	keep_why=""
+	[ "$rc" = 2 ] || [ "$rc" = 4 ] && keep_why="kept for a look"
+	[ -z "$keep_why" ] && [ $((C_REFUSED + C_KEPT)) -gt 0 ] && keep_why="kept: it holds the folders listed above"
+	if [ -n "$keep_why" ]; then
+		_tt_log_to "$olist/list" kept "$run" "$$" "$keep_why" 2>/dev/null
+		echo "test-temp run: the run folder is $keep_why: $run"
+	elif _tt_trash "$run"; then
+		_tt_log_to "$olist/list" gone "$run" "$$" "to the Trash" 2>/dev/null
+	else
+		_tt_log_to "$olist/list" "$_TT_KIND" "$run" "$$" "$_TT_WHY" 2>/dev/null
+		echo "test-temp run: the run folder stays at $run: $_TT_WHY"
+	fi
+	echo "test-temp run: suite exit $src${RUN_SIG:+ (interrupted by SIG$RUN_SIG)}; $(counts) -- $verdict (exit $rc)"
+	if [ -n "$RUN_SIG" ]; then
+		echo "test-temp run: interrupted by SIG$RUN_SIG: run now ends by that signal, so a loop that ran it stops too"
+		_tt_reraise "$RUN_SIG" "$rc"
+	fi
+	return "$rc"
+}
+
+# ------------------------------------------------------------------------------ lint
+# One line per finding: line <TAB> rule id <TAB> reason. kind is zsh or sh.
+LINT_AWK='
+BEGIN {
+	sq = sprintf("%c", 39)
+	RE_PATH = "(^|[ \t\"" sq "=:(])(/tmp/|/private/tmp|/private/var/folders|/var/folders)"   # test-temp: allow the rule itself
+	RE_HD = "^<<-?[ \t]*\\\\?[\"" sq "]?[A-Za-z_][A-Za-z0-9_]*"
+	RE_MK = "(^|[ \t;&|(`!{])([^ \t;&|()`\"" sq "]*/)?mktemp([ \t;&|)`]|$)"
+	TPL = "mktemp -d \"${TMPDIR%/}/NAME.XXXXXX\""
+	hd = ""
+}
+function add(n, id, msg) { F[++nf] = n "\t" id "\t" msg }
+# mode 1: cut an unquoted comment. mode 2: also blank quoted text, but keep a $( ) or
+# backtick substitution inside double quotes, which is code. Both keep every position.
+function scan(s, mode,    out, i, c, st, prev, L, depth, bq) {
+	out = ""; st = 0; prev = " "; L = length(s); depth = 0; bq = 0
+	for (i = 1; i <= L; i++) {
+		c = substr(s, i, 1)
+		if (st == 1) {
+			if (c == sq) st = 0
+			out = out ((mode == 2 && c != sq) ? " " : c); prev = c; continue
+		}
+		if (c == "\\") { out = out c substr(s, i + 1, 1); i++; prev = "x"; continue }
+		if (st == 2) {
+			if (depth > 0) {
+				if (c == "(") depth++
+				else if (c == ")") depth--
+				out = out c; prev = c; continue
+			}
+			if (bq) { if (c == "`") bq = 0; out = out c; prev = c; continue }
+			if (c == "\"") { st = 0; out = out c; prev = c; continue }
+			if (c == "$" && substr(s, i + 1, 1) == "(") { depth = 1; out = out "$("; i++; prev = "("; continue }
+			if (c == "`") { bq = 1; out = out c; prev = c; continue }
+			out = out ((mode == 2) ? " " : c); prev = c; continue
+		}
+		if (c == sq) st = 1
+		else if (c == "\"") st = 2
+		else if (c == "#" && prev ~ /[ \t;&|(]/) break
+		out = out c; prev = c
+	}
+	return out
+}
+# where a heredoc operator starts in s (quoted text already blanked), 0 when none: not
+# <<<, and not a shift inside (( ))
+function heredoc_at(s,    i, L) {
+	L = length(s)
+	for (i = 1; i < L; i++) {
+		if (substr(s, i, 2) != "<<") continue
+		if (substr(s, i + 2, 1) == "<" || (i > 1 && substr(s, i - 1, 1) == "<")) { i += 2; continue }
+		if (index(substr(s, 1, i), "((")) return 0
+		return i
+	}
+	return 0
+}
+# the words after position p, quotes removed, up to the end of the command; W[1..n]
+function words(s, p,    i, c, st, w, n, inw, L) {
+	n = 0; w = ""; st = 0; inw = 0; L = length(s)
+	for (i = p; i <= L; i++) {
+		c = substr(s, i, 1)
+		if (st == 1) { if (c == sq) st = 0; else w = w c; continue }
+		if (st == 2) {
+			if (c == "\\") { w = w substr(s, i + 1, 1); i++; continue }
+			if (c == "\"") st = 0; else w = w c
+			continue
+		}
+		if (c == "\\") { w = w substr(s, i + 1, 1); i++; inw = 1; continue }
+		if (c == sq) { st = 1; inw = 1; continue }
+		if (c == "\"") { st = 2; inw = 1; continue }
+		if (c == " " || c == "\t") { if (inw) { W[++n] = w; w = ""; inw = 0 }; continue }
+		if (c == ";" || c == "&" || c == "|" || c == ")" || c == "}") break
+		w = w c; inw = 1
+	}
+	if (inw) W[++n] = w
+	UNTERM = (st != 0)
+	return n
+}
+function mktemp_rule(s,    p, m, rest, j, c, cut, nw, w, k, tpl, tfl, pfl, skip) {
+	while (match(s, RE_MK)) {
+		# p: just after the word mktemp, counted from the end of the match (a path before it
+		# may hold the word too); the match ends with the word, or with one delimiter after it
+		m = substr(s, RSTART, RLENGTH)
+		p = RSTART + RLENGTH
+		if (substr(m, RLENGTH, 1) != "p") p--
+		rest = substr(s, p)
+		cut = length(rest) + 1
+		for (j = 1; j <= length(rest); j++) {
+			c = substr(rest, j, 1)
+			if (c == ")" || c == ";" || c == "|" || c == "&" || c == "`") { cut = j; break }
+		}
+		nw = split(substr(rest, 1, cut - 1), w, /[ \t]+/)
+		tpl = 0; tfl = 0; pfl = 0; skip = 0
+		for (k = 1; k <= nw; k++) {
+			if (w[k] == "") continue
+			if (skip) { skip = 0; continue }
+			# a redirection is no template (2>/dev/null, </dev/null), nor the word after a bare one
+			if (w[k] ~ /^[0-9]*[<>]/) { if (w[k] ~ /^[0-9]*[<>]+[&|]?$/) skip = 1; continue }
+			if (w[k] == "--") continue
+			if (w[k] ~ /^-/) {
+				if (w[k] ~ /^--tmpdir/ || w[k] ~ /^-p/) { pfl = 1; if (w[k] == "-p" || w[k] == "--tmpdir") skip = 1; continue }
+				if (w[k] ~ /^-[A-Za-z]*t$/) { tfl = 1; skip = 1; continue }
+				if (w[k] ~ /^-[A-Za-z]*t./) { tfl = 1; continue }
+				continue
+			}
+			tpl = 1
+		}
+		if (!tpl && !pfl) {
+			if (tfl) add(NR, "mktemp-t", "mktemp -t with no template ignores TMPDIR on macOS: use " TPL)   # M: lint-mktemp-t
+			else add(NR, "mktemp", "mktemp with no template ignores TMPDIR on macOS: use " TPL)   # M: lint-mktemp
+			return
+		}
+		s = substr(s, p)
+	}
+}
+function path_rule(s,    m) {
+	gsub(/[$][{]TMPDIR:?-[^}]*[}]/, "", s)
+	if (match(s, RE_PATH)) {
+		m = substr(s, RSTART, RLENGTH); sub(/^[^\/]/, "", m)
+		add(NR, "path", "a literal temp path (" m "...): use $TMPDIR, made with " TPL)
+	}
+}
+function trap_rule(s, allowed,    p, n, k, act, sig, X, I, T, H, hasx) {
+	while (match(s, /(^|[ \t;&|({])trap([ \t]|$)/)) {
+		p = RSTART + index(substr(s, RSTART, RLENGTH), "trap") + 3
+		n = words(s, p)
+		s = substr(s, p)
+		if (n == 0 || UNTERM) continue
+		k = 1
+		if (W[k] == "--") k++
+		if (k > n) continue
+		act = W[k]
+		if (act == "-" || act == "-l" || act == "-p") continue
+		X = 0; I = 0; T = 0; H = 0
+		for (k = k + 1; k <= n; k++) {
+			sig = toupper(W[k]); sub(/^SIG/, "", sig)
+			if (sig == "0") sig = "EXIT"
+			if (sig == "EXIT") X = 1; else if (sig == "INT") I = 1; else if (sig == "TERM") T = 1; else if (sig == "HUP") H = 1
+		}
+		if (I) HAVE_INT = 1
+		if (T) HAVE_TERM = 1
+		if (X) HAVE_EXIT = 1
+		if (allowed) continue
+		hasx = (act ~ /(^|[^A-Za-z0-9_])exit([^A-Za-z0-9_]|$)/)
+		if (X) EXITL[++nx] = NR
+		if ((I || T || H) && !hasx && act != "") SIGNX[++ns] = NR
+	}
+}
+{
+	raw = $0
+	if (hd != "") {
+		t = raw
+		if (hdtab) sub(/^\t+/, "", t)
+		if (t == hd) hd = ""
+		next
+	}
+	allow = (NR == allow_next)
+	if (raw ~ /#[ \t]*test-temp:[ \t]*allow/) {
+		r = raw; sub(/.*#[ \t]*test-temp:[ \t]*allow[ \t]*/, "", r)
+		if (r ~ /^[ \t]*$/) add(NR, "allow-no-reason", "a test-temp: allow comment needs a reason")
+		else if (raw ~ /^[ \t]*#/) allow_next = NR + 1
+		else allow = 1
+	}
+	if (raw ~ /^[ \t]*#/ || raw ~ /^[ \t]*$/) next
+	code = scan(raw, 1)
+	blank = scan(raw, 2)
+	# a heredoc starts after this line (its body is data, not code); found in the blanked
+	# text, so a << inside quotes is no heredoc, and its word read from the code
+	hp = heredoc_at(blank)
+	if (hp && match(substr(code, hp), RE_HD)) {
+		w = substr(code, hp, RLENGTH); hdtab = (w ~ /^<<-/); hdline = NR
+		sub(/^<<-?[ \t]*/, "", w); gsub(/\\/, "", w); gsub("[\"" sq "]", "", w)
+		hd = w
+	}
+	if (kind == "zsh") trap_rule(code, allow)
+	if (allow) next
+	mktemp_rule(blank)
+	path_rule(code)
+}
+END {
+	if (HAVE_EXIT) {
+		if (!(HAVE_INT && HAVE_TERM))
+			for (k = 1; k <= nx; k++) add(EXITL[k], "zsh-exit-alone", "zsh runs an EXIT trap on neither Ctrl-C nor TERM: also trap INT and TERM with a command that ends in exit 130 and exit 143")   # M: lint-zsh-exit
+		for (k = 1; k <= ns; k++) add(SIGNX[k], "zsh-signal-no-exit", "zsh runs this trap on the signal and then carries on, to exit 0 at the end: end it with exit 130 (INT), 143 (TERM) or 129 (HUP)")
+	}
+	if (hd != "") add(hdline, "heredoc-open", "the heredoc started here (<<" hd ") never ends, so the lines after it were not checked")
+	for (k = 1; k <= nf; k++) print F[k]
+}'
+
+# The canary: lint must flag these three, by line and rule, before it reads any file.
+lint_canary_text() {
+	printf '%s\n' 'd=$(mktemp -d)'   # test-temp: allow lint canary
+	printf '%s\n' 'f=/tmp/fixed'     # test-temp: allow lint canary
+	printf '%s\n' 'trap cleanup EXIT'
+}
+
+# is_binary FILE: 0 when its first 8 KB hold a NUL byte, counted without reading the bytes
+# into the shell (a command substitution drops a NUL with a warning, measured on bash 5).
+is_binary() {
+	local n
+	n=$(head -c 8192 "$1" 2>/dev/null | LC_ALL=C tr -dc '\000' | wc -c)
+	[ "$((n + 0))" -gt 0 ]
+}
+
+shell_kind() {
+	local first
+	is_binary "$1" && return
+	first=$(sed -n 1p "$1" 2>/dev/null)
+	case "$first" in
+		'#!'*zsh*) echo zsh; return ;;
+		'#!'*bash* | '#!'*/sh | '#!'*/sh' '* | '#!'*' sh' | '#!'*' sh '* | '#!'*ksh* | '#!'*dash*) echo sh; return ;;
+		'#!'*) return ;;
+	esac
+	case "$1" in
+		*.zsh) echo zsh ;;
+		*.sh | *.bash) echo sh ;;
+	esac
+}
+
+# Lint reads bytes (LC_ALL=C): in a UTF-8 locale macOS awk stops at the first invalid byte
+# ("towc: multibyte conversion failure") and its findings so far look like a clean file.
+cmd_lint() {
+	local f kind got raw st out cannot=0 checked=0 skipped=0 findings=0 line
+	if [ $# -eq 0 ]; then
+		echo "test-temp lint: REFUSED: no files given: nothing checked, NOT a pass" >&2
+		return 2
+	fi
+	got=$(lint_canary_text | LC_ALL=C awk -v kind=zsh "$LINT_AWK" | cut -f1,2 | sort -n | tr '\t\n' ' ;')
+	if [ "$got" != "1 mktemp;2 path;3 zsh-exit-alone;" ]; then   # test-temp: allow the canary's expected rule ids
+		echo "test-temp lint: cannot run: its canary was not flagged as expected (got: ${got:-nothing}); nothing checked, NOT a pass" >&2
+		return 2
+	fi
+	for f in "$@"; do
+		if [ ! -f "$f" ] || [ ! -r "$f" ]; then
+			echo "test-temp lint: cannot read $f" >&2
+			cannot=$((cannot + 1))
+			continue
+		fi
+		kind=$(shell_kind "$f")
+		if [ -z "$kind" ]; then
+			skipped=$((skipped + 1))
+			continue
+		fi
+		raw=$(LC_ALL=C awk -v kind="$kind" "$LINT_AWK" "$f")
+		st=$?
+		if [ "$st" != 0 ]; then
+			echo "test-temp lint: cannot read $f: awk stopped (exit $st), so its findings are not all there" >&2
+			cannot=$((cannot + 1))
+			continue
+		fi
+		checked=$((checked + 1))
+		[ -n "$raw" ] || continue
+		out=$(printf '%s\n' "$raw" | sort -t "$TAB" -k1,1n)
+		while IFS="$TAB" read -r line id why; do
+			findings=$((findings + 1))
+			printf '%s:%s: %s [%s]\n' "$f" "$line" "$why" "$id"
+		done <<EOF
+$out
+EOF
+	done
+	echo "test-temp lint: $checked shell file(s) checked, $skipped not shell (skipped), $cannot unreadable; $findings finding(s)"
+	if [ "$cannot" -gt 0 ]; then return 2; fi
+	if [ "$checked" -eq 0 ]; then
+		echo "test-temp lint: REFUSED: no shell file among the arguments: nothing checked, NOT a pass" >&2
+		return 2
+	fi
+	[ "$findings" -eq 0 ] && return 0
+	return 1
+}
+
+# ------------------------------------------------------------------------------ selftest
+PASS=0 FAIL=0 SKIP=0
+ok() { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
+bad() { FAIL=$((FAIL + 1)); printf '  FAIL %s\n       got: %s\n' "$1" "$(printf '%s' "${2-}" | tr '\n' '|' | cut -c1-700)"; }
+skip() { SKIP=$((SKIP + 1)); printf '  SKIPPED %s -- %s\n' "$1" "$2"; }
+has() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
+
+sh_cmd() { case "$1" in *zsh*) printf '%s -f' "$1" ;; *) printf '%s' "$1" ;; esac; }
+shell_version() { "$1" -c 'printf "%s" "${BASH_VERSION-}${ZSH_VERSION-}"' 2>/dev/null; }
+
+# new_arm: a fresh TMPDIR for the stand-in (A) and a folder for what it says (O).
+new_arm() {
+	ARM=$((ARM + 1)); A="$ROOT/a$ARM"; O="$ROOT/o$ARM"
+	command mkdir -p "$A" "$O"
+	EXTRA=""
+}
+said() { tail -4 "$O/said" 2>/dev/null | tr '\n' '|'; }
+folder() { sed -n 1p "$O/folder" 2>/dev/null; }
+# events PATH: "<made> <ends> <last end> <pid made> <pid end> <detail>" from the arm's list
+events() {
+	local l=${2:-$A/.test-temp/list}
+	if [ ! -f "$l" ]; then echo "0 0 - - - -"; return; fi
+	awk -F'\t' -v p="$1" '$2 == p { if ($1 == "made") { m++; pm = $3 } else { e++; ev = $1; pe = $3; d = $5 } }
+		END { gsub(/ /, "_", d); printf "%d %d %s %s %s %s\n", m, e, (ev == "" ? "-" : ev), (pm == "" ? "-" : pm), (pe == "" ? "-" : pe), (d == "" ? "-" : d) }' "$l"
+}
+
+timed() {   # SECONDS CMD...: CMD, ended by SIGALRM after SECONDS (exit 142), so a hang fails an arm
+	local t=$1
+	shift
+	perl -e 'alarm shift @ARGV; exec { $ARGV[0] } @ARGV or exit 127' "$t" "$@"
+}
+run_standin() {   # SHELL HELPER MODE: RC; TMPDIR is A, what it says goes to O/said
+	timed 30 env TMPDIR="$A" $EXTRA $(sh_cmd "$1") "$STANDIN" "$2" "$3" "$O" >>"$O/said" 2>&1
+	RC=$?
+}
+# sup MODE SIG SECONDS CMD...: CMD under the supervisor (see write_fixtures); RC is its one
+# line: "signal N" when CMD died of signal N, "exit N", "nomarker" or "timeout".
+sup() {   # (the marker is O/waiting, or SUPMARK when set)
+	[ $# -ge 4 ] || { echo "sup: needs MODE SIG SECONDS CMD..." >&2; RC="no result"; return 2; }
+	local m=$1 s=$2 t=$3
+	shift 3
+	perl "$SUP" "$O/result" "$m" "$s" "${SUPMARK:-$O/waiting}" "$t" "$@" >>"$O/said" 2>&1
+	RC=$(sed -n 1p "$O/result" 2>/dev/null)
+	[ -n "$RC" ] || RC="no result"
+}
+launch_run() {   # SHELL HELPER MODE: test-temp run of the stand-in, in its own process group
+	perl -e '$SIG{$_} = "DEFAULT" for qw(INT TERM HUP PIPE QUIT); setpgrp(0, 0); exec { $ARGV[0] } @ARGV or exit 127' -- \
+		env TMPDIR="$A" "$TOOL" run -- $(sh_cmd "$1") "$STANDIN" "$2" "$3" "$O" >>"$O/run" 2>&1 &
+	LPID=$!
+	KIDS="$KIDS $LPID"
+}
+wait_for() {   # FILE SECONDS
+	local i=0 n=$(($2 * 20))
+	while [ ! -e "$1" ]; do
+		i=$((i + 1))
+		[ "$i" -gt "$n" ] && return 1
+		sleep 0.05
+	done
+	return 0
+}
+reap() {   # PID SECONDS: RC is its exit status; its group is killed after SECONDS, and once
+	# it has ended (a child left hanging in it would otherwise outlive the arm)
+	local w
+	perl -e 'sleep $ARGV[1]; kill "KILL", -$ARGV[0]' "$1" "$2" >/dev/null 2>&1 &
+	w=$!
+	wait "$1"
+	RC=$?
+	kill "$w" 2>/dev/null
+	wait "$w" 2>/dev/null
+	kill -KILL -- "-$1" 2>/dev/null
+}
+
+# expect_gone LABEL WANT: RC is WANT (or nonzero), the folder went through the stand-in shim
+# into the stand-in Trash, listed made and gone once each, by one pid (O/pid when it wrote one).
+expect_gone() {
+	local label=$1 want=$2 f why="" ev
+	f=$(folder)
+	[ -n "$f" ] || why="the stand-in never said its folder"
+	if [ -z "$why" ]; then
+		if [ "$want" = nonzero ]; then [ "$RC" != 0 ] || why="exit 0, want non-zero"
+		else [ "$RC" = "$want" ] || why="got [$RC], want [$want]"; fi
+	fi
+	[ -z "$why" ] && { [ -e "$f" ] || [ -L "$f" ]; } && why="its folder is still there: $f"
+	[ -z "$why" ] && [ ! -d "$FAKETRASH/${f##*/}" ] && why="its folder is not in the stand-in Trash"
+	if [ -z "$why" ]; then
+		ev=$(events "$f")
+		set -- $ev
+		[ "$1:$2:$3" = "1:1:gone" ] || why="list: made $1, ends $2, last end $3 (want 1, 1, gone)"
+		[ -z "$why" ] && [ "$4" != "$5" ] && why="made by pid $4 but ended by pid $5"
+		[ -z "$why" ] && [ -f "$O/pid" ] && [ "$4" != "$(sed -n 1p "$O/pid")" ] && why="listed pid $4 is not the test's own, $(sed -n 1p "$O/pid")"
+	fi
+	if [ -z "$why" ]; then ok "$label"; else bad "$label" "$why; it said: $(said)"; fi
+}
+# expect_real LABEL WANT: the same through the REAL shim: gone (Trash reachable) or refused
+# and still there (the sandbox), as the probe measured.
+expect_real() {
+	local label=$1 want=$2 f why="" ev
+	f=$(folder)
+	[ -n "$f" ] || why="the stand-in never said its folder"
+	[ -z "$why" ] && [ "$RC" != "$want" ] && why="got [$RC], want [$want]"
+	if [ -z "$why" ]; then
+		set -- $(events "$f")
+		if [ "$TRASH" = reachable ]; then
+			{ [ -e "$f" ] || [ -L "$f" ]; } && why="its folder is still there: $f"
+			[ -z "$why" ] && [ "$1:$2:$3" != "1:1:gone" ] && why="list: made $1, ends $2, last end $3 (want gone)"
+		else
+			[ -d "$f" ] || why="its folder is gone, but this Trash refuses: $f"
+			[ -z "$why" ] && [ "$1:$2:$3" != "1:1:refused" ] && why="list: made $1, ends $2, last end $3 (want refused)"
+			[ -z "$why" ] && ! has "$6" afpAccessDenied && why="refused, but the detail does not name the sandbox: $6"
+		fi
+	fi
+	if [ -z "$why" ]; then ok "$label ($TRASH: $([ "$TRASH" = reachable ] && echo gone to the Trash || echo listed refused, still there))"
+	else bad "$label" "$why; it said: $(said)"; fi
+}
+no_folder_made() {   # 0 when the arm made no stand-in folder and listed none
+	local e
+	for e in "$A"/standin.*; do [ -e "$e" ] && return 1; done
+	[ -f "$A/.test-temp/list" ] && command grep -q '^made' "$A/.test-temp/list" && return 1
+	return 0
+}
+# session_where DIR: the words check uses for a refused folder whose run sat in DIR
+session_where() {
+	case "$1/" in
+		"/private/tmp/claude-$(id -u)"/pj-*/* | "/tmp/claude-$(id -u)"/pj-*/*) echo "they go when the session ends" ;;   # test-temp: allow the session folder shape
+		*) echo "they stay in $1 until you trash them" ;;
+	esac
+}
+
+write_fixtures() {
+	command mkdir -p "$ROOT/shims/accept" "$ROOT/shims/refuse" "$ROOT/shims/unmarked" "$ROOT/helpers" "$ROOT/tool" "$FAKETRASH"
+	{
+		printf '%s\n' '#!/bin/sh'
+		printf '%s\n' '# PATH shim. Deletion goes to the Trash -- a test-temp selftest stand-in: it moves each'
+		printf '%s\n' '# target into the selftest'"'"'s own stand-in Trash, and refuses a folder that holds the'
+		printf '%s\n' '# current folder, as the real trash guard does.'
+		printf '%s\n' "T='$FAKETRASH'"
+		printf '%s\n' 'for a in "$@"; do'
+		printf '%s\n' '	case "$a" in -*) continue ;; esac'
+		printf '%s\n' '	if [ -d "$a" ]; then'
+		printf '%s\n' '		here=$(pwd -P); real=$(cd -P -- "$a" && pwd -P)'
+		printf '%s\n' '		case "$here/" in "$real"/*) echo "stand-in shim: refused $a: it holds the current folder" >&2; exit 1 ;; esac'
+		printf '%s\n' '	fi'
+		printf '%s\n' '	mv -- "$a" "$T/" || exit 1'
+		printf '%s\n' 'done'
+	} >>"$ROOT/shims/accept/rm"
+	{
+		printf '%s\n' '#!/bin/sh'
+		printf '%s\n' '# PATH shim. Deletion goes to the Trash -- a test-temp selftest stand-in that refuses every'
+		printf '%s\n' '# path, as the Claude sandbox does, and leaves it where it is.'
+		printf '%s\n' 'echo "trash: Error Domain=NSOSStatusErrorDomain Code=-5000 \"afpAccessDenied\" (selftest stand-in)" >&2'
+		printf '%s\n' 'exit 1'
+	} >>"$ROOT/shims/refuse/rm"
+	{
+		printf '%s\n' '#!/bin/sh'
+		printf '%s\n' '# a stand-in rm WITHOUT the Trash shim marker: test-temp.sh must refuse it'
+		printf '%s\n' 'exit 0'
+	} >>"$ROOT/shims/unmarked/rm"
+	chmod +x "$ROOT/shims/accept/rm" "$ROOT/shims/refuse/rm" "$ROOT/shims/unmarked/rm"
+	for k in accept refuse unmarked; do
+		awk -v shim="$ROOT/shims/$k/rm" -v q="'" '
+			/#P: shim/ { print "_TT_SHIM=" q shim q "   #P: shim (selftest copy)"; n++; next }
+			{ print }
+			END { exit (n != 1) }' "$HELPER" >>"$ROOT/helpers/$k.sh" || return 1
+	done
+	cp "$SELF" "$ROOT/tool/test-temp" && cp "$ROOT/helpers/accept.sh" "$ROOT/tool/test-temp.sh" || return 1
+	chmod +x "$ROOT/tool/test-temp"
+	# Copies of this command that hold one of run's races open (run_pause), each beside an
+	# accept helper; the #P lines are matched at the start of a line, never this awk itself.
+	for k in before after rewait; do
+		command mkdir -p "$ROOT/race-$k"
+		awk -v at="$k" -v mark="$ROOT/race-$k/paused" -v q="'" '
+			/^RUN_PAUSE_AT=""/ { print "RUN_PAUSE_AT=" q at q "   #P: pause-at (selftest copy)"; n++; next }
+			/^RUN_PAUSE_MARK=""/ { print "RUN_PAUSE_MARK=" q mark q "   #P: pause-mark (selftest copy)"; n++; next }
+			{ print }
+			END { exit (n != 2) }' "$SELF" >>"$ROOT/race-$k/test-temp" || return 1
+		chmod +x "$ROOT/race-$k/test-temp"
+		cp "$ROOT/helpers/accept.sh" "$ROOT/race-$k/test-temp.sh" || return 1
+	done
+	# An awk that fails on one named file and is the real awk for everything else.
+	command mkdir -p "$ROOT/fakeawk"
+	{
+		printf '%s\n' '#!/bin/sh'
+		printf '%s\n' '# a test-temp selftest stand-in: awk that stops on awk-fails-here.sh, as an awk that cannot read a file does'
+		printf '%s\n' 'for a in "$@"; do case "$a" in *awk-fails-here.sh) echo "awk: stand-in failure" >&2; exit 2 ;; esac; done'
+		printf '%s\n' 'exec /usr/bin/awk "$@"'
+	} >>"$ROOT/fakeawk/awk"
+	chmod +x "$ROOT/fakeawk/awk"
+	# The supervisor: it can tell a child that died of a signal from one that exited with
+	# 128 + N, which a shell's own wait cannot.
+	cat >>"$SUP" <<'SUPERVISOR'
+# sup.pl RESULT MODE SIG MARKER SECONDS CMD...: start CMD in a process group of its own, with
+# INT TERM HUP PIPE QUIT at their defaults. MODE group or pid: once MARKER exists, SIG goes to
+# the group or to CMD alone. MODE pipe: CMD's stdout is a pipe, closed after its first byte.
+# Then wait. RESULT gets one line: "signal N" (CMD died of signal N), "exit N", "nomarker" or
+# "timeout" (SECONDS passed, the group was killed). Whatever is left in the group is killed.
+use strict;
+use POSIX ":sys_wait_h";
+my ($result, $mode, $sig, $marker, $secs, @cmd) = @ARGV;
+my ($r, $w);
+if ($mode eq "pipe") { pipe($r, $w) or die "pipe: $!" }
+my $pid = fork;
+die "fork: $!" unless defined $pid;
+if (!$pid) {
+	$SIG{$_} = "DEFAULT" for qw(INT TERM HUP PIPE QUIT);
+	setpgrp(0, 0);
+	if ($mode eq "pipe") { close $r; open(STDOUT, ">&", $w) or exit 126; close $w }
+	exec { $cmd[0] } @cmd or exit 127;
+}
+my $limit = $secs * 20;
+my $t = 0;
+my $note = "";
+if ($mode eq "pipe") {
+	close $w;
+	my $buf;
+	eval { local $SIG{ALRM} = sub { die "alarm\n" }; alarm $secs; sysread($r, $buf, 1); alarm 0 };
+	close $r;
+} else {
+	while (! -e $marker) { select(undef, undef, undef, 0.05); last if ++$t > $limit }
+	if (-e $marker) { kill $sig, ($mode eq "group" ? -$pid : $pid) } else { $note = "nomarker" }
+}
+$t = 0;
+while (waitpid($pid, WNOHANG) == 0) {
+	select(undef, undef, undef, 0.05);
+	if (++$t > $limit) { kill "KILL", -$pid; waitpid($pid, 0); $note = "timeout"; last }
+}
+my $st = $?;
+kill "KILL", -$pid;
+open(my $o, ">>", $result) or die "result: $!";
+if ($note) { print $o "$note\n" }
+elsif ($st & 127) { printf $o "signal %d\n", $st & 127 }
+else { printf $o "exit %d\n", $st >> 8 }
+close $o;
+SUPERVISOR
+	# The stand-in test: one file for bash and zsh, under set -u unless TT_STANDIN_U=0.
+	{
+		printf '%s\n' '# test-temp selftest stand-in: $1 helper, $2 mode, $3 a folder for what it says'
+		printf '%s\n' '[ "${TT_STANDIN_U-1}" = 1 ] && set -u'
+		printf '%s\n' 'if [ -n "${ZSH_VERSION-}" ]; then setopt no_bg_nice 2>/dev/null; fi'
+		printf '%s\n' 'H=$1; M=$2; O=$3'
+		printf '%s\n' 'case "$M" in'
+		printf '%s\n' '	fn) f() { . "$H" new standin; }; f; printf "%s\n" "$TT" >>"$O/folder"; printf "after\n" >>"$O/after"; exit 0 ;;'
+		printf '%s\n' '	trapfirst) trap '"'"'printf "mine\n" >>"$O/mine"'"'"' EXIT; . "$H" new standin; printf "after\n" >>"$O/after"; exit 0 ;;'
+		printf '%s\n' '	trapsig) trap '"'"'printf "mine\n" >>"$O/mine"'"'"' INT; trap '"'"'printf "mine\n" >>"$O/mine"'"'"' HUP; . "$H" new standin; printf "after\n" >>"$O/after"; exit 0 ;;'
+		printf '%s\n' '	ignorepipe) trap "" PIPE; . "$H" new standin; printf "%s\n" "$TT" >>"$O/folder"; exit 0 ;;'
+		printf '%s\n' '	adopt) D=$(mktemp -d "${TMPDIR%/}/standin-adopt.XXXXXX") || exit 9; . "$H" adopt "$D"; printf "%s\n" "$TT" >>"$O/folder"; exit 0 ;;'
+		printf '%s\n' '	adoptlink) D=$(mktemp -d "${TMPDIR%/}/standin-real.XXXXXX") || exit 9; ln -s "$D" "${TMPDIR%/}/standin-link.abcdef" || exit 9'
+		printf '%s\n' '	     . "$H" adopt "${TMPDIR%/}/standin-link.abcdef/"; printf "%s\n" "$TT" >>"$O/folder"; exit 0 ;;'
+		printf '%s\n' 'esac'
+		printf '%s\n' '. "$H" new standin ${TT_STANDIN_KEEP-}'
+		printf '%s\n' 'printf "%s\n" "$TT" >>"$O/folder"'
+		printf '%s\n' 'mkdir "$TT/sub" && printf "x\n" >>"$TT/sub/file"'
+		printf '%s\n' 'case "$M" in'
+		printf '%s\n' '	ok) exit 0 ;;'
+		printf '%s\n' '	okran) printf "ran\n" >>"$O/ran"; exit 0 ;;'
+		printf '%s\n' '	fail) exit 1 ;;'
+		printf '%s\n' '	wait) printf "%s\n" "$$" >>"$O/pid"; printf "waiting\n" >>"$O/waiting"; while :; do sleep 0.1; done ;;'
+		printf '%s\n' '	pipe) i=0; while [ "$i" -lt 200000 ]; do printf "y\n"; i=$((i + 1)); done; exit 7 ;;'
+		printf '%s\n' '	printloop) printf "waiting\n" >>"$O/waiting"; while :; do printf "y\n" >/dev/null; done ;;'
+		printf '%s\n' '	sub) ( exit 3 ); x=$(printf hi); ( exit 0 ) & wait $!; printf "hi\n" | cat >/dev/null'
+		printf '%s\n' '	     [ -d "$TT" ] && printf "kept\n" >>"$O/after"; exit 0 ;;'
+		printf '%s\n' '	nested) ( . "$H" new inner; printf "%s\n" "$TT" >>"$O/inner"; exit 0 ); [ -d "$TT" ] && printf "kept\n" >>"$O/after"; exit 0 ;;'
+		printf '%s\n' '	cd) cd "$TT" || exit 9; exit 0 ;;'
+		printf '%s\n' '	also) D=$(mktemp -d "${TMPDIR%/}/standin-also.XXXXXX") || exit 9; tt_also "$D" || exit 9; printf "%s\n" "$D" >>"$O/also"; exit 0 ;;'
+		printf '%s\n' '	badalso) tt_also "$HOME"; printf "rc=%s\n" "$?" >>"$O/also-rc"'
+		printf '%s\n' '	     tt_also "/tmp/claude-$(id -u)/standin-shared.abcdef"; printf "rc=%s\n" "$?" >>"$O/also-rc"; exit 0 ;;'   # test-temp: allow the shared root, which tt_also must refuse
+		printf '%s\n' '	onend) tt_on_end '"'"'printf "%s\n" "$([ -d "$TT" ] && echo saw-folder || echo no-folder)" >>"$O/onend"'"'"'; exit 0 ;;'
+		printf '%s\n' '	onendexit) tt_on_end "false || exit 7"; tt_on_end '"'"'return 3; printf "never\n" >>"$O/onend"'"'"'; tt_on_end '"'"'printf "ran3\n" >>"$O/onend"'"'"'; exit 0 ;;'
+		printf '%s\n' '	unbound) printf "%s\n" "$NO_SUCH_VARIABLE_IN_THIS_TEST"; exit 0 ;;'
+		printf '%s\n' '	errexit) set -e; false; exit 0 ;;'
+		printf '%s\n' 'esac'
+		printf '%s\n' 'exit 8'
+	} >>"$STANDIN"
+	# A stand-in with no helper: its folder is never removed (the control for check).
+	{
+		printf '%s\n' '# test-temp selftest stand-in with no helper: plain mktemp, and nothing removes it'
+		printf '%s\n' 'd=$(mktemp -d "${TMPDIR%/}/${2:-plain-standin}.XXXXXX") || exit 9'
+		printf '%s\n' 'printf "x\n" >>"$d/file"'
+		printf '%s\n' 'exit "${1:-0}"'
+	} >>"$PLAIN"
+}
+
+selftest() {
+	local S L sh s B Z k f n got rc out before after base fw planted fb sess
+	if [ -z "${TMPDIR-}" ] || [ ! -d "$TMPDIR" ]; then
+		echo "test-temp --selftest: TMPDIR is not set to a folder -- INVALID TRIAL, not a pass" >&2
+		return 2
+	fi
+	if ! load_lib || [ -z "$_TT_RM" ]; then
+		echo "test-temp --selftest: no helper or no Trash shim (${_TT_WHY-}), so it could not clean up after itself -- INVALID TRIAL" >&2
+		return 2
+	fi
+	REAL_RM=$_TT_RM
+	uid=$(id -u)
+	# Its own folder is listed like any test's, in the caller's list, so a test-temp run
+	# around this selftest can explain it; the arms then run with no TEST_TEMP_* of the caller's.
+	_tt_strip "$TMPDIR"
+	base=$_TT_S
+	_tt_strip "${TEST_TEMP_DIR:-$base}"
+	SELF_LIST="$_TT_S/.test-temp"
+	if ! command mkdir -p -- "$SELF_LIST" 2>/dev/null || ! command touch -- "$SELF_LIST/list" 2>/dev/null; then
+		echo "test-temp --selftest: cannot write the list in $SELF_LIST -- INVALID TRIAL" >&2
+		return 2
+	fi
+	SELF_LIST="$SELF_LIST/list"
+	unset TEST_TEMP_DIR TEST_TEMP_REFUSED TT_STANDIN_U TT_STANDIN_KEEP
+	before=$(names "$base")
+	ROOT=$(command mktemp -d "$base/test-temp-selftest.XXXXXX") || {
+		echo "test-temp --selftest: mktemp failed -- INVALID TRIAL, not a pass" >&2
+		return 2
+	}
+	_tt_real "$ROOT"
+	ROOT=$_TT_R
+	_tt_log_to "$SELF_LIST" made "$ROOT" "$$" "test-temp --selftest"
+	KIDS="" ARM=0 ST_DONE=""
+	trap 'st_end' EXIT
+	trap 'st_end; exit 130' INT
+	trap 'st_end; exit 143' TERM
+	trap 'st_end; exit 129' HUP
+	FAKETRASH="$ROOT/faketrash" STANDIN="$ROOT/standin.sh" PLAIN="$ROOT/plain.sh" SUP="$ROOT/sup.pl"
+	if ! write_fixtures; then
+		echo "test-temp --selftest: could not build the fixtures (the #P: shim line must appear once) -- INVALID TRIAL" >&2
+		return 2
+	fi
+	HA="$ROOT/helpers/accept.sh" HR="$ROOT/helpers/refuse.sh" HU="$ROOT/helpers/unmarked.sh" TOOL="$ROOT/tool/test-temp"
+	SHELLS=/bin/bash
+	B=$(env -i PATH="$PATH" sh -c 'command -v bash')
+	[ -n "$B" ] && [ "$B" != /bin/bash ] && SHELLS="$SHELLS $B"
+	[ -x /bin/zsh ] && SHELLS="$SHELLS /bin/zsh"
+	Z=$(env -i PATH="$PATH" sh -c 'command -v zsh')
+	[ -n "$Z" ] && [ "$Z" != /bin/zsh ] && SHELLS="$SHELLS $Z"
+	# Does this Trash take a folder? Measured with the real shim, not assumed.
+	f=$(command mktemp -d "$ROOT/real-probe.XXXXXX")
+	out=$( (builtin cd / && "$REAL_RM" -rf -- "$f") 2>&1)
+	if [ ! -e "$f" ]; then TRASH=reachable
+	elif has "$out" afpAccessDenied; then TRASH=refused
+	else TRASH=unknown; fi
+	# Where a folder goes with TMPDIR unset (Gavin, 25 Oct 2026), as the helper says it.
+	fb=$(env -u TMPDIR /bin/bash -c '. "$1" lib && _tt_base && printf "%s" "$_TT_BASE"' test-temp-fallback "$HELPER" 2>/dev/null)
+	printf 'test-temp --selftest: helper %s\n' "$HELPER"
+	printf '  in %s\n  shells:' "$ROOT"
+	for S in $SHELLS; do printf ' %s (%s)' "$S" "$(shell_version "$S")"; done
+	printf '\n  the Trash here: %s%s\n' "$TRASH" "$([ "$TRASH" = refused ] && echo ' (the sandbox: real-shim arms expect refused)')"
+	printf '  SANDBOX_RUNTIME=%s; with TMPDIR unset a folder goes in %s\n' "${SANDBOX_RUNTIME:-unset}" "${fb:-(none)}"
+
+	for S in $SHELLS; do
+		L="$S"
+		sh=$(sh_cmd "$S")
+		new_arm; run_standin "$S" "$HA" ok
+		expect_gone "A1 $L: exit 0 -> exit 0 kept, folder to the shim once, by the test's own pid" 0
+		new_arm; run_standin "$S" "$HA" fail
+		expect_gone "A2 $L: exit 1 -> exit 1 kept, folder gone" 1
+		new_arm; sup group INT 10 env TMPDIR="$A" $sh "$STANDIN" "$HA" wait "$O"
+		expect_gone "A3 $L: Ctrl-C (INT to its process group) -> folder gone, then it dies of SIGINT" "signal 2"
+		new_arm; sup pid TERM 10 env TMPDIR="$A" $sh "$STANDIN" "$HA" wait "$O"
+		expect_gone "A4 $L: TERM to the shell -> folder gone, then it dies of SIGTERM" "signal 15"
+		new_arm; sup group HUP 10 env TMPDIR="$A" $sh "$STANDIN" "$HA" wait "$O"
+		expect_gone "A5 $L: HUP to its process group -> folder gone, then it dies of SIGHUP" "signal 1"
+		new_arm; sup group INT 10 env TMPDIR="$A" $sh "$STANDIN" "$HA" printloop "$O"
+		expect_gone "A3b $L: Ctrl-C while the test is printing -> folder gone, then it dies of SIGINT" "signal 2"
+		new_arm; sup pipe PIPE 20 env TMPDIR="$A" $sh "$STANDIN" "$HA" pipe "$O"
+		expect_gone "A6 $L: broken pipe (its reader quits) -> folder gone, then it dies of SIGPIPE" "signal 13"
+		# Finding 1: a bash loop of three tests must stop at Ctrl-C, as it does for a test with
+		# no trap; a test that exits 130 instead lets the loop run on (the control).
+		new_arm
+		printf '%s\n' "t() { TMPDIR='$A' $sh '$STANDIN' '$HA' \"\$1\" '$O'; echo \"rc=\$?\" >>'$O/runner'; }" \
+			't wait' 't okran' 't okran' "echo end >>'$O/runner'" >>"$O/runner.sh"
+		sup group INT 15 /bin/bash "$O/runner.sh"
+		if [ ! -e "$O/ran" ]; then
+			expect_gone "A19 $L: a bash loop of three tests, Ctrl-C in the first -> its folder gone, the loop dies of SIGINT, tests 2 and 3 never run" "signal 2"
+		else bad "A19 $L: the loop carried on after Ctrl-C" "$RC; runner: $(tr '\n' ' ' <"$O/runner" 2>/dev/null)"; fi
+		new_arm
+		printf '%s\n' "t() { TMPDIR='$A' $sh '$STANDIN' '$HA' \"\$1\" '$O'; echo \"rc=\$?\" >>'$O/runner'; }" \
+			"$sh -c 'trap \"exit 130\" INT; printf \"waiting\n\" >>\"\$1/waiting\"; while :; do sleep 0.1; done' x '$O'; echo \"rc=\$?\" >>'$O/runner'" \
+			't okran' 't okran' "echo end >>'$O/runner'" >>"$O/runner.sh"
+		sup group INT 15 /bin/bash "$O/runner.sh"
+		if [ "$RC" = "exit 0" ] && [ "$(wc -l <"$O/ran" 2>/dev/null | tr -d ' ')" = 2 ]; then
+			ok "A19 $L: control: a first test whose trap only exits 130 -> the same loop runs tests 2 and 3, exit 0"
+		else bad "A19 $L: control" "$RC; ran $(wc -l <"$O/ran" 2>/dev/null); runner: $(tr '\n' ' ' <"$O/runner" 2>/dev/null)"; fi
+		new_arm; run_standin "$S" "$HA" sub
+		if [ "$(sed -n 1p "$O/after" 2>/dev/null)" = kept ]; then
+			expect_gone "A7 $L: ( exit 3 ), \$(...), & and a pipe end inside the test: folder kept until the test ends, then gone, listed once" 0
+		else bad "A7 $L: a child's end sent the folder away early" "$(said)"; fi
+		new_arm; run_standin "$S" "$HA" cd
+		expect_gone "A8 $L: cd into its own folder, then exit 0 -> still removed (the end runs from /)" 0
+		new_arm; EXTRA="TT_STANDIN_U=0"; run_standin "$S" "$HA" ok
+		expect_gone "A9 $L: without set -u -> folder gone" 0
+		new_arm; EXTRA="TT_STANDIN_KEEP=keep-on-fail"; run_standin "$S" "$HA" fail
+		f=$(folder); set -- $(events "$f")
+		if [ "$RC" = 1 ] && [ -d "$f" ] && [ "$1:$2:$3" = "1:1:kept" ] && command grep -qF "kept $f" "$O/said"; then
+			ok "A10 $L: keep-on-fail and exit 1 -> folder kept, listed kept, and the test says where"
+		else bad "A10 $L: keep-on-fail" "rc=$RC made $1 ends $2 last $3 folder=$f; it said: $(said)"; fi
+		new_arm; EXTRA="TT_STANDIN_KEEP=keep-on-fail"; run_standin "$S" "$HA" ok
+		expect_gone "A10 $L: control: keep-on-fail and exit 0 -> folder gone" 0
+		new_arm; run_standin "$S" "$HA" also
+		f=$(sed -n 1p "$O/also" 2>/dev/null); set -- $(events "$f")
+		if [ -n "$f" ] && [ ! -e "$f" ] && [ -d "$FAKETRASH/${f##*/}" ] && [ "$1:$2:$3" = "1:1:gone" ]; then
+			expect_gone "A11 $L: tt_also: a second folder of the test's own goes with its first" 0
+		else bad "A11 $L: tt_also" "also=$f made $1 ends $2 last $3; it said: $(said)"; fi
+		new_arm; run_standin "$S" "$HA" adopt
+		expect_gone "A12 $L: adopt: a folder the test made itself goes to the shim at the end" 0
+		new_arm; run_standin "$S" "$HA" badalso
+		k='inside the shared'
+		[ -d "/tmp/claude-$(id -u)" ] || k='cannot be entered'   # test-temp: allow the shared root, named to prove the refusal
+		if [ "$(tr '\n' ' ' <"$O/also-rc" 2>/dev/null)" = "rc=2 rc=2 " ] && command grep -q "REFUSED $HOME" "$O/said" && command grep -q "standin-shared.abcdef: $k" "$O/said"; then
+			expect_gone "A13 $L: tt_also refuses \$HOME and a path in the shared root outside TMPDIR (return 2 each, nothing listed); the test's own folder still goes" 0
+		else bad "A13 $L: tt_also refusals" "$(tr '\n' ' ' <"$O/also-rc" 2>/dev/null); it said: $(said)"; fi
+		new_arm; run_standin "$S" "$HA" onend
+		if [ "$(cat "$O/onend" 2>/dev/null)" = saw-folder ]; then
+			expect_gone "A14 $L: tt_on_end runs once, before the folder moves" 0
+		else bad "A14 $L: tt_on_end" "onend=[$(cat "$O/onend" 2>/dev/null)]; it said: $(said)"; fi
+		# Finding 3: an exit (and a return) inside tt_on_end cannot skip the removal, and the
+		# test keeps its exit status; the control shows exit in a plain trap does skip what follows.
+		new_arm; run_standin "$S" "$HA" onendexit
+		if [ "$(cat "$O/onend" 2>/dev/null)" = ran3 ] && command grep -q 'a tt_on_end command called exit 7' "$O/said"; then
+			expect_gone "A18 $L: tt_on_end 'false || exit 7' and 'return 3' -> noted, the later command still runs, folder gone, exit 0 kept" 0
+		else bad "A18 $L: exit inside tt_on_end" "rc=$RC onend=[$(tr '\n' ' ' <"$O/onend" 2>/dev/null)]; it said: $(said)"; fi
+		new_arm; timed 30 $sh -c 'trap "eval \"false || exit 7\"; printf \"after\n\" >>\"\$1/ctl\"" EXIT; exit 0' x "$O" >>"$O/said" 2>&1
+		RC=$?
+		if [ "$RC" = 7 ] && [ ! -e "$O/ctl" ]; then ok "A18 $L: control: the same exit in a plain EXIT trap ends the shell there (exit 7, the next step never runs)"
+		else bad "A18 $L: control" "rc=$RC ctl=$([ -e "$O/ctl" ] && echo ran || echo absent)"; fi
+		new_arm; run_standin "$S" "$HA" nested
+		f=$(sed -n 1p "$O/inner" 2>/dev/null); set -- $(events "$f")
+		if [ -n "$f" ] && [ ! -e "$f" ] && [ "$1:$2:$3" = "1:1:gone" ] && [ "$(sed -n 1p "$O/after" 2>/dev/null)" = kept ]; then
+			expect_gone "A15 $L: a subshell that sources it again removes only its own folder, at its own end" 0
+		else bad "A15 $L: nested source in a subshell" "inner=$f made $1 ends $2 last $3 after=$(cat "$O/after" 2>/dev/null); it said: $(said)"; fi
+		new_arm; run_standin "$S" "$HA" unbound
+		expect_gone "A16 $L: a set -u abort in a script file -> non-zero, folder gone" nonzero
+		new_arm
+		timed 30 env TMPDIR="$A" $sh -c '. "$1" new standin; printf "%s\n" "$TT" >>"$2/folder"; set -u; printf "%s\n" "$NO_SUCH_VARIABLE_IN_THIS_TEST"' \
+			test-temp-standin "$HA" "$O" >>"$O/said" 2>&1
+		RC=$?
+		expect_gone "A16c $L: a set -u abort in -c code -> non-zero, folder gone (zsh runs no EXIT trap there: zshexit_functions does it)" nonzero
+		new_arm; run_standin "$S" "$HA" errexit
+		expect_gone "A17 $L: an ERR_EXIT (set -e) exit -> exit 1, folder gone (zsh: from the EXIT trap)" 1
+		# Finding 5: a refusal is the sandbox only with SANDBOX_RUNTIME=1; anywhere else it is
+		# listed failed, which check fails.
+		new_arm; EXTRA="SANDBOX_RUNTIME=1"; run_standin "$S" "$HR" ok
+		f=$(folder); set -- $(events "$f")
+		if [ "$RC" = 0 ] && [ -d "$f" ] && [ "$1:$2:$3" = "1:1:refused" ] && has "$6" "sandbox_refused" && command grep -qF "$f stays where it is" "$O/said"; then
+			ok "B1 $L: a refusing shim with SANDBOX_RUNTIME=1 -> listed refused (the sandbox), folder left in place and named, exit 0 kept, nothing else tried"
+		else bad "B1 $L: refusing shim in the sandbox" "rc=$RC made $1 ends $2 last $3 detail $6; it said: $(said)"; fi
+		new_arm; timed 30 env -u SANDBOX_RUNTIME TMPDIR="$A" $sh "$STANDIN" "$HR" ok "$O" >>"$O/said" 2>&1
+		RC=$?
+		f=$(folder); set -- $(events "$f")
+		if [ "$RC" = 0 ] && [ -d "$f" ] && [ "$1:$2:$3" = "1:1:failed" ] && has "$6" "not_the_Claude_sandbox"; then
+			ok "B2 $L: the same refusal with SANDBOX_RUNTIME unset -> listed failed, not the sandbox (control: B1)"
+		else bad "B2 $L: refusing shim outside the sandbox" "rc=$RC made $1 ends $2 last $3 detail $6; it said: $(said)"; fi
+		new_arm; run_standin "$S" "$HA" fn
+		case "$S" in
+			*zsh*)
+				if [ "$RC" = 2 ] && no_folder_made && [ ! -e "$O/after" ] && command grep -q 'inside a zsh function' "$O/said"; then
+					ok "R1 $L: sourced inside a zsh function -> refused, exit 2, no folder (control: A1 at the top level)"
+				else bad "R1 $L: sourced inside a zsh function" "rc=$RC; it said: $(said)"; fi
+				;;
+			*) expect_gone "R1 $L: sourced inside a bash function -> allowed (bash has no function-scoped EXIT trap), folder gone" 0 ;;
+		esac
+		new_arm; run_standin "$S" "$HA" trapfirst
+		if [ "$RC" = 2 ] && no_folder_made && [ "$(cat "$O/mine" 2>/dev/null)" = mine ] && command grep -q 'already set on EXIT' "$O/said"; then
+			ok "R2 $L: an EXIT trap already set -> refused, exit 2, no folder, the test's own trap left to run"
+		else bad "R2 $L: an EXIT trap already set" "rc=$RC mine=[$(cat "$O/mine" 2>/dev/null)]; it said: $(said)"; fi
+		# Finding 2: a signal trap of the test's own is refused too, naming each; an ignore is not.
+		new_arm; run_standin "$S" "$HA" trapsig
+		k=$(command grep 'already set on' "$O/said" 2>/dev/null)
+		if [ "$RC" = 2 ] && no_folder_made && [ ! -e "$O/after" ] && has "$k" INT && has "$k" HUP; then
+			ok "R2s $L: INT and HUP traps already set -> refused, exit 2, both named, no folder"
+		else bad "R2s $L: signal traps already set" "rc=$RC; it said: $(said)"; fi
+		new_arm; run_standin "$S" "$HA" ignorepipe
+		expect_gone "R2s $L: control: trap '' PIPE (an ignore) is left alone -> sourced, folder gone" 0
+		# Gavin's decision: with TMPDIR unset the folder goes in the macOS user temp folder (or
+		# /tmp), never the shared root. Inside the sandbox that folder cannot be written.
+		new_arm
+		timed 30 env -u TMPDIR TEST_TEMP_DIR="$A" $sh "$STANDIN" "$HA" ok "$O" >>"$O/said" 2>&1
+		RC=$?
+		f=$(folder)
+		_tt_real "$fb"
+		if [ -z "$fb" ]; then
+			bad "R3 $L: TMPDIR unset" "the helper gave no fallback folder"
+		elif [ "${SANDBOX_RUNTIME-}" = 1 ]; then
+			if [ "$RC" = 2 ] && command grep -qF "cannot make a folder in $fb" "$O/said" && [ ! -e "$O/folder" ]; then
+				ok "R3 $L: TMPDIR unset -> it tries $fb (the sandbox cannot write there: refused, exit 2, nothing made)"
+			else bad "R3 $L: TMPDIR unset, in the sandbox" "rc=$RC; it said: $(said)"; fi
+		else
+			case "$f" in
+				"$_TT_R"/standin.*) expect_gone "R3 $L: TMPDIR unset -> the folder is made in $fb, never the shared root, and goes at the end" 0 ;;
+				*) bad "R3 $L: TMPDIR unset" "rc=$RC folder=[$f], want it inside $fb; it said: $(said)" ;;
+			esac
+		fi
+		# Item 4 of the second review: the helper refuses the shared root itself, as run does, in
+		# its three spellings (control: A1, with a session-shaped TMPDIR, makes its folder).
+		got=""
+		for k in "/tmp/claude-$uid" "/tmp/claude-$uid/" "/private/tmp/claude-$uid"; do   # test-temp: allow the shared root's three spellings
+			new_arm
+			timed 30 env TMPDIR="$k" TEST_TEMP_DIR="$A" $sh "$STANDIN" "$HA" ok "$O" >>"$O/said" 2>&1
+			RC=$?
+			if [ "$RC" = 2 ] && command grep -q 'has no temp folder of its own' "$O/said" && [ ! -e "$O/folder" ]; then got="$got ok"
+			else got="$got [$k: rc=$RC folder=$(folder)]"; fi
+		done
+		if [ "$got" = " ok ok ok" ]; then ok "R8 $L: TMPDIR = the shared root (three spellings) -> the helper refuses, exit 2, and makes nothing there"
+		else bad "R8 $L: the helper and the shared root" "$got; it said: $(said)"; fi
+		new_arm; run_standin "$S" "$HU" ok
+		if [ "$RC" = 2 ] && no_folder_made && command grep -q "does not carry the Trash shim's marker" "$O/said"; then
+			ok "R4 $L: a shim without the Trash shim's marker -> refused, exit 2, no folder (control: A1's marked stand-in works)"
+		else bad "R4 $L: unmarked shim" "rc=$RC; it said: $(said)"; fi
+		new_arm
+		case "$S" in
+			*zsh*) timed 30 env TMPDIR="$A" "$S" -f -i -c ". '$HA' new standin; echo after-rc=\$?" >>"$O/said" 2>&1 ;;
+			*) timed 30 env TMPDIR="$A" "$S" --norc -i -c ". '$HA' new standin; echo after-rc=\$?" >>"$O/said" 2>&1 ;;
+		esac
+		if command grep -q 'REFUSED at an interactive prompt' "$O/said" && command grep -q 'after-rc=2' "$O/said" && no_folder_made; then
+			ok "R5 $L: at an interactive prompt -> refused with return 2, the shell carries on, no folder"
+		else bad "R5 $L: interactive prompt" "$(said)"; fi
+		new_arm; timed 30 env TMPDIR="$A" $sh "$HA" new standin >>"$O/said" 2>&1
+		RC=$?
+		if [ "$RC" = 2 ] && command grep -q 'do not run it' "$O/said" && no_folder_made; then
+			ok "R6 $L: run instead of sourced -> refused, exit 2"
+		else bad "R6 $L: run instead of sourced" "rc=$RC; it said: $(said)"; fi
+		# Finding 7: adopt through a link with a trailing slash is refused like the link itself.
+		new_arm; run_standin "$S" "$HA" adoptlink
+		if [ "$RC" = 2 ] && command grep -q 'not a folder, or a link' "$O/said" && ! command grep -q '^made' "$A/.test-temp/list" 2>/dev/null && [ -d "$A"/standin-real.* ]; then
+			ok "R7 $L: adopt link.abcdef/ (a link to a folder, trailing slash) -> refused, exit 2, nothing listed (control: A12 adopts a real folder)"
+		else bad "R7 $L: adopt a link with a trailing slash" "rc=$RC; it said: $(said)"; fi
+		if [ "$TRASH" = unknown ]; then
+			skip "C1 $L: the real shim" "the probe could neither trash a folder nor saw the sandbox's refusal: $out"
+		else
+			new_arm; run_standin "$S" "$HELPER" ok
+			expect_real "C1 $L: the shipped helper and the real Trash shim, exit 0" 0
+		fi
+		new_arm; timed 60 env TMPDIR="$A" "$TOOL" run -- $sh "$PLAIN" 0 >>"$O/run" 2>&1
+		RC=$?
+		if [ "$RC" = 4 ] && command grep -q 'FAIL left behind in the run folder, not made through test-temp.sh: .*/plain-standin\.' "$O/run"; then
+			ok "D3 $L: control: a plain-mktemp stand-in with no helper is failed by name, exit 4"
+		else bad "D3 $L: control: plain stand-in" "rc=$RC; run said: $(tail -4 "$O/run" | tr '\n' '|')"; fi
+	done
+
+	# ---- the real shim, Ctrl-C and cd (one shell each)
+	if [ "$TRASH" = unknown ]; then
+		skip "C2, C3: the real shim" "the probe was inconclusive: $out"
+	else
+		new_arm; sup group INT 10 env TMPDIR="$A" /bin/zsh -f "$STANDIN" "$HELPER" wait "$O"
+		expect_real "C2 /bin/zsh: the shipped helper, real shim, Ctrl-C to the group -> it dies of SIGINT" "signal 2"
+		new_arm; run_standin /bin/bash "$HELPER" cd
+		expect_real "C3 /bin/bash: the shipped helper, real shim, cd into the folder then exit 0 (the end runs from /)" 0
+	fi
+
+	# ---- run and check
+	new_arm; timed 60 env TMPDIR="$A" "$TOOL" run -- /bin/zsh -f "$STANDIN" "$HA" ok "$O" >>"$O/run" 2>&1
+	RC=$?
+	f=$(awk -F'\t' '$1 == "made" && $5 == "test-temp run" { print $2; exit }' "$A/.test-temp/list" 2>/dev/null)
+	set -- $(events "$f" "$A/.test-temp/list")
+	if [ "$RC" = 0 ] && command grep -q 'CLEAN (exit 0)' "$O/run" && ! ls -d "$A"/test-temp-run.* >/dev/null 2>&1 && [ "$1:$2:$3" = "1:1:gone" ]; then
+		ok "D1 run: a passing suite that cleans up -> exit 0, CLEAN, the run folder to the shim, its life in the caller's list"
+	else bad "D1 run: clean pass" "rc=$RC list: $*; run said: $(tail -3 "$O/run" | tr '\n' '|')"; fi
+	new_arm; timed 60 env TMPDIR="$A" "$TOOL" run -- /bin/bash "$STANDIN" "$HA" fail "$O" >>"$O/run" 2>&1
+	RC=$?
+	if [ "$RC" = 1 ] && command grep -q 'suite exit 1;.*SUITE FAILED (exit 1)' "$O/run"; then
+		ok "D2 run: a failing suite that cleans up -> exit 1, SUITE FAILED"
+	else bad "D2 run: suite failed, clean" "rc=$RC; run said: $(tail -3 "$O/run" | tr '\n' '|')"; fi
+	# Item 1 of the second review: a lone suite path with a space runs as one word; perl's
+	# plain exec @ARGV splits it (the control: exit 127, the suite never runs).
+	new_arm; command mkdir -p "$O/My Tests"
+	printf '%s\n' '#!/bin/sh' "printf 'ran\n' >>'$O/ran'" >>"$O/My Tests/run-all.sh"
+	chmod +x "$O/My Tests/run-all.sh"
+	timed 60 env TMPDIR="$A" "$TOOL" run -- "$O/My Tests/run-all.sh" >>"$O/run" 2>&1
+	RC=$?
+	timed 30 perl -e 'exec @ARGV or exit 127' "$O/My Tests/run-all.sh" >>"$O/said" 2>&1
+	rc=$?
+	if [ "$RC" = 0 ] && [ "$(wc -l <"$O/ran" | tr -d ' ')" = 1 ] && [ "$rc" = 127 ]; then
+		ok "X1 run: a suite at a path with a space runs, exit 0 (control: perl's one-word exec @ARGV splits it, exit 127, never runs)"
+	else bad "X1 run: a path with a space" "run rc=$RC, control rc=$rc, ran=$(wc -l <"$O/ran" 2>/dev/null); run said: $(tail -2 "$O/run" | tr '\n' '|')"; fi
+	new_arm; timed 60 env TMPDIR="$A" "$TOOL" run -- /bin/bash "$PLAIN" 1 >>"$O/run" 2>&1
+	RC=$?
+	if [ "$RC" = 4 ] && command grep -q 'suite exit 1;.*LEAK, and the suite FAILED (exit 4)' "$O/run" && command grep -q 'plain-standin\.' "$O/run"; then
+		ok "D4 run: a failing suite that leaks -> exit 4, both said"
+	else bad "D4 run: failed and leaked" "rc=$RC; run said: $(tail -3 "$O/run" | tr '\n' '|')"; fi
+	D4RUN=$(command grep -o "$A/test-temp-run\.[A-Za-z0-9]*" "$O/run" | sed -n 1p)
+	new_arm; timed 60 env TMPDIR="$A" "$TOOL" run -- /bin/sh -c 'mktemp -d "${TMPDIR%/}/../escape.XXXXXX"' >>"$O/run" 2>&1
+	RC=$?
+	if [ "$RC" = 4 ] && command grep -q "FAIL new in the caller's TMPDIR since the run began: $A/escape\." "$O/run"; then
+		ok "D5 run: a suite that writes outside its run folder, into the caller's TMPDIR -> exit 4, named"
+	else bad "D5 run: escape to the outer folder" "rc=$RC; run said: $(tail -3 "$O/run" | tr '\n' '|')"; fi
+	new_arm; timed 60 env TMPDIR="$A" SANDBOX_RUNTIME=1 "$TOOL" run -- /bin/zsh -f "$STANDIN" "$HR" ok "$O" >>"$O/run" 2>&1
+	RC=$?
+	sess=$(session_where "$A")
+	if [ "$RC" = 0 ] && command grep -qF "1 folder(s) the sandbox would not let the test move to the Trash; $sess" "$O/run" && command grep -q '  refused  .*/standin\.' "$O/run"; then
+		ok "D6 run: a folder the sandbox refused -> listed with \"$sess\", exit 0 under TEST_TEMP_REFUSED=pass (the default)"
+	else bad "D6 run: refused, default policy" "rc=$RC; run said: $(tail -4 "$O/run" | tr '\n' '|')"; fi
+	new_arm; timed 60 env TMPDIR="$A" SANDBOX_RUNTIME=1 TEST_TEMP_REFUSED=fail "$TOOL" run -- /bin/zsh -f "$STANDIN" "$HR" ok "$O" >>"$O/run" 2>&1
+	RC=$?
+	if [ "$RC" = 4 ] && command grep -q 'FAIL (TEST_TEMP_REFUSED=fail)' "$O/run"; then
+		ok "D6 run: the same under TEST_TEMP_REFUSED=fail -> exit 4"
+	else bad "D6 run: refused, fail policy" "rc=$RC; run said: $(tail -4 "$O/run" | tr '\n' '|')"; fi
+	new_arm; timed 60 env -u SANDBOX_RUNTIME TMPDIR="$A" "$TOOL" run -- /bin/zsh -f "$STANDIN" "$HR" ok "$O" >>"$O/run" 2>&1
+	RC=$?
+	if [ "$RC" = 4 ] && command grep -q 'FAIL the Trash did not take .*/standin\..*not the Claude sandbox' "$O/run"; then
+		ok "D6b run: the same refusal outside the sandbox (SANDBOX_RUNTIME unset) -> listed failed, exit 4 even under the default policy"
+	else bad "D6b run: a refusal outside the sandbox" "rc=$RC; run said: $(tail -4 "$O/run" | tr '\n' '|')"; fi
+	new_arm; timed 60 env TMPDIR="$A" "$TOOL" run -- /bin/bash "$PLAIN" 0 standin >>"$O/run" 2>&1
+	RC=$?
+	if [ "$RC" = 4 ] && command grep -q 'FAIL left behind in the run folder, not made through test-temp.sh: .*/standin\.' "$O/run"; then
+		ok "D6 run: control: the same leftover with no list entry -> exit 4"
+	else bad "D6 run: control" "rc=$RC; run said: $(tail -3 "$O/run" | tr '\n' '|')"; fi
+	new_arm; launch_run /bin/zsh "$HA" wait
+	if wait_for "$O/waiting" 10 && wait_for "$O/pid" 5; then
+		kill -KILL "$(sed -n 1p "$O/pid")"; reap "$LPID" 20
+		if [ "$RC" = 4 ] && command grep -q 'FAIL end never ran for .*/standin\..*it is still there' "$O/run"; then
+			ok "D7 run: a test killed with SIGKILL -> its end never ran, said by check, exit 4"
+		else bad "D7 run: SIGKILL" "rc=$RC; run said: $(tail -3 "$O/run" | tr '\n' '|')"; fi
+	else
+		kill -KILL -- "-$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null
+		bad "D7 run: SIGKILL" "never reached its wait -- INVALID TRIAL; run said: $(tail -3 "$O/run" | tr '\n' '|')"
+	fi
+	new_arm; sup group INT 20 env TMPDIR="$A" "$TOOL" run -- /bin/bash "$STANDIN" "$HA" wait "$O"
+	if [ "$RC" = "signal 2" ] && command grep -q 'suite exit 130 (interrupted by SIGINT);.*to the Trash 1,' "$O/said" && ! command grep -q 'test-temp check: FAIL' "$O/said"; then
+		ok "D9 run: Ctrl-C to the whole group -> the suite cleans up, run still checks (nothing left), then dies of SIGINT"
+	else bad "D9 run: Ctrl-C" "$RC; it said: $(said)"; fi
+	# Finding 4: a TERM or HUP sent to run alone reaches the suite; the control shows a plain
+	# parent holding a TERM until its foreground child ends (the suite is still running).
+	new_arm; sup pid TERM 20 env TMPDIR="$A" "$TOOL" run -- /bin/zsh -f "$STANDIN" "$HA" wait "$O"
+	if [ "$RC" = "signal 15" ] && command grep -q 'suite exit 143 (interrupted by SIGTERM);.*to the Trash 1,' "$O/said" && ! command grep -q 'test-temp check: FAIL' "$O/said"; then
+		ok "D9t run: TERM to run alone -> passed to the suite, which cleans up; run checks, then dies of SIGTERM"
+	else bad "D9t run: TERM to run alone" "$RC; it said: $(said)"; fi
+	new_arm; sup pid HUP 20 env TMPDIR="$A" "$TOOL" run -- /bin/bash "$STANDIN" "$HA" wait "$O"
+	if [ "$RC" = "signal 1" ] && command grep -q 'suite exit 129 (interrupted by SIGHUP);.*to the Trash 1,' "$O/said" && ! command grep -q 'test-temp check: FAIL' "$O/said"; then
+		ok "D9h run: HUP to run alone -> passed on the same way; run dies of SIGHUP"
+	else bad "D9h run: HUP to run alone" "$RC; it said: $(said)"; fi
+	new_arm; sup pid TERM 3 /bin/bash -c "trap 'x=1' TERM; TMPDIR='$A' /bin/zsh -f '$STANDIN' '$HA' wait '$O'"
+	if [ "$RC" = timeout ]; then ok "D9t run: control: a plain parent that waits in front holds the same TERM, so the suite runs on (killed after 3 s)"
+	else bad "D9t run: control" "$RC; it said: $(said)"; fi
+	# run's start and wait races, each held open by a copy that pauses there (run_pause), the
+	# signal sent only once the copy says it is in the window (its pause marker).
+	new_arm; SUPMARK="$ROOT/race-before/paused"
+	sup pid TERM 20 env TMPDIR="$A" "$ROOT/race-before/test-temp" run -- /bin/zsh -f "$STANDIN" "$HA" wait "$O"
+	SUPMARK=""
+	if [ "$RC" = "signal 15" ] && command grep -q 'SIGTERM came before the suite started, so it never ran' "$O/said" && [ ! -e "$O/folder" ] && ! ls -d "$A"/test-temp-run.* >/dev/null 2>&1; then
+		ok "D16a run: a TERM in the setup, before the suite starts -> the suite never starts, the run folder goes, run dies of SIGTERM"
+	else bad "D16a run: a TERM before the suite starts" "$RC; it said: $(said)"; fi
+	new_arm; SUPMARK="$ROOT/race-after/paused"
+	sup pid TERM 20 env TMPDIR="$A" "$ROOT/race-after/test-temp" run -- /bin/zsh -f "$STANDIN" "$HA" wait "$O"
+	SUPMARK=""
+	if [ "$RC" = "signal 15" ] && command grep -q 'suite exit 143 (interrupted by SIGTERM);.*to the Trash 1,' "$O/said" && ! command grep -q 'test-temp check: FAIL' "$O/said"; then
+		ok "D16b run: a TERM after the suite started but before its pid was known -> passed on once it is: the suite cleans up, run dies of SIGTERM"
+	else bad "D16b run: a TERM in the start gap" "$RC; it said: $(said)"; fi
+	new_arm
+	sup pid TERM 20 env TMPDIR="$A" "$ROOT/race-rewait/test-temp" run -- /bin/bash -c "trap 'exit 127' TERM; printf 'w\n' >>'$O/waiting'; while :; do sleep 0.1; done"
+	if [ "$RC" = "signal 15" ] && command grep -q 'suite exit 127 (interrupted by SIGTERM)' "$O/said" && [ "$(cat "$ROOT/race-rewait/paused" 2>/dev/null)" = rewait ]; then
+		ok "D16c run: the suite ends with 127 while run's cut-short wait is paused -> run reports 127, not 143 (control: the copy says the pause came after the cut-short wait)"
+	else bad "D16c run: a real 127 after a cut-short wait" "$RC; rewait marker [$(cat "$ROOT/race-rewait/paused" 2>/dev/null)]; it said: $(said)"; fi
+	uid=$(id -u)
+	n=-1
+	if [ -d "/tmp/claude-$uid" ]; then   # test-temp: allow the shared root, to prove run stays out of it
+		set -- "/tmp/claude-$uid"/test-temp-run.*   # test-temp: allow the shared root, counted before and after
+		[ -e "$1" ] && n=$# || n=0
+	fi
+	got=""
+	for k in "/tmp/claude-$uid" "/tmp/claude-$uid/" "/private/tmp/claude-$uid"; do   # test-temp: allow the shared root's three spellings
+		new_arm; timed 60 env TMPDIR="$k" "$TOOL" run -- touch "$O/ran" >>"$O/run" 2>&1
+		RC=$?
+		if [ "$RC" = 3 ] && [ ! -e "$O/ran" ] && command grep -q 'has no temp folder of its own' "$O/run"; then got="$got ok"
+		else got="$got [$k: rc=$RC ran=$([ -e "$O/ran" ] && echo yes || echo no)]"; fi
+	done
+	if [ "$n" -ge 0 ]; then
+		set -- "/tmp/claude-$uid"/test-temp-run.*   # test-temp: allow the shared root, counted before and after
+		[ -e "$1" ] && after=$# || after=0
+	else after=-1; fi
+	if [ "$got" = " ok ok ok" ] && [ "$n" = "$after" ]; then
+		ok "D8 run: TMPDIR = the shared root (three spellings) -> exit 3, the suite never ran, no run folder made there ($n before, $after after)"
+	else bad "D8 run: shared root" "$got; run folders in the shared root before $n after $after"; fi
+	new_arm; command mkdir -p "$A/pj-standin-session"
+	timed 60 env TMPDIR="$A/pj-standin-session" "$TOOL" run -- touch "$O/ran" >>"$O/run" 2>&1
+	RC=$?
+	if [ "$RC" = 0 ] && [ -e "$O/ran" ]; then ok "D8 run: control: a folder shaped like a session's own -> the suite runs, exit 0"
+	else bad "D8 run: control" "rc=$RC; run said: $(tail -3 "$O/run" | tr '\n' '|')"; fi
+	new_arm; timed 60 env TMPDIR="$A" "$TOOL" check "$O" >>"$O/run" 2>&1
+	RC=$?
+	if [ "$RC" = 2 ] && command grep -q 'check NOT RUN' "$O/run"; then ok "D10 check: a folder run never made (no started marker) -> check NOT RUN, exit 2"
+	else bad "D10 check: no started marker" "rc=$RC; it said: $(tail -2 "$O/run" | tr '\n' '|')"; fi
+	if [ -n "${D4RUN:-}" ] && [ -d "$D4RUN" ]; then
+		timed 60 env TEST_TEMP_REFUSED=pass "$TOOL" check "$D4RUN" >>"$O/run2" 2>&1
+		RC=$?
+		if [ "$RC" = 4 ] && command grep -q 'LEAK (exit 4)' "$O/run2"; then ok "D10 check: control: the run folder D4 kept -> exit 4, LEAK"
+		else bad "D10 check: control" "rc=$RC; it said: $(tail -2 "$O/run2" | tr '\n' '|')"; fi
+	else bad "D10 check: control" "D4 kept no run folder to check: ${D4RUN:-none}"; fi
+	timed 60 env -u TEST_TEMP_DIR "$TOOL" check >>"$O/run3" 2>&1
+	RC=$?
+	if [ "$RC" = 2 ] && command grep -q 'check NOT RUN: no run folder given' "$O/run3"; then ok "D10 check: no folder and no TEST_TEMP_DIR -> check NOT RUN, exit 2"
+	else bad "D10 check: no folder" "rc=$RC; it said: $(cat "$O/run3" | tr '\n' '|')"; fi
+	new_arm; timed 60 env TMPDIR="$A" TEST_TEMP_REFUSED=maybe "$TOOL" run -- touch "$O/ran" >>"$O/run" 2>&1
+	RC=$?
+	if [ "$RC" = 2 ] && [ ! -e "$O/ran" ]; then ok "D11 run: TEST_TEMP_REFUSED=maybe -> exit 2, the suite never ran"
+	else bad "D11 run: bad policy value" "rc=$RC"; fi
+	# Gavin's decision, for run: with TMPDIR unset the run folder goes in the fallback folder.
+	new_arm
+	case "$fb" in
+		"/tmp/claude-$uid" | "/private/tmp/claude-$uid" | '') bad "D12 the fallback folder" "[$fb] is empty or the shared root" ;;   # test-temp: allow the shared root, never a fallback
+		*) ok "D12 with TMPDIR unset the helper's folder is $fb ($(getconf DARWIN_USER_TEMP_DIR >/dev/null 2>&1 && echo "getconf DARWIN_USER_TEMP_DIR" || echo "/tmp: not macOS")), never the shared root (control: with TMPDIR set it is TMPDIR, as every other arm shows)" ;;
+	esac
+	if [ "${SANDBOX_RUNTIME-}" = 1 ]; then
+		timed 60 env -u TMPDIR "$TOOL" run -- touch "$O/ran" >>"$O/run" 2>&1
+		RC=$?
+		_tt_real "$fb"
+		if [ "$RC" = 2 ] && [ ! -e "$O/ran" ] && command grep -qF "cannot make a run folder in $_TT_R" "$O/run"; then
+			ok "D12 run: TMPDIR unset -> run tries $_TT_R (the sandbox cannot write there: exit 2, the suite never ran)"
+		else bad "D12 run: TMPDIR unset" "rc=$RC; run said: $(tail -2 "$O/run" | tr '\n' '|')"; fi
+	else
+		skip "D12 run: TMPDIR unset" "outside the sandbox run would work in $fb, where other programs write all the time, so its outer-folder check would read their files as the suite's; the helper arm R3 covers the fallback here"
+	fi
+	new_arm; timed 60 env TMPDIR="$A" TT_STANDIN_KEEP=keep-on-fail "$TOOL" run -- /bin/zsh -f "$STANDIN" "$HA" fail "$O" >>"$O/run" 2>&1
+	RC=$?
+	if [ "$RC" = 1 ] && command grep -q '1 folder(s) kept for a failed test (keep-on-fail)' "$O/run" && command grep -q 'the run folder is kept: it holds the folders listed above' "$O/run"; then
+		ok "D13 run: keep-on-fail under run -> the kept folder is listed, the run folder kept, exit 1 (the suite failed)"
+	else bad "D13 run: keep-on-fail" "rc=$RC; run said: $(tail -4 "$O/run" | tr '\n' '|')"; fi
+	new_arm; timed 60 env TMPDIR="$A" "$TOOL" run -- no-such-command-for-test-temp >>"$O/run" 2>&1
+	RC=$?
+	if [ "$RC" = 2 ] && command grep -q 'no such command' "$O/run" && ! ls -d "$A"/test-temp-run.* >/dev/null 2>&1; then
+		ok "D14 run: no such command -> exit 2, no run folder made"
+	else bad "D14 run: no such command" "rc=$RC"; fi
+	# Finding 5, the words: "they go when the session ends" only for a session's own folder.
+	new_arm
+	got=""
+	for k in "/private/tmp/claude-$uid/pj-standin-session:they go when the session ends" "/var/folders/st/standin/T:they stay in /var/folders/st/standin/T until you trash them"; do   # test-temp: allow two outer folders, written into fixtures only
+		n="$A/test-temp-run.w${#got}abcde"
+		command mkdir -p "$n/.test-temp" "$n/standin.Ab12Cd"
+		printf 'started\t0\t0\t%s\n' "${k%%:*}" >>"$n/.test-temp/started"
+		printf 'made\t%s\t1\t0\tnew\nrefused\t%s\t1\t0\tthe sandbox refused the Trash (afpAccessDenied)\n' "$n/standin.Ab12Cd" "$n/standin.Ab12Cd" >>"$n/.test-temp/list"
+		timed 60 "$TOOL" check "$n" >>"$O/check" 2>&1
+		RC=$?
+		if [ "$RC" = 0 ] && command grep -qF "1 folder(s) the sandbox would not let the test move to the Trash; ${k#*:}:" "$O/check"; then got="${got}ok "
+		else got="$got[${k%%:*}: rc=$RC] "; fi
+	done
+	if [ "$got" = "ok ok " ]; then
+		ok "D15 check: a refused folder -> \"they go when the session ends\" only when the run's TMPDIR is a session's own folder (claude-<uid>/pj-*); elsewhere \"they stay in\" it"
+	else bad "D15 check: the words for refused folders" "$got; it said: $(tail -4 "$O/check" | tr '\n' '|')"; fi
+
+	# ---- lint
+	command mkdir -p "$ROOT/lint"
+	# The fixtures are heredoc bodies, which lint does not read, so L5 can lint this file.
+	cat >>"$ROOT/lint/bad.zsh" <<'FIXTURE'
+#!/bin/zsh
+d=$(mktemp -d)
+f=$(mktemp)
+g=$(mktemp -d -t foo)
+p=/tmp/fixed-name
+q="/private/tmp/x"
+r=/var/folders/xy/z
+trap cleanup EXIT INT TERM
+x=1  # test-temp: allow
+h="$(mktemp -d)"
+d2=$(/usr/bin/mktemp -d)
+b=$(mktemp -d 2>/dev/null)
+c=$(mktemp -d </dev/null)
+c2=$(mktemp -d < /dev/null)
+FIXTURE
+	cat >>"$ROOT/lint/bad2.zsh" <<'FIXTURE'
+#!/usr/bin/env zsh
+trap cleanup EXIT
+echo hi
+FIXTURE
+	cat >>"$ROOT/lint/bad.sh" <<'FIXTURE'
+#!/bin/bash
+d=$(mktemp -d)
+trap cleanup EXIT
+x=/tmp/y
+FIXTURE
+	cat >>"$ROOT/lint/clean.zsh" <<'FIXTURE'
+#!/bin/zsh
+d=$(mktemp -d "${TMPDIR%/}/x.XXXXXX")
+e=$(mktemp -d "${TMPDIR:-/tmp}/y.XXXXXX")
+e2=$(/usr/bin/mktemp -d "${TMPDIR%/}/e2.XXXXXX")
+e3=$(mktemp -d "${TMPDIR%/}/e3.XXXXXX" 2>/dev/null)
+t="$T/tmp/z"
+trap c EXIT; trap 'c; exit 130' INT; trap 'c; exit 143' TERM
+x=/tmp/allowed  # test-temp: allow a fixed path this fixture needs
+# test-temp: allow the next line is allowed
+y=/tmp/allowed-too
+cat <<'EOF'
+d=$(mktemp -d)
+EOF
+echo "never use a bare mktemp -d"
+echo 'mktemp -d'
+n=$((1 << 2))
+k="$(mktemp -d "${TMPDIR%/}/k.XXXXXX")"
+FIXTURE
+	cat >>"$ROOT/lint/quoted-heredoc.sh" <<'FIXTURE'
+#!/bin/sh
+echo "a <<- heredoc with tab-indented body and terminator"
+d=$(mktemp -d)
+FIXTURE
+	cat >>"$ROOT/lint/escaped-heredoc.sh" <<'FIXTURE'
+#!/bin/sh
+cat <<\EOF
+d=$(mktemp -d)
+EOF
+e=$(mktemp -d)
+FIXTURE
+	printf '%s\n' '#!/bin/sh' 'x=1' >>"$ROOT/lint/awk-fails-here.sh"
+	printf '#!/bin/sh\n# caf\351, one Latin-1 byte\nd=$(mktemp -d)\n' >>"$ROOT/lint/latin1.sh"
+	printf '%s\n' 'just text, with words lint would flag in a shell file' >>"$ROOT/lint/notes.txt"
+	printf '\000\000\000\001Bud1\000binary' >>"$ROOT/lint/.DS_Store"
+	out=$("$TOOL" lint "$ROOT/lint/bad.zsh" 2>&1)
+	rc=$?
+	got=$(printf '%s\n' "$out" | sed -n 's/^.*bad\.zsh:\([0-9]*\): .*\[\(.*\)\]$/\1 \2/p' | tr '\n' ';')
+	if [ "$rc" = 1 ] && [ "$got" = "2 mktemp;3 mktemp;4 mktemp-t;5 path;6 path;7 path;8 zsh-signal-no-exit;9 allow-no-reason;10 mktemp;11 mktemp;12 mktemp;13 mktemp;14 mktemp;" ]; then
+		ok "L2 lint: a bad zsh file -> each trap flagged at its line (mktemp, mktemp -t, three literal paths, a signal trap with no exit, an allow with no reason, \"\$(mktemp -d)\" inside double quotes, /usr/bin/mktemp -d, and mktemp -d with 2>/dev/null, </dev/null or < /dev/null after it), exit 1 (control: L4's template with 2>/dev/null after it passes)"
+	else bad "L2 lint: bad zsh file" "rc=$rc got=$got; $out"; fi
+	if has "$out" "made with mktemp -d" && ! has "$out" "made with use"; then ok "L9 lint: the path finding reads \"made with mktemp -d ...\""
+	else bad "L9 lint: the path finding's words" "$out"; fi
+	out=$("$TOOL" lint "$ROOT/lint/bad2.zsh" "$ROOT/lint/bad.sh" 2>&1)
+	rc=$?
+	got=$(printf '%s\n' "$out" | sed -n 's/^.*\/\(bad[^:]*\):\([0-9]*\): .*\[\(.*\)\]$/\1 \2 \3/p' | tr '\n' ';')
+	if [ "$rc" = 1 ] && [ "$got" = "bad2.zsh 2 zsh-exit-alone;bad.sh 2 mktemp;bad.sh 4 path;" ]; then
+		ok "L3 lint: an EXIT-only trap is flagged in zsh and not in bash (the control for the kind), with bash's mktemp and path"
+	else bad "L3 lint: kind" "rc=$rc got=$got; $out"; fi
+	out=$("$TOOL" lint "$ROOT/lint/clean.zsh" 2>&1)
+	rc=$?
+	if [ "$rc" = 0 ] && has "$out" "1 shell file(s) checked" && has "$out" "0 finding(s)"; then
+		ok "L4 lint: a clean file (templates, /usr/bin/mktemp with one, \${TMPDIR:-/tmp}, \$T/tmp, the working zsh traps, both allow forms, a heredoc body, mktemp named in quoted text, 1 << 2) -> exit 0"
+	else bad "L4 lint: clean file" "rc=$rc; $out"; fi
+	out=$("$TOOL" lint "$ROOT/lint/quoted-heredoc.sh" 2>&1)
+	rc=$?
+	if [ "$rc" = 1 ] && has "$out" "quoted-heredoc.sh:3: mktemp with no template" && ! has "$out" "heredoc-open"; then
+		ok "L8 lint: a << inside quotes is no heredoc -> the line after it is still read (its bare mktemp flagged); control: L4's real heredoc body is still skipped"
+	else bad "L8 lint: << inside quotes" "rc=$rc; $out"; fi
+	out=$("$TOOL" lint "$ROOT/lint/.DS_Store" "$ROOT/lint/clean.zsh" 2>&1)
+	rc=$?
+	got=$(printf 'x=$(sed -n 1p "$1")' >"$ROOT/lint/nul-probe.sh" 2>/dev/null; "$BASH" "$ROOT/lint/nul-probe.sh" "$ROOT/lint/.DS_Store" 2>&1)
+	if [ "$rc" = 0 ] && has "$out" "1 shell file(s) checked, 1 not shell" && ! has "$out" "null byte"; then
+		if has "$got" "null byte"; then ok "L7 lint: a file holding NUL bytes is skipped as not shell, without a word (control: this bash warns when the same first line is read into the shell)"
+		else ok "L7 lint: a file holding NUL bytes is skipped as not shell, without a word (this bash, $BASH_VERSION, drops NUL bytes without a warning, so only the count is proved here)"; fi
+	else bad "L7 lint: a binary file" "rc=$rc; $out"; fi
+	# Second review, items 2 and 6: bytes that are not UTF-8, an awk that stops, and <<\EOF.
+	out=$("$TOOL" lint "$ROOT/lint/latin1.sh" 2>&1)
+	rc=$?
+	LC_ALL=en_US.UTF-8 awk '$0 ~ /mktemp/ { n++ } END { print n + 0 }' "$ROOT/lint/latin1.sh" >/dev/null 2>&1
+	rc2=$?
+	if [ "$rc" = 1 ] && has "$out" "latin1.sh:3: mktemp with no template"; then
+		if [ "$rc2" != 0 ]; then ok "L10 lint: a bare mktemp after a Latin-1 byte is flagged (control: in a UTF-8 locale this awk stops at that byte, exit $rc2)"
+		else ok "L10 lint: a bare mktemp after a Latin-1 byte is flagged (this awk reads the byte in UTF-8 too, so only the flag is proved here)"; fi
+	else bad "L10 lint: a Latin-1 byte" "rc=$rc; $out"; fi
+	out=$(PATH="$ROOT/fakeawk:$PATH" "$TOOL" lint "$ROOT/lint/awk-fails-here.sh" 2>&1)
+	rc=$?
+	out2=$("$TOOL" lint "$ROOT/lint/awk-fails-here.sh" 2>&1)
+	rc2=$?
+	if [ "$rc" = 2 ] && has "$out" "cannot read" && has "$out" "awk stopped" && has "$out" "0 shell file(s) checked" && [ "$rc2" = 0 ]; then
+		ok "L11 lint: a file awk stops on is unreadable, not checked, exit 2 (control: the same file with the real awk, checked, exit 0)"
+	else bad "L11 lint: an awk that stops" "rc=$rc ($out); control rc=$rc2 ($out2)"; fi
+	out=$("$TOOL" lint "$ROOT/lint/escaped-heredoc.sh" 2>&1)
+	rc=$?
+	got=$(printf '%s\n' "$out" | sed -n 's/^.*escaped-heredoc\.sh:\([0-9]*\): .*\[\(.*\)\]$/\1 \2/p' | tr '\n' ';')
+	if [ "$rc" = 1 ] && [ "$got" = "5 mktemp;" ]; then
+		ok "L12 lint: cat <<\\EOF is a heredoc, its body not read (control: the same line after the heredoc is flagged, line 5)"
+	else bad "L12 lint: an escaped heredoc" "rc=$rc got=$got; $out"; fi
+	cp "$HELPER" "$ROOT/lint/helper-as.zsh"
+	out=$("$TOOL" lint "$SELF" "$HELPER" "$ROOT/lint/helper-as.zsh" 2>&1)
+	rc=$?
+	if [ "$rc" = 0 ] && has "$out" "3 shell file(s) checked" && has "$out" "0 finding(s)"; then
+		ok "L5 lint: test-temp, test-temp.sh, and test-temp.sh read as zsh -> no findings"
+	else bad "L5 lint: the shipped files" "rc=$rc; $out"; fi
+	out=$("$TOOL" lint 2>&1); rc=$?
+	out2=$("$TOOL" lint "$ROOT/lint/notes.txt" 2>&1); rc2=$?
+	out3=$("$TOOL" lint "$ROOT/lint/clean.zsh" "$ROOT/lint/no-such-file" 2>&1); rc3=$?
+	if [ "$rc:$rc2:$rc3" = "2:2:2" ] && has "$out" "NOT a pass" && has "$out2" "no shell file" && has "$out3" "cannot read"; then
+		ok "L6 lint: no files, only non-shell files, or an unreadable file -> exit 2, never a pass"
+	else bad "L6 lint: nothing to check" "rc=$rc:$rc2:$rc3; $out | $out2 | $out3"; fi
+	command mkdir -p "$ROOT/mutant"
+	awk '/# M: lint-mktemp$/ { sub(/add\(NR, "mktemp"/, "nf += 0; add(NR + 1000, \"mktemp\"") } { print }' "$SELF" >>"$ROOT/mutant/test-temp"
+	cp "$HA" "$ROOT/mutant/test-temp.sh"
+	chmod +x "$ROOT/mutant/test-temp"
+	if cmp -s "$SELF" "$ROOT/mutant/test-temp"; then
+		bad "L1 lint: canary" "the mutant could not be built (the # M: lint-mktemp line was not found) -- INVALID TRIAL"
+	else
+		out=$("$ROOT/mutant/test-temp" lint "$ROOT/lint/clean.zsh" 2>&1); rc=$?
+		out2=$("$TOOL" lint "$ROOT/lint/clean.zsh" 2>&1); rc2=$?
+		if [ "$rc" = 2 ] && has "$out" "canary was not flagged" && [ "$rc2" = 0 ]; then
+			ok "L1 lint: a copy whose mktemp rule is broken refuses on its canary, exit 2 (control: the intact copy, exit 0)"
+		else bad "L1 lint: canary" "mutant rc=$rc ($out); intact rc=$rc2"; fi
+	fi
+
+	# ---- the two files themselves
+	# Each word as a command or a path of its own, never inside ~/.local/bin/rm (the Trash
+	# shim, which the helper must name). Spelled in pieces so this file holds none of them.
+	fw="(^|[^[:alnum:]_./-])(/usr)?/bin/r""m([^[:alnum:]_.-]|$)|(^|[^[:alnum:]_])unl""ink([^[:alnum:]_]|$)|(^|[^[:alnum:]_-])-del""ete([^[:alnum:]_-]|$)"
+	fw="$fw|(^|[^[:alnum:]_.-])r""m[[:space:]]+-[[:alnum:]]*P|shutil[.]rm""tree|os[.]rem""ove|/usr/bin/tra""sh"
+	got=0 n=0
+	for k in "/bin/r""m -rf \"\$TT\"" "unl""ink \"\$f\"" "find . -del""ete" "r""m -rP x" "shutil.rm""tree(p)" "os.rem""ove(p)" "/usr/bin/tra""sh x"; do
+		n=$((n + 1))
+		cp "$HELPER" "$ROOT/planted.$n.sh"
+		printf '%s\n' "x=1; $k" >>"$ROOT/planted.$n.sh"
+		command grep -qE "$fw" "$ROOT/planted.$n.sh" && got=$((got + 1))
+	done
+	if [ "$got" = 7 ]; then
+		out=$(command grep -nE "$fw" "$SELF" "$HELPER" 2>&1)
+		if [ -z "$out" ] && command grep -qF '.local/bin/rm' "$HELPER"; then
+			ok "S1 neither file names any of the 7 permanent deleters (docs/TEST_TEMP_FOLDERS.md lists them) (control: each one planted in a copy is found; ~/.local/bin/rm, which the helper names, is not one)"
+		else bad "S1 a permanent deleter is named" "$out"; fi
+	else bad "S1 control" "only $got of 7 planted deleters were found in a copy -- INVALID TRIAL"; fi
+	got=""
+	for s in /bin/bash $B; do
+		[ -x "$s" ] || continue
+		"$s" -n "$SELF" 2>>"$ROOT/parse" || got="$got $s:test-temp"
+		"$s" -n "$HELPER" 2>>"$ROOT/parse" || got="$got $s:test-temp.sh"
+	done
+	for s in /bin/zsh $Z; do
+		[ -x "$s" ] || continue
+		"$s" -n "$HELPER" 2>>"$ROOT/parse" || got="$got $s:test-temp.sh"
+	done
+	if [ -z "$got" ]; then ok "S2 both files parse under bash -n ($(echo /bin/bash $B)); test-temp.sh under zsh -n ($(echo /bin/zsh $Z))"
+	else bad "S2 parse" "$got: $(cat "$ROOT/parse")"; fi
+	if [ -x "$HERE/selftest-whole-read" ]; then
+		command mkdir -p "$ROOT/wr"
+		cp "$SELF" "$ROOT/wr/test-temp-selftest"
+		out=$("$HERE/selftest-whole-read" --check "$ROOT/wr" 2>&1); rc=$?
+		if [ "$rc" = 0 ] && has "$out" "1 of 1 bash suite(s) pass"; then ok "S3 the whole-read header is test-temp's first code (selftest-whole-read --check on a copy named *-selftest)"
+		else bad "S3 the whole-read header" "rc=$rc; $out"; fi
+	else
+		skip "S3 the whole-read header" "no selftest-whole-read beside this file ($HERE)"
+	fi
+
+	# ---- its own folder, and nothing else in TMPDIR
+	st_end
+	after=$(names "$base")
+	# Everything the selftest makes is inside its own folder. A new entry with a name its
+	# fixtures use has escaped; any other is another process writing to the same TMPDIR
+	# while it ran, named but not counted.
+	out="" got=""
+	while IFS= read -r k; do
+		[ -n "$k" ] || continue
+		[ "$k" = "${ROOT##*/}" ] && continue
+		case "$NL$before$NL" in *"$NL$k$NL"*) continue ;; esac
+		case "$k" in
+			test-temp-* | standin* | plain-standin* | escape.* | inner.* | real-probe.* | trap-probe.* | .test-temp*) out="$out $k" ;;
+			*) got="$got $k" ;;
+		esac
+	done <<EOF
+$after
+EOF
+	[ -n "$got" ] && echo "  note: new in TMPDIR while it ran, with no name its fixtures use (another process):$got"
+	if [ -z "$out" ]; then ok "S4 nothing of the selftest's own outside its folder, in $base"
+	else bad "S4 the selftest left something in TMPDIR" "$out"; fi
+	if [ ! -e "$ROOT" ]; then
+		ok "S5 the selftest's own folder went to the Trash (test -e: gone)"
+	elif [ "$TRASH" = refused ]; then
+		skip "S5 the selftest's own folder" "the Trash refused it here (the sandbox): it stays at $ROOT until the session ends"
+	else
+		bad "S5 the selftest's own folder" "still there: $ROOT"
+	fi
+	printf 'test-temp --selftest: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP"
+	[ "$FAIL" -eq 0 ] && return 0
+	return 1
+}
+
+st_end() {
+	local k
+	[ -n "${ST_DONE-}" ] && return 0
+	ST_DONE=1
+	for k in $KIDS; do kill -KILL -- "-$k" 2>/dev/null; done
+	if [ -n "${ROOT-}" ] && [ -e "$ROOT" ]; then
+		if _tt_trash "$ROOT"; then
+			_tt_log_to "$SELF_LIST" gone "$ROOT" "$$" "to the Trash"
+		else
+			_tt_log_to "$SELF_LIST" "$_TT_KIND" "$ROOT" "$$" "$_TT_WHY"
+			echo "  note: the selftest's own folder stays at $ROOT: $_TT_WHY (inside the sandbox it goes when the session ends)"
+		fi
+	fi
+	return 0
+}
+
+case "${1-}" in
+	run) shift; cmd_run "$@"; exit $? ;;
+	check) shift; cmd_check "$@"; exit $? ;;
+	lint) shift; cmd_lint "$@"; exit $? ;;
+	--selftest) selftest; exit $? ;;
+	-h | --help | "") usage; exit 0 ;;
+	*) echo "test-temp: unknown command '$1' (run, check, lint, --selftest, --help)" >&2; exit 2 ;;
+esac
