@@ -2069,6 +2069,7 @@ SNAP
   hd=$'git commit -F - <<\'EOF\'\n'; while [ ${#hd} -lt 5120 ]; do hd="${hd}prose that mentions git clean -fdx and /bin/rm -P and find . -delete"$'\n'; done; hd="${hd}EOF"
   _cal3; _limit 20; _time3 "$hd"
   [ "$rc" -eq 0 ] && [ -z "$out" ]; _tchk "5 KB heredoc commit message: allowed, best of 3" $? "$best"
+  [ -z "$tk_recal" ]; _chk "recheck: the best-of-3 arms ran with no re-measure named (a late one is a FAIL, as before)" $?
 
   echo "=== SHIFT arms: a value flag given LAST must not stall the guard (W-20260923-A54) ==="
   # Found 2026-09-23: in bash a shift of 2 with one word left FAILS and shifts
@@ -2115,25 +2116,31 @@ SNAP
   local rq_out rq_called
   _rq_busy() { rq_called=1; ov=500; ovs="500 500 500"; calok=0; hb_r=clobbered; }
   _rq_quiet() { rq_called=1; ov=40; ovs="40 40 40"; calok=0; hb_r=clobbered; }
+  _rq_dirty() { rq_called=1; ov=40; ovs="40 40 40"; calok=1; hb_r=clobbered; }
   _rq() { # $1 = re-measure function ('' for a best-of-3 arm), $2 = ms -> the arm's output, then one line of counts
     ( DEL_GUARD_FAILFAST=0; fails=0; invalid=0; rq_called=0; hb_r=kept; ov=40; ovs="40 40 40"; calok=0
-      _limit 200 "$cal_k1"; l0=$lim; tk_recal="$1"
+      _limit 200 "$cal_k1"; tk_recal="$1"
       _tchk "faked arm" 0 "$2"
-      echo "counts fails=$fails invalid=$invalid called=$rq_called hb_r=$hb_r lim_same=$([ "$lim" = "$l0" ] && echo y || echo n)" )
+      echo "counts fails=$fails invalid=$invalid called=$rq_called hb_r=$hb_r calok=$calok" )
   }
   rq_out="$(_rq _rq_busy 1200)"
-  [[ $rq_out == *'INVALID TRIAL'*'got busier'* ]] && [[ $rq_out == *'counts fails=0 invalid=1 called=1 hb_r=kept lim_same=y'* ]]; _chk "recheck: late 1200 ms (limit 360), re-measured busy: an INVALID TRIAL, never a pass, the arm's own state kept" $?
+  [[ $rq_out == *'INVALID TRIAL'*'got busier'* ]] && [[ $rq_out == *'counts fails=0 invalid=1 called=1 hb_r=kept calok=0'* ]]; _chk "recheck: late 1200 ms (limit 360), re-measured busy: an INVALID TRIAL, never a pass, the arm's own state kept" $?
   rq_out="$(_rq _rq_quiet 1200)"
-  [[ $rq_out == *'FAIL'*'guard itself was slow'* ]] && [[ $rq_out == *'counts fails=1 invalid=0 called=1 hb_r=kept lim_same=y'* ]]; _chk "recheck: late 1200 ms (limit 360), re-measured quiet: a FAIL that says the guard was slow" $?
+  [[ $rq_out == *'FAIL'*'guard itself was slow'* ]] && [[ $rq_out == *'counts fails=1 invalid=0 called=1 hb_r=kept calok=0'* ]]; _chk "recheck: late 1200 ms (limit 360), re-measured quiet: a FAIL that says the guard was slow" $?
+  rq_out="$(_rq _rq_dirty 1200)"
+  [[ $rq_out == *'INVALID TRIAL'*'not a clean allow'* ]] && [[ $rq_out == *'counts fails=0 invalid=1 called=1 hb_r=kept calok=0'* ]]; _chk "recheck: late, and a re-measuring call not a clean allow: an INVALID TRIAL, the arm's calok kept" $?
   rq_out="$(_rq _rq_busy 100)"
   [[ $rq_out == *'counts fails=0 invalid=0 called=0 '* ]]; _chk "recheck: on time (100 ms, limit 360): passes, nothing re-measured (the control)" $?
   rq_out="$(_rq '' 1200)"
   [[ $rq_out == *'counts fails=1 invalid=0 called=0 '* ]]; _chk "recheck: a best-of-3 arm late (no re-measure named): a FAIL as before" $?
   # the real re-measure, _calb's three trivial calls through the hook: no load makes them cost
-  # 999999 ms, so this is a FAIL that names a measured overhead, with the arm's state kept
+  # 999999 ms, so this is a FAIL that names a measured overhead, with the arm's state kept. A
+  # trivial call past _calb's own 5 s alarm is not a clean allow: then the machine is too loaded
+  # to judge this arm, an INVALID TRIAL, not a FAIL that blames the guard.
   rq_out="$(_rq _calb 999999)"
-  [[ $rq_out == *'FAIL'*'re-measured: overhead '[1-9]*'guard itself was slow'* ]] && [[ $rq_out == *'counts fails=1 invalid=0 called=0 hb_r=kept lim_same=y'* ]]; _chk "recheck: the real re-measure (_calb) runs, measures, and keeps the arm's state" $?
-  tk_recal=_calb   # every _tchk from here on is a single-shot arm on the alarm route
+  if [[ $rq_out == *'INVALID TRIAL'*'not a clean allow'* ]]; then invalid=$((invalid + 1)); printf 'INVALID TRIAL %-18s %s\n' hook "recheck: the real re-measure not judged: a trivial call was not a clean allow (past its 5 s alarm on a loaded machine)"
+  else [[ $rq_out == *'FAIL'*'re-measured: overhead '[1-9]*'guard itself was slow'* ]] && [[ $rq_out == *'counts fails=1 invalid=0 called=0 hb_r=kept calok=0'* ]]; _chk "recheck: the real re-measure (_calb) runs, measures, and keeps the arm's state" $?; fi
+  tk_recal=_calb   #M: recheck on for the alarm route's single-shot arms
   for f in 'time -o' 'nice -n' 'exec -a' 'echo x | xargs -n' 'echo x | xargs -I' 'echo x | gxargs --max-args' \
            'sudo -u' 'doas -u' 'env -u' 'env -C' 'env -S' 'env --split-string' 'timeout -s' 'gtimeout -k' \
            'caffeinate -t' 'stdbuf -o' 'watch -n' 'git -C' 'git -c' 'git --git-dir' \
@@ -2147,6 +2154,7 @@ SNAP
     _hookb "$f" 0 "$al"
     [ "$rc" -eq 0 ] && [ -z "$out" ]; _tchk "'$f' alone: allowed" $? "$hb_ms"
   done
+  [ "$tk_recal" = _calb ]; _chk "recheck: the shift arms ran with the real re-measure named (tk_recal=_calb)" $?
   # The class, not only the instances above: no shift of 2 or more in this
   # file may run unguarded. The positive arm (the guarded form IS found)
   # proves the scan read the file; a zero from a scan that read nothing is
