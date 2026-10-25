@@ -9,7 +9,9 @@
 # one message, sent once, in labelled lines (what happened, what it means, what Gavin can do,
 # the time), with no id; each kind on its own routes (sounds, iMessage, ntfy), the sounds started
 # in the background so nothing waits for them (Q89); a refused or
-# switched-off ntfy send goes by iMessage instead; the log holds the time, never the text.
+# switched-off ntfy send goes by iMessage instead; the log holds the time and, since 25 Oct 2026
+# (Gavin, dotfiles-main Q2: 4), the whole text. A message that does not fit is sent, then fails
+# loudly with exit 4 (Q1: 4); a long project name has a short title name (Q3: 1, Q4: 2).
 # The pj-ping and pj-ping-selftest stubs that forwarded to it, and their section 14 here, were
 # retired on 22 Oct 2026 (Gavin, dotfiles-main Q5: 1): no call for two days.
 #
@@ -93,6 +95,9 @@ printf '# fixture\non: yes\ngateway: %s/\n' "$GW" >"$ROOT/conf/on.conf"
 printf 'on: no\ngateway: %s\n' "$GW" >"$ROOT/conf/off.conf"
 printf 'on: yes\n' >"$ROOT/conf/on-nogw.conf"
 printf '# fixture gateway.local\ngateway: %s\n' "$GW" >"$ROOT/conf/gateway.local"
+# Fixture short names: other-proj has one; "st-pro" is a prefix of st-proj and must not match it,
+# and "st.proj" would match st-proj only if the name were read as a pattern.
+printf '# fixture names.local\nst-pro: WRONG1\nst.proj: WRONG2\nother-proj:   oth  \n' >"$ROOT/conf/names.local"
 
 # The clock: 22:56:56 UTC 18 Oct 2026 is 9:56:56 AM 19 Oct in Melbourne (AEDT, +11).
 NOW1=1792364216; T1="9:56:56 AM 19 Oct"
@@ -113,7 +118,7 @@ arm() {
   export PJ_PING_STATE_DIR="$ROOT/state-$1" PJ_PING_FAKE_LOG="$ROOT/fake-$1.log"
   export ENGAGE_PING_NTFY_CONF="$ROOT/conf/on.conf" ENGAGE_PING_GATEWAY_CONF="$ROOT/conf/no-such-file"
   export ENGAGE_PING_NOW="$NOW1" CLAUDE_PID=4242 CLAUDE_CODE_SESSION_ID=sess-uuid-1
-  export ENGAGE_PING_PENDING="$ROOT/pending-$1/refused.log"
+  export ENGAGE_PING_PENDING="$ROOT/pending-$1/refused.log" ENGAGE_PING_NAMES_CONF="$ROOT/conf/names.local"
   unset ENGAGE_PING_FAKE_HTTP PJ_PING_FAKE_IMSG_RC
   LOG="$PJ_PING_STATE_DIR/ping.log"; PEND="$ENGAGE_PING_PENDING"
   : >"$PJ_PING_FAKE_LOG"
@@ -244,21 +249,70 @@ arm lineclean
 run done "d" --line $'Was:\033[2J a\nb '"ghp_$(printf 'A%.0s' $(seq 36))" --next $'x\ny'
 case "$(nth curl 1)" in *"B[Was: [2J a b [redacted]${NL}"*"${NL}Next: x y]") ok "2b --line and --next are cleaned: no control character, no newline, no token" ;; *) bad "2b line cleaning" "$(nth curl 1)" ;; esac
 
-# ---- 2c. Notes when a message does not fit the lock screen: still sent -----------------
+# ---- 2c. A message that does not fit the lock screen: sent, then exit 4 (Q1: 4) --------
 arm fit
 run done "a summary far too long for the title"
-[ "$RC" -eq 0 ] && [ "$(nof curl)" -eq 1 ] && grep -q 'the title is 47 characters wide' <<<"$ERR" \
-  && ok "2c a 47-character title: sent, exit 0, and stderr names its width" || bad "2c long title" "rc=$RC err=$ERR"
+[ "$RC" -eq 4 ] && [ "$(nof curl)" -eq 1 ] && grep -q 'ERROR: this message does not fit the lock screen (it was still sent)' <<<"$ERR" \
+  && grep -q 'the title is 47 characters wide and about 32 fit: for st-proj the summary has room for 21 characters, and it is 36' <<<"$ERR" \
+  && grep -q 'read the layout rules before the next ping: engage-ping --help' <<<"$ERR" \
+  && ok "2c a 47-character title: sent, exit 4, stderr names the width, the room and the help" || bad "2c long title" "rc=$RC calls=$(calls) err=$ERR"
+grep -q '	done	st-sess	misfit	title=47/32$' "$LOG" && ok "2c ... and the log has a misfit line naming it" || bad "2c misfit line" "$(cat "$LOG")"
+arm fitwide
+run done "short" --line "A: $(printf 'x%.0s' $(seq 38))" --line "B: 1" --line "C: 2" --line "D: 3" --detail "e"
+[ "$RC" -eq 4 ] && grep -q '	misfit	line1=41/40 lines=5/4$' "$LOG" \
+  && ok "2c a long line and a 5th line: exit 4, both in one misfit line" || bad "2c misfit lines" "rc=$RC $(cat "$LOG")"
+arm fitroom
+mkdir -p "$ROOT/a-project-name-that-fills-the-title" && git -C "$ROOT/a-project-name-that-fills-the-title" init -q 2>/dev/null \
+  || { printf 'selftest: could not make the fitroom repo -- INVALID TRIAL, not a pass\n' >&2; exit 2; }
+( builtin cd "$ROOT/a-project-name-that-fills-the-title" && CLAUDE_CODE_SESSION_ID=none "$TOOL" done "d" >/dev/null 2>"$ROOT/err" ); RC=$?; ERR="$(cat "$ROOT/err")"; settle
+[ "$RC" -eq 4 ] && grep -q 'the project name a-project-name-that-fills-the-title alone fills the title' <<<"$ERR" \
+  && ok "2c a project name with no room left says so" || bad "2c no room" "rc=$RC err=$ERR"
+arm fitdetach
+run done "a summary far too long for the title" --detach
+wait_lines "$PJ_PING_FAKE_LOG" 2; wait_lines "$LOG" 4
+[ "$RC" -eq 0 ] && [ -z "$ERR" ] && grep -q '	misfit	title=47/32$' "$LOG" \
+  && ok "2c --detach: exit 0 and nothing on stderr (a hook never reads a sent ping as lost), the misfit logged" || bad "2c detach" "rc=$RC err=$ERR $(cat "$LOG")"
+arm fitdo
+run waiting "w" --line "A: 1" --line "B: 2" --line "C: 3" --line "D: 4" --you "x"
+[ "$RC" -eq 4 ] && grep -q 'then the Do line, so the last ones show only when opened' <<<"$ERR" \
+  && ok "2c 4 --line and the Do line: exit 4, and the error says the Do line counts" || bad "2c do line" "rc=$RC err=$ERR"
+arm fittest
+CLAUDE_CODE_SESSION_NAME=a-session-name-long-enough run test "a summary far too long for the title"
+[ "$RC" -eq 0 ] && [ -z "$ERR" ] && ! grep -q misfit "$LOG" \
+  && ok "2c a test ping is never checked: exit 0, nothing said, no misfit (its ntfy title is the robot one)" || bad "2c test kind" "rc=$RC err=$ERR"
+arm fitfail
+PJ_PING_FAKE_IMSG_RC=3 run question "a summary far too long for the title"
+[ "$RC" -eq 1 ] && grep -q 'a send failed' <<<"$ERR" && grep -q 'does not fit the lock screen (and a send failed, above)' <<<"$ERR" \
+  && ok "2c a failed send and a misfit: exit 1 wins over 4, both said" || bad "2c fail wins" "rc=$RC err=$ERR"
 arm fit2
 run done "short" --line "A: $(printf 'x%.0s' $(seq 38))" --line "B: $(printf 'x%.0s' $(seq 37))"
 grep -q 'preview line 1 is 41 characters' <<<"$ERR" && ! grep -q 'preview line 2' <<<"$ERR" \
   && ok "2c a 41-character preview line gets a note; a 40-character one does not" || bad "2c line width" "err=$ERR"
 arm fit3
 run done "engage-ping fixed" --line "Was: sandbox runs failed, no log."
-[ -z "$ERR" ] && ok "2c control: a message that fits prints nothing on stderr" || bad "2c fits" "err=$ERR"
+[ "$RC" -eq 0 ] && [ -z "$ERR" ] && ! grep -q misfit "$LOG" && ok "2c control: a message that fits exits 0, prints nothing on stderr, logs no misfit" || bad "2c fits" "rc=$RC err=$ERR"
 arm fit4
 run done "$(printf '\xc3\xa9%.0s' $(seq 14))"
 [ -z "$ERR" ] && ok "2c the width counts characters, not bytes: 14 accented letters fit" || bad "2c bytes" "err=$ERR"
+
+# ---- 2d. Short title names (Q3: 1, Q4: 2) ---------------------------------------------
+arm short
+CLAUDE_PID=none CLAUDE_CODE_SESSION_ID=sess-uuid-2 run done "d"
+case "$(nth curl 1)" in *"H[X-Title: oth $OKI d]"*) ok "2d a listed project's short name leads the title, blanks trimmed" ;; *) bad "2d short name" "$(nth curl 1)" ;; esac
+arm short2
+CLAUDE_PID=none CLAUDE_CODE_SESSION_ID=sess-uuid-2 ENGAGE_PING_NAMES_CONF="$ROOT/conf/no-such-file" run done "d"
+case "$(nth curl 1)" in *"H[X-Title: other-proj $OKI d]"*) ok "2d control: no names file, the full name" ;; *) bad "2d no file" "$(nth curl 1)" ;; esac
+arm short3
+run done "d"
+case "$(nth curl 1)" in *"H[X-Title: st-proj $OKI d]"*) ok "2d control: a name only a prefix or a pattern would match keeps its full name" ;; *) bad "2d exact match" "$(nth curl 1)" ;; esac
+arm short4
+printf '\t other-proj:  oth2 \r\n' >"$ROOT/conf/names-crlf.local"
+CLAUDE_PID=none CLAUDE_CODE_SESSION_ID=sess-uuid-2 ENGAGE_PING_NAMES_CONF="$ROOT/conf/names-crlf.local" run done "d"
+case "$(nth curl 1)" in *"H[X-Title: oth2 $OKI d]"*) ok "2d an indented line with a CRLF ending still matches, the short name trimmed" ;; *) bad "2d crlf" "$(nth curl 1)" ;; esac
+arm short5
+mkdir -p "$ROOT/back\\slash" && builtin cd "$ROOT/back\\slash" && printf '%s\n' 'back\slash: bs' >"$ROOT/conf/names-bs.local"
+CLAUDE_CODE_SESSION_ID=none ENGAGE_PING_NAMES_CONF="$ROOT/conf/names-bs.local" run done "d"; builtin cd "$ROOT/elsewhere"
+case "$(nth curl 1)" in *"H[X-Title: bs $OKI d]"*) ok "2d a name with a backslash matches as written" ;; *) bad "2d backslash" "$(nth curl 1)" ;; esac
 
 # ---- 3. No id anywhere; stdout is the time ---------------------------------------------
 arm noid
@@ -373,7 +427,7 @@ arm sess
 run test "t"
 case "$(nth imsg 1)" in "st-proj $TI t${NL}"*"${NL}Session: st-sess${NL}"*) ok "9 by CLAUDE_PID's session file; the project from its cwd, not the calling folder" ;; *) bad "9 by pid" "$(nth imsg 1)" ;; esac
 arm sess2
-CLAUDE_PID=9999 CLAUDE_CODE_SESSION_ID=sess-uuid-2 run test "t"
+CLAUDE_PID=9999 CLAUDE_CODE_SESSION_ID=sess-uuid-2 ENGAGE_PING_NAMES_CONF="$ROOT/conf/no-such-file" run test "t"
 case "$(nth imsg 1)" in "other-proj $TI t${NL}"*"${NL}Session: st-other${NL}"*) ok "9 no file for CLAUDE_PID: found by sessionId" ;; *) bad "9 by session id" "$(nth imsg 1)" ;; esac
 arm sess3
 CLAUDE_PID=9999 CLAUDE_CODE_SESSION_ID=nope CLAUDE_CODE_SESSION_NAME=named run test "t"
@@ -439,11 +493,20 @@ arm log
 run question "Secret summary words" --detail "secret detail words" --you "secret you words" --ref Q99
 iso=$(perl -MPOSIX -e 'print strftime("%Y-%m-%dT%H:%M:%S%z", localtime(shift))' "$NOW1")
 q=$(awk -F'\t' '$5 == "queued"' "$LOG"); s=$(awk -F'\t' '$5 == "sent"' "$LOG")
-[ "$(wc -l <"$LOG" | tr -d ' ')" -eq 2 ] && [ "$q" = "$iso	$T1	question	st-sess	queued	-" ] \
-  && ok "11 two lines; queued: the message's ISO time, its text time, kind, session, nothing missing" || bad "11 queued line" "$(cat "$LOG")"
+[ "$(wc -l <"$LOG" | tr -d ' ')" -eq 3 ] && [ "$q" = "$iso	$T1	question	st-sess	queued	-" ] \
+  && ok "11 three lines; queued: the message's ISO time, its text time, kind, session, nothing missing" || bad "11 queued line" "$(cat "$LOG")"
 [ "$s" = "$iso	$T1	question	st-sess	sent	sound=started imsg=0,0 ntfy=unsorted:204" ] \
   && ok "11 sent: the same two times, then the sounds started, imsg and ntfy" || bad "11 sent line" "$(cat "$LOG")"
-grep -q -e secret -e Q99 "$LOG" && bad "11 the log carries text" "$(cat "$LOG")" || ok "11 never the summary, detail, you or ref"
+x=$(awk -F'\t' '$5 == "text"' "$LOG")
+[ "$x" = "$iso	$T1	question	st-sess	text	st-proj $Q Secret summary words	Ask: secret detail words	Do: secret you words	Ref: Q99	Session: st-sess	Time: $T1" ] \
+  && ok "11 text (Q2: 4): the whole message, title first, one field a line" || bad "11 text line" "$(cat "$LOG")"
+arm log-next
+run done "d" --line "A: 1" --next "n"
+x=$(awk -F'\t' '$5 == "text"' "$LOG")
+case "$x" in *"	Time: $T1		Next: n") ok "11 text: the blank line before Next is an empty field" ;; *) bad "11 text next" "$x" ;; esac
+arm log-tok
+run done "d" --line "A: ghp_$(printf 'A%.0s' $(seq 36))"
+grep -q 'ghp_' "$LOG" && bad "11 a token reached the log" "$(cat "$LOG")" || { grep -q '	A: \[redacted\]	' "$LOG" && ok "11 text is the cleaned text: a token shape is [redacted] in the log" || bad "11 token" "$(cat "$LOG")"; }
 arm log-off
 ENGAGE_PING_NTFY_CONF="$ROOT/conf/off.conf" run done "d"
 grep -q '	sent	sound=started imsg=- ntfy=off fallback=imsg:0,0$' "$LOG" && ok "11 the setting off: ntfy=off, and the imsg that took its place" || bad "11 off line" "$(cat "$LOG")"
@@ -580,7 +643,7 @@ SANDBOX_RUNTIME=1 PJ_PING_LOG="$ROOT/a-file/p.log" run waiting "w" --you "x"
 [ "$RC" -eq 3 ] && [ "$(ncalls)" -eq 0 ] && grep -q '	waiting	st-sess	refused	sandbox$' "$PEND" && grep -qF "$PEND" <<<"$ERR" \
   && ok "16 log not writable: the refusal goes in the pending file, named on stderr" || bad "16 pending" "rc=$RC pend=$(cat "$PEND" 2>&1) err=$ERR"
 ENGAGE_PING_NOW="$NOW2" run done "d"
-[ "$RC" -eq 0 ] && [ ! -e "$PEND" ] && [ "$(awk -F'\t' '{print $5}' "$LOG" | tr '\n' ' ')" = "refused queued sent " ] \
+[ "$RC" -eq 0 ] && [ ! -e "$PEND" ] && [ "$(awk -F'\t' '{print $5}' "$LOG" | tr '\n' ' ')" = "refused queued text sent " ] \
   && grep -q "^[^	]*	$T1	waiting	st-sess	refused	sandbox\$" "$LOG" \
   && ok "16 the next run outside the sandbox moves the refusal into the log first, then its own lines" || bad "16 fold" "rc=$RC pend=$(cat "$PEND" 2>&1) log=$(cat "$LOG" 2>&1)"
 run done "d"

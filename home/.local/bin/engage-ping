@@ -17,10 +17,11 @@
 # Q10: 2, Q11: 1, Q14: 1, and "don't waste the notification real estate"). The phone's lock
 # screen shows the title and 4 lines under it (seen on his phone 3:11 PM 22 Oct; a 5th line is
 # cut off with "..."); the rest shows when the message is opened. Nothing is said twice.
-#   the title        "<project> <icon> <summary>"   about 32 characters fit; a longer one is still
-#                    sent, with a note on stderr. No session name: the project leads.
+#   the title        "<project> <icon> <summary>"   about 32 characters fit, so the summary
+#                    has 28 minus the project's length (see THE NAMES for short names). No
+#                    session name: the project leads.
 #   4 preview lines  each "<Label>: <text>", about 40 characters each (a longer one wraps and
-#                    pushes the last line off the lock screen; a note on stderr). Made from, in
+#                    pushes the last line off the lock screen). Made from, in
 #                    order: each --line; then --detail as "Ask: <detail>" for a question, else
 #                    "Note: <detail>"; then --you as "Do: <you>", or the kind's default Do line.
 #   when opened      any preview line past the fourth, each --more, "Ref: <ref>",
@@ -37,6 +38,15 @@
 #
 # At most 4 --line and 8 --more. Old callers that pass only --detail and --you get the same
 # layout through the mapping above.
+#
+# A MESSAGE THAT DOES NOT FIT (Gavin, dotfiles-main Q1: 4, 25 Oct 2026: "send, then fail
+# loudly"). A title wider than 32, a preview line wider than 40, or more than 4 preview lines:
+# the message is still sent, then stderr says ERROR, names each problem and the room the
+# summary has, and points at this help; the exit is 4. Measured 25 Oct 2026: 68 of 84 pings
+# since the layout ruling did not fit, and a note that still exited 0 changed nothing. With
+# --detach (the hooks and the timer, which cannot learn) the exit stays as it was and nothing is
+# said, so a ping that went out is never reported as one that did not; the log keeps the problem
+# either way. A test ping is never checked: its ntfy title is the fixed robot one.
 #
 # WHERE EACH KIND GOES, in this order: the sounds, the iMessage, then ntfy. The sounds start in
 # the background and nothing waits for them (Gavin, 19 Oct: "it needs to be asynchronous,
@@ -76,7 +86,10 @@
 # main repo's session-alias: from its companion's config/project.txt (<main>-isolinear), else
 # from the old .claude/pj-homes, else its basename (a linked worktree adds
 # /<worktree>; outside git, the folder's basename), worked out from the session file's cwd when
-# there is one, else from the current folder.
+# there is one, else from the current folder. Then its short name, when $ENGAGE_PING_NAMES_CONF,
+# else ~/.config/engage-ping/names.local (dot-private, so the list of projects stays out of
+# public dotfiles), has a "<project>: <short>" line for it (Gavin, dotfiles-main Q3: 1 and
+# Q4: 2, 25 Oct 2026: llmster-server-3090 left the summary 9 characters).
 #
 # TEXT IS UNTRUSTED. Every part (summary, each line, detail, you, ref, next, held, project,
 # session) has its control, bidi and zero-width characters turned into a space, token shapes into
@@ -87,8 +100,14 @@
 #
 # THE LOG: $PJ_PING_LOG, else $PJ_PING_STATE_DIR/ping.log, else
 # ${ENGAGE_ACCOUNT_ROOT:-~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear}/engine-room/pj-state/ping.log.
-# Tab-separated, two lines a message, never the text; both carry the message's own time:
+# Tab-separated, three lines a message (four when it does not fit), each with the message's own
+# time. Since 25 Oct 2026 the log keeps the whole text (Gavin, dotfiles-main Q2: 4; for a test
+# ping, the iMessage's text, not ntfy's robot form), so which
+# pings broke the layout can be counted; the text is cleaned first (TEXT IS UNTRUSTED) and the
+# log is gitignored, so it stays on this Mac:
 #   <ISO local time>  <the time as in the text>  <kind>  <session>  queued  <what was missing, or ->
+#   <ISO local time>  <the time as in the text>  <kind>  <session>  text    <title>  <line>  <line>...  (each line of the message its own field; the blank line before Next an empty one)
+#   <ISO local time>  <the time as in the text>  <kind>  <session>  misfit  title=<w>/32 line<n>=<w>/40 lines=<n>/4  (only the parts that did not fit)
 #   <ISO local time>  <the time as in the text>  <kind>  <session>  sent    sound=started|- imsg=<rc1>,<rc2> or - ntfy=<topic>:<code>|off|- [fallback=imsg:<rc1>,<rc2>]
 #   <ISO local time>  <the time as in the text>  <kind>  <session>  silent  launched-by=<name>
 #   <ISO local time>  <the time as in the text>  <kind>  <session>  refused sandbox
@@ -103,6 +122,8 @@
 #       2 usage error: nothing sent, nothing logged
 #       3 REFUSED inside the Bash tool's sandbox: nothing sent, the refusal named on stderr and
 #         logged (see SANDBOX)
+#       4 sent, but it does not fit the lock screen: each problem named on stderr and in the log
+#         (see A MESSAGE THAT DOES NOT FIT; never with --detach; 1 wins over 4)
 # stdout is the message's time; nothing for PJ_NO_PING, PING-1 or a refusal.
 # PJ_NO_PING=1 is the kill switch: exit 0, nothing sent, nothing logged.
 # PING-1 (Gavin 2026-09-29): with PJ_LAUNCHED_BY set (a worker or a subagent), nothing is sent;
@@ -121,7 +142,8 @@
 #
 # TEST SEAMS (selftest only), each used when SET, even to a missing path: PJ_PING_AFPLAY,
 # PJ_PING_IMSG, ENGAGE_PING_CURL replace the PATH lookup; ENGAGE_PING_NTFY_CONF,
-# ENGAGE_PING_GATEWAY_CONF, ENGAGE_PING_SESSIONS, ENGAGE_PING_PENDING replace the files;
+# ENGAGE_PING_GATEWAY_CONF, ENGAGE_PING_SESSIONS, ENGAGE_PING_PENDING, ENGAGE_PING_NAMES_CONF
+# replace the files;
 # ENGAGE_PING_NOW (epoch seconds) is the clock.
 #
 # `engage-ping --selftest` runs engage-ping-selftest from the same folder.
@@ -133,7 +155,7 @@ STATE_DIR="${PJ_PING_STATE_DIR:-${ENGAGE_ACCOUNT_ROOT:-$HOME/CODE/CaptainCodeAU/
 LOG_FILE="${PJ_PING_LOG:-$STATE_DIR/ping.log}"
 PENDING="${ENGAGE_PING_PENDING:-/tmp/claude-$UID/engage-ping-refused.log}"
 DOT=$'\xc2\xb7'
-NL=$'\n'
+NL=$'\n'; TAB=$'\t'
 
 usage() { sed -n '2,/^# `engage-ping --selftest`/p' "$0" | sed 's/^# \{0,1\}//'; }
 die2() { printf 'engage-ping: %s\n' "$1" >&2; exit 2; }
@@ -179,10 +201,14 @@ clean_many() {
 
 # One log line. The braces matter: a failed append is a redirection error the shell raises
 # before any 2>/dev/null on the command applies. Returns 1 when the line could not be written.
-log() { log_to "$LOG_FILE" "$@"; }  # log <event> <detail>
-log_to() { # log_to <file> <event> <detail>   (uses ISO, TTIME, KIND, LOGSESS)
-  { mkdir -p "$(dirname "$1")" &&
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$ISO" "$TTIME" "$KIND" "$LOGSESS" "$2" "$3" >>"$1"
+log() { log_to "$LOG_FILE" "$@"; }  # log <event> <detail> [<event> <detail>]...
+log_to() { # log_to <file> <event> <detail> [<event> <detail>]...   (uses ISO, TTIME, KIND, LOGSESS)
+  # Several lines go in one printf, one append, so two runs at once cannot interleave them and
+  # one failed write is the only failure there is.
+  local f="$1" a=(); shift
+  while [ $# -ge 2 ]; do a+=("$ISO" "$TTIME" "$KIND" "$LOGSESS" "$1" "$2"); shift 2; done
+  { mkdir -p "$(dirname "$f")" &&
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "${a[@]}" >>"$f"
   } 2>/dev/null
 }
 
@@ -233,13 +259,24 @@ session_file() {
   return 0
 }
 
+# short_of <name>: the short title name from the names file, else the name itself. An exact match
+# on the whole name before the colon, so no name is read as a pattern.
+short_of() {
+  local s
+  # ENVIRON, not -v: -v would turn a backslash in the name into an escape.
+  s=$(K="$1" awk '{ l = $0; sub(/^[[:space:]]+/, "", l) }
+      index(l, ENVIRON["K"] ":") == 1 { v = substr(l, length(ENVIRON["K"]) + 2); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v); print v; exit }' \
+    "${ENGAGE_PING_NAMES_CONF:-$HOME/.config/engage-ping/names.local}" 2>/dev/null)
+  printf '%s' "${s:-$1}"
+}
+
 # project_label <folder>: the name that starts the title (see THE NAMES). A linked worktree is the
 # one where --git-dir and --git-common-dir differ.
 project_label() {
   local d="$1" common gdir main n top
   common=$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
   if [ -z "$common" ]; then
-    basename "$d"
+    short_of "$(basename "$d")"
     return 0
   fi
   main=$(dirname "$common")
@@ -249,7 +286,7 @@ project_label() {
     n=$(sed -n 's/^[[:space:]]*session-alias:[[:space:]]*//p' "$main/.claude/pj-homes" 2>/dev/null | head -n 1)
     n="${n%"${n##*[![:space:]]}"}"
   fi
-  n="${n:-$(basename "$main")}"
+  n=$(short_of "${n:-$(basename "$main")}")
   gdir=$(git -C "$d" rev-parse --path-format=absolute --git-dir 2>/dev/null)
   if [ -n "$gdir" ] && [ "$gdir" != "$common" ]; then
     top=$(git -C "$d" rev-parse --show-toplevel 2>/dev/null)
@@ -404,19 +441,47 @@ fi
 L1="$PROJECT $ICON $SUMMARY"
 TEXT="$L1$NL$BODY"
 
-# Notes, never a refusal: a message that does not fit is still sent. The emoji counts 2.
-fit_notes() {
-  local LC_ALL=en_US.UTF-8 w n=0 x
+# A MESSAGE THAT DOES NOT FIT (see the header): never a refusal, the message is still sent. Each
+# problem goes in FIT_SAY (for stderr, said after the send) and FIT_LOG (the misfit log line).
+# The emoji counts 2.
+FIT_SAY=(); FIT_LOG=""
+fit_check() {
+  local LC_ALL=en_US.UTF-8 w n=0 x room
+  # A test ping's ntfy title is the fixed robot one, and its Do line is engage-ping's own words.
+  [ "$KIND" != test ] || return 0
   w=$(( ${#PROJECT} + ${#SUMMARY} + 4 ))
-  [ "$w" -le 32 ] || printf 'engage-ping: note: the title is %d characters wide and about 32 show on the lock screen; shorten the summary\n' "$w" >&2
+  if [ "$w" -gt 32 ]; then
+    room=$(( 28 - ${#PROJECT} ))
+    if [ "$room" -gt 0 ]; then
+      FIT_SAY+=("the title is $w characters wide and about 32 fit: for $PROJECT the summary has room for $room characters, and it is ${#SUMMARY}")
+    else
+      FIT_SAY+=("the title is $w characters wide and about 32 fit: the project name $PROJECT alone fills the title")
+    fi
+    FIT_LOG="$FIT_LOG title=$w/32"
+  fi
   for x in ${SHOWN[@]+"${SHOWN[@]}"}; do
     n=$((n + 1)); [ "$n" -le 4 ] || break
-    [ "${#x}" -le 40 ] || printf 'engage-ping: note: preview line %d is %d characters and about 40 fit before it wraps: "%s"\n' "$n" "${#x}" "$x" >&2
+    if [ "${#x}" -gt 40 ]; then
+      FIT_SAY+=("preview line $n is ${#x} characters and about 40 fit before it wraps: \"$x\"")
+      FIT_LOG="$FIT_LOG line$n=${#x}/40"
+    fi
   done
-  [ "${#SHOWN[@]}" -le 4 ] || printf 'engage-ping: note: %d preview lines; the lock screen shows 4, the rest show when opened\n' "${#SHOWN[@]}" >&2
+  if [ "${#SHOWN[@]}" -gt 4 ]; then
+    FIT_SAY+=("${#SHOWN[@]} preview lines and the lock screen shows 4: they are each --line, then --detail as its Note or Ask line, then the Do line, so the last ones show only when opened")
+    FIT_LOG="$FIT_LOG lines=${#SHOWN[@]}/4"
+  fi
+  FIT_LOG="${FIT_LOG# }"
   return 0
 }
-fit_notes
+# fit_say <how it went>: the ERROR block on stderr, after the send.
+fit_say() {
+  local x
+  [ "${#FIT_SAY[@]}" -gt 0 ] || return 0
+  printf 'engage-ping: ERROR: this message does not fit the lock screen (%s):\n' "$1" >&2
+  for x in "${FIT_SAY[@]}"; do printf 'engage-ping:   %s\n' "$x" >&2; done
+  printf 'engage-ping: read the layout rules before the next ping: engage-ping --help\n' >&2
+}
+fit_check
 
 TAGS=""
 if [ "$KIND" = test ]; then
@@ -445,7 +510,12 @@ if [ -n "$IMSG" ] && [ -z "${IMSG_TO:-}" ]; then MISSING="$MISSING IMSG_TO unset
 [ "$NTFY" -eq 0 ] || [ -n "$CURL" ] || MISSING="$MISSING curl missing;"
 MISSING="${MISSING# }"
 RC=0
-if ! log queued "${MISSING:--}"; then
+# queued, then the whole text, one field a line (Q2: 4; a newline exists only between the lines
+# built above and clean turned every tab into a space, so a tab can only be one of these), then
+# the misfit line when there is one: one append.
+LOGL=(queued "${MISSING:--}" text "${TEXT//$NL/$TAB}")
+[ -z "$FIT_LOG" ] || LOGL+=(misfit "$FIT_LOG")
+if ! log "${LOGL[@]}"; then
   printf 'engage-ping: %s could not write the log %s, so this message is not recorded\n' "$TTIME" "$LOG_FILE" >&2
   RC=1
 fi
@@ -508,10 +578,14 @@ if [ "$DETACH" -eq 1 ]; then
   # Double fork with every descriptor off the caller's pipes: engage-ping returns now and the
   # worker is reparented, so nothing the caller holds waits on it.
   ( ( trap '' HUP; send ) </dev/null >/dev/null 2>&1 & ) </dev/null >/dev/null 2>&1
-  exit "$RC"
+  exit "$RC"   # never 4, and no ERROR on stderr: see A MESSAGE THAT DOES NOT FIT
 fi
-send || {
+if send; then
+  fit_say "it was still sent"
+else
   printf 'engage-ping: %s a send failed, or no phone route took it; see %s\n' "$TTIME" "$LOG_FILE" >&2
+  fit_say "and a send failed, above"
   RC=1
-}
+fi
+[ "$RC" -ne 0 ] || [ "${#FIT_SAY[@]}" -eq 0 ] || RC=4
 exit "$RC"
