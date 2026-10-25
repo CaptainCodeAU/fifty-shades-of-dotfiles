@@ -41,6 +41,13 @@ ExecReload=%h/.local/bin/herdr server reload-config
 ExecStartPost=-%h/.local/bin/herdr-ensure-workspace
 Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=HOME=%h
+# A pane's process killed for memory must not take the server and every other pane
+# with it. With the default (stop), one OOM kill in a pane stopped the whole unit on
+# codebox on 20 Oct 2026 12:10 PM ("Failed with result 'oom-kill'"), and a herdr client
+# started a server outside systemd one second later, before RestartSec ran out (#3962).
+# continue: the pane dies, the server stays. Proved on codebox 25 Oct 2026 with two
+# throwaway units under a 50 MB limit: stop read failed/oom-kill, continue stayed active.
+OOMPolicy=continue
 Restart=on-failure
 RestartSec=10
 KillMode=mixed

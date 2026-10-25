@@ -1,0 +1,135 @@
+#!/usr/bin/env zsh
+# zsh-herdr-guard-selftest -- prove the herdr() guard in home/.zshrc starts herdr.service
+# only when no herdr server answers (#3963, Gavin's dotfiles-main Q1: 1, 25 Oct 2026).
+#
+# Why: on codebox a herdr server started outside systemd held the socket from 20 Oct 2026.
+# The guard saw the unit inactive and ran `systemctl --user start` on every login and every
+# herdr call, `herdr status server --json` included; each start exited 1 ("herdr server is
+# already running") and Restart= retried it for about 50 seconds. Journal, 25 Oct: starts at
+# 12:07:59 PM (a login) and 12:10:50 PM (a status call). docs/HERDR.md, "The herdr() shell guard".
+#
+# THE SEAM is the function itself, cut out of the .zshrc under test with awk and run in a clean
+# `zsh -f` whose PATH starts with two stubs: `systemctl` (answers is-active from STUB_UNIT, fails
+# a start the way the real one did) and `herdr` (answers `status server --json` from
+# STUB_RUNNING). Both log every call. The run ABORTS before any arm unless both names resolve to
+# the stubs, so no arm can touch a real server or a real unit.
+#
+# Usage:
+#   zsh-herdr-guard-selftest                          test <repo>/home/.zshrc (exit 0 = all passed)
+#   ZSHRC_UNDER_TEST=<file> zsh-herdr-guard-selftest  test another copy (master's, say)
+# Exit: 0 all passed; 1 an arm failed; 2 REFUSED (no function, stubs not first: NOT a pass).
+
+setopt no_unset pipe_fail 2>/dev/null
+
+_resolve_repo() {
+    local self="${(%):-%x}" dir target
+    dir="$(cd -- "$(dirname -- "$self")" && pwd)"
+    if [[ -L "$self" ]]; then
+        target="$(readlink "$self")"
+        [[ "$target" != /* ]] && target="$dir/$target"   # re-base a relative stow link
+        dir="$(cd -- "$(dirname -- "$target")" && pwd)"
+    fi
+    (cd -- "$dir/../../.." && pwd)                      # <repo>/home/.local/bin -> <repo>
+}
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+        *) print -ru2 -- "zsh-herdr-guard-selftest: unknown option: $arg"; exit 2 ;;
+    esac
+done
+REPO="$(_resolve_repo)"
+UNDER_TEST="${ZSHRC_UNDER_TEST:-$REPO/home/.zshrc}"
+[[ -f "$UNDER_TEST" ]] || { print -ru2 -- "REFUSED: no .zshrc at $UNDER_TEST"; exit 2; }
+
+FN="$(awk '/^herdr\(\) \{/{on=1} on{print} on && /^\}/{exit}' "$UNDER_TEST")"
+[[ "$FN" == *'command herdr "$@"'* ]] || { print -ru2 -- "REFUSED: no herdr() function found in $UNDER_TEST"; exit 2; }
+
+T="$(mktemp -d "${TMPDIR:-/tmp}/zsh-hg.XXXXXX")" || { print -ru2 -- "REFUSED: mktemp failed"; exit 2; }
+[[ -d "$T" ]] || { print -ru2 -- "REFUSED: no temp dir"; exit 2; }
+trap 'command rm -rf -- "$T" 2>/dev/null' EXIT
+mkdir -p "$T/bin" "$T/home/.config/systemd/user" || exit 2
+# The guard keys off the unit SYMLINK only; where it points does not matter here.
+ln -s /dev/null "$T/home/.config/systemd/user/herdr.service" || exit 2
+
+cat > "$T/bin/systemctl" <<'EOF'
+#!/bin/sh
+echo "systemctl $*" >> "$HG_LOG"
+case "$*" in
+    "--user is-active herdr.service") echo "$STUB_UNIT"; [ "$STUB_UNIT" = active ] ;;
+    "--user start herdr.service") exit 1 ;;
+    *) exit 0 ;;
+esac
+EOF
+cat > "$T/bin/herdr" <<'EOF'
+#!/bin/sh
+echo "herdr $*" >> "$HG_LOG"
+if [ "$*" = "status server --json" ]; then
+    printf '{"status":"x","running":%s,"version":"0.9.5"}\n' "$STUB_RUNNING"
+fi
+exit 0
+EOF
+chmod +x "$T/bin/systemctl" "$T/bin/herdr" || exit 2
+
+# One arm: $1 unit state, $2 server running (true/false), $3 HERDR_ENV ("" or 1), rest = args.
+# Sets OUT (stdout), ERR (stderr) and LOG (the calls both stubs saw).
+run_arm() {
+    (( $# >= 3 )) || { print -ru2 -- "run_arm: needs unit, running, HERDR_ENV"; exit 2; }
+    local unit="$1" running="$2" henv="$3"; shift 3
+    : > "$T/log"; : > "$T/out"; : > "$T/err"
+    env -i PATH="$T/bin:/usr/bin:/bin" HOME="$T/home" HG_LOG="$T/log" \
+        STUB_UNIT="$unit" STUB_RUNNING="$running" HG_FN="$FN" ${henv:+HERDR_ENV=$henv} \
+        zsh -f -c 'eval "$HG_FN"; herdr "$@"' herdr-arm "$@" > "$T/out" 2> "$T/err"
+    OUT="$(<"$T/out")"; ERR="$(<"$T/err")"; LOG="$(<"$T/log")"
+}
+
+# The abort: both names must be the stubs inside the arm's own shell.
+_resolved="$(env -i PATH="$T/bin:/usr/bin:/bin" zsh -f -c 'whence -p systemctl; whence -p herdr')"
+[[ "$_resolved" == "$T/bin/systemctl"$'\n'"$T/bin/herdr" ]] || {
+    print -ru2 -- "REFUSED: the stubs are not first on PATH:"$'\n'"$_resolved"; exit 2; }
+
+PASS=0; FAIL=0
+ok()  { PASS=$(( PASS + 1 )); print -r -- "  PASS  $1"; }
+bad() { FAIL=$(( FAIL + 1 )); print -r -- "  FAIL  $1"; [[ -n "${2-}" ]] && print -r -- "        $2"; }
+has() { [[ "$1" == *"$2"* ]]; }
+
+print -r -- "herdr() guard selftest ($UNDER_TEST)"
+
+# 1. The case #3963 is about: unit down, a server outside systemd answers. No start.
+run_arm inactive true ""
+if has "$LOG" "systemctl --user start"; then bad "server outside systemd: the unit is NOT started" "calls: ${LOG//$'\n'/ | }"
+else ok "server outside systemd: the unit is NOT started"; fi
+if has "$ERR" "outside systemd"; then ok "server outside systemd: says so on stderr"
+else bad "server outside systemd: says so on stderr" "stderr: $ERR"; fi
+if [[ "$(print -r -- "$LOG" | tail -n 1)" == "herdr " ]]; then ok "server outside systemd: the attach still runs"
+else bad "server outside systemd: the attach still runs" "calls: ${LOG//$'\n'/ | }"; fi
+
+# 2. The positive arm: unit down and NO server. The start must still happen.
+run_arm inactive false ""
+if has "$LOG" "systemctl --user start herdr.service"; then ok "no server: the unit IS started"
+else bad "no server: the unit IS started" "calls: ${LOG//$'\n'/ | }"; fi
+
+# 3. Unit active: nothing to check, nothing to start.
+run_arm active true ""
+if has "$LOG" "systemctl --user start" || has "$LOG" "herdr status server"; then
+    bad "unit active: no start and no status query" "calls: ${LOG//$'\n'/ | }"
+else ok "unit active: no start and no status query"; fi
+
+# 4. Inside a herdr pane: no systemctl call at all.
+run_arm inactive true 1
+if has "$LOG" "systemctl"; then bad "HERDR_ENV=1: no systemctl call" "calls: ${LOG//$'\n'/ | }"
+else ok "HERDR_ENV=1: no systemctl call"; fi
+
+# 5. `herdr status server --json | jq` keeps working: stdout is the JSON alone.
+run_arm inactive true "" status server --json
+if [[ "$OUT" == '{"status":"x","running":true,"version":"0.9.5"}' ]]; then ok "status --json: stdout holds only the JSON"
+else bad "status --json: stdout holds only the JSON" "stdout: $OUT"; fi
+
+# 6. `herdr server stop` passes straight through and starts nothing.
+run_arm inactive false "" server stop
+if has "$LOG" "systemctl --user start"; then bad "server stop: no start" "calls: ${LOG//$'\n'/ | }"
+elif [[ "$(print -r -- "$LOG" | tail -n 1)" == "herdr server stop" ]]; then ok "server stop: passed through, no start"
+else bad "server stop: passed through, no start" "calls: ${LOG//$'\n'/ | }"; fi
+
+print -r -- ""
+print -r -- "  $PASS passed, $FAIL failed"
+(( FAIL == 0 ))

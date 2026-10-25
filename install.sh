@@ -88,6 +88,9 @@ CC_CLANG_MAJOR=""
 CC_SDK_VER=""
 VERBOSE=false
 SKIP_PREFLIGHT=false
+# Set by check_conflicts when links already point into this repo; read by
+# _print_next_steps, which then leaves out the first-install steps.
+REINSTALL=false
 
 # --- Profiles, skip flags, no-questions, no-sudo (Gavin's design, Q24 of the codebox
 # build, 2026-10-10; docs/INSTALL_PROFILES.md) ---
@@ -1351,6 +1354,39 @@ _herdr_linger() {
     l=$(loginctl show-user "$USER" -p Linger --value 2>/dev/null) || true
     echo "${l:-?}"
 }
+# _herdr_unit_enabled: systemctl's own word (enabled / disabled / ...), or "unknown".
+_herdr_unit_enabled() {
+    local e
+    e=$(systemctl --user is-enabled herdr.service 2>/dev/null) || true
+    echo "${e:-unknown}"
+}
+# The one line that moves a server started outside systemd under the unit. It ends that
+# server's panes. reset-failed first: by then the unit has usually hit its start limit.
+# A Mac that saved this box as a herdr machine can start a new server in the gap; switch
+# it off there first (docs/HERDR.md, "A server started outside systemd").
+_herdr_move_cmd() {
+    echo "herdr server stop && systemctl --user reset-failed herdr.service && systemctl --user enable --now herdr.service"
+}
+# The prerequisites line for the unit. A server that answers while the unit is not active
+# was started outside systemd and holds the socket, so the unit cannot start: say that,
+# not just systemctl's word, which on codebox read "activating" in the middle of a retry
+# and "failed" after it (25 Oct 2026, #3693).
+_herdr_service_summary_line() {
+    local _unit_state
+    _unit_state=$(_herdr_unit_state)
+    if [[ "$_unit_state" == "active" ]]; then
+        echo -e "      ${GREEN}✓${RESET} server managed by systemd --user and running (crash-restart; linger=$(_herdr_linger))"
+    elif [[ -L "$HOME/.config/systemd/user/herdr.service" ]]; then
+        if [[ -n "$(_herdr_server_restart_status)" ]]; then
+            echo -e "      ${YELLOW}~${RESET} herdr.service ${_unit_state}: a herdr server started outside systemd holds the socket"
+            echo -e "        when no session needs it: ${CYAN}$(_herdr_move_cmd)${RESET}"
+        else
+            echo -e "      ${YELLOW}~${RESET} herdr.service stowed but ${_unit_state} — ${CYAN}systemctl --user enable --now herdr.service${RESET}"
+        fi
+    else
+        echo -e "      ${YELLOW}~${RESET} server not managed — re-run ${CYAN}./install.sh${RESET} to stow + enable herdr.service"
+    fi
+}
 
 # Linux/WSL counterpart of the launchd management above. The unit file is
 # stowed from home/.config/systemd/user/herdr.service; this enables it, and
@@ -1402,11 +1438,18 @@ _post_stow_herdr_systemd_service() {
     # owns the socket; the unit's first start would exit 1 and Restart= would
     # keep retrying until the start limit. _herdr_server_restart_status echoes
     # nothing when no server answers, so any output means one is running.
+    # An ENABLED unit gets its own wording: "NOT enabling" about a unit enabled weeks ago
+    # sent codebox's reader after the wrong fact (25 Oct 2026, #3693). There the server
+    # outside systemd had taken the socket one second after an OOM kill stopped the unit.
     local unit_state
     unit_state=$(_herdr_unit_state)
     if [[ "$unit_state" != "active" && -n "$(_herdr_server_restart_status)" ]]; then
-        warn "A herdr server is already running outside systemd — NOT enabling the unit over it (would respawn-loop on the socket)."
-        info "When no session needs it: ${CYAN}herdr server stop && systemctl --user enable --now herdr.service${RESET}"
+        if [[ "$(_herdr_unit_enabled)" == "enabled" ]]; then
+            warn "herdr.service is enabled, but a herdr server started outside systemd holds the socket, so every start of the unit exits 1."
+        else
+            warn "A herdr server is already running outside systemd — NOT enabling the unit over it (would respawn-loop on the socket)."
+        fi
+        info "When no session needs it: ${CYAN}$(_herdr_move_cmd)${RESET}"
         return 0
     fi
 
@@ -2079,6 +2122,47 @@ _gate_toolchain_takeover() {
     return 0
 }
 
+# The Tmux and Fonts sections of the prerequisites. Under --skip-tmux or --skip-fonts a
+# missing TPM or Nerd Font is a choice, so it reads as optional and names its flag, the
+# way the --skip-system-packages tools do; codebox's profile skips both and was told they
+# were "needed" (25 Oct 2026, #3965). $1 is check_os's word.
+_check_tpm_and_font() {
+    local os="$1"
+    echo -e "${BOLD}Tmux:${RESET}"
+    if [[ -d "$HOME/.tmux/plugins/tpm" ]]; then
+        echo -e "  ${GREEN}✓${RESET} TPM (Tmux Plugin Manager)"
+    elif [[ "$SKIP_TMUX" == true ]]; then
+        echo -e "  ${YELLOW}~${RESET} TPM (--skip-tmux) — not installed (optional)"
+    else
+        echo -e "  ${YELLOW}~${RESET} TPM — not installed (needed for tmux plugins)"
+    fi
+    echo
+
+    echo -e "${BOLD}Fonts:${RESET}"
+    local has_nerd_font=false
+    if [[ "$os" == "macos" ]]; then
+        local nerd_font_count
+        nerd_font_count=$(find ~/Library/Fonts /Library/Fonts \( -iname "*NerdFont*" -o -iname "*Nerd*Font*" \) 2>/dev/null | wc -l || true)
+        if (( nerd_font_count > 0 )); then
+            has_nerd_font=true
+        fi
+    else
+        local fc_count
+        fc_count=$(fc-list 2>/dev/null | grep -ci "nerd" || true)
+        if (( fc_count > 0 )); then
+            has_nerd_font=true
+        fi
+    fi
+    if [[ "$has_nerd_font" == true ]]; then
+        echo -e "  ${GREEN}✓${RESET} Nerd Font detected"
+    elif [[ "$SKIP_FONTS" == true ]]; then
+        echo -e "  ${YELLOW}~${RESET} Nerd Font (--skip-fonts) — not found (optional)"
+    else
+        echo -e "  ${YELLOW}~${RESET} Nerd Font — not found (needed for Powerlevel10k icons)"
+    fi
+    echo
+}
+
 check_prerequisites() {
     step "Checking Prerequisites"
 
@@ -2209,15 +2293,7 @@ check_prerequisites() {
         elif command -v systemctl &>/dev/null; then
             # Linux/WSL: the stowed user unit. Report the real state, not the
             # file's presence: a stowed unit can still be down.
-            local _unit_state
-            _unit_state=$(_herdr_unit_state)
-            if [[ "$_unit_state" == "active" ]]; then
-                echo -e "      ${GREEN}✓${RESET} server managed by systemd --user and running (crash-restart; linger=$(_herdr_linger))"
-            elif [[ -L "$HOME/.config/systemd/user/herdr.service" ]]; then
-                echo -e "      ${YELLOW}~${RESET} herdr.service stowed but ${_unit_state} — ${CYAN}systemctl --user enable --now herdr.service${RESET} (stop any hand-started server FIRST)"
-            else
-                echo -e "      ${YELLOW}~${RESET} server not managed — re-run ${CYAN}./install.sh${RESET} to stow + enable herdr.service"
-            fi
+            _herdr_service_summary_line
         fi
         # Surfaces skew from ANY upgrade path (this script's bump, a manual brew
         # upgrade, the Linux release pin) -- not just one this run just performed.
@@ -2278,35 +2354,7 @@ check_prerequisites() {
     fi
     echo
 
-    echo -e "${BOLD}Tmux:${RESET}"
-    if [[ -d "$HOME/.tmux/plugins/tpm" ]]; then
-        echo -e "  ${GREEN}✓${RESET} TPM (Tmux Plugin Manager)"
-    else
-        echo -e "  ${YELLOW}~${RESET} TPM — not installed (needed for tmux plugins)"
-    fi
-    echo
-
-    echo -e "${BOLD}Fonts:${RESET}"
-    local has_nerd_font=false
-    if [[ "$os" == "macos" ]]; then
-        local nerd_font_count
-        nerd_font_count=$(find ~/Library/Fonts /Library/Fonts \( -iname "*NerdFont*" -o -iname "*Nerd*Font*" \) 2>/dev/null | wc -l || true)
-        if (( nerd_font_count > 0 )); then
-            has_nerd_font=true
-        fi
-    else
-        local fc_count
-        fc_count=$(fc-list 2>/dev/null | grep -ci "nerd" || true)
-        if (( fc_count > 0 )); then
-            has_nerd_font=true
-        fi
-    fi
-    if [[ "$has_nerd_font" == true ]]; then
-        echo -e "  ${GREEN}✓${RESET} Nerd Font detected"
-    else
-        echo -e "  ${YELLOW}~${RESET} Nerd Font — not found (needed for Powerlevel10k icons)"
-    fi
-    echo
+    _check_tpm_and_font "$os"
 
     echo -e "${BOLD}Optional:${RESET}"
     check_command_optional claude "Claude Code CLI" || true
@@ -4374,6 +4422,7 @@ check_conflicts() {
     if (( repo_symlinks > 0 )); then
         echo
         info "$repo_symlinks file(s) already symlinked to repo (re-install detected — will restow)"
+        REINSTALL=true
     fi
 
     if (( conflicts > 0 )); then
@@ -4586,6 +4635,45 @@ _check_speak_clipboard_backend() {
 # Post-Install
 # ==============================================================================
 
+# True on a box whose git reaches GitHub over HTTPS through the token broker (codebox:
+# no SSH key, by design). The same test as the welcome banner's __welcome_github_line.
+# There `gh` asks the broker for a token per repo, so `gh auth status` is never logged in
+# and the SSH-key advice below would be wrong (25 Oct 2026, #3964).
+_github_via_broker() {
+    [[ "$(git config --get-all credential.https://github.com.helper 2>/dev/null)" == *gh-broker-ssh* ]]
+}
+
+_gh_post_install_note() {
+    command -v gh &>/dev/null || return 0
+    if _github_via_broker; then
+        success "GitHub: HTTPS via the token broker (gh-broker-ssh; no SSH key on this box, by design)"
+    elif gh auth status &>/dev/null 2>&1; then
+        success "GitHub CLI authenticated (optional for API operations)"
+    else
+        info "GitHub CLI (gh) is not authenticated."
+        info "This setup uses SSH-only Git auth; ${CYAN}do not run gh auth login${RESET} or ${CYAN}gh auth setup-git${RESET}."
+        info "Use SSH keys plus URL rewrites in ${CYAN}~/.gitconfig.private${RESET} (see README)."
+        info "For trusted LAN remotes that need agent forwarding, add private Host blocks with ${CYAN}ForwardAgent yes${RESET} to ${CYAN}~/.ssh/config.local${RESET} (loaded via ${CYAN}Include${RESET}). For sealed / untrusted boxes, keep ${CYAN}ForwardAgent no${RESET}."
+    fi
+    return 0
+}
+
+# The gh lines of the closing "Still needed". Returns 1 when it printed one, so the
+# caller can clear all_good; a broker box needs nothing here.
+_summary_gh_lines() {
+    if ! command -v gh &>/dev/null; then
+        echo -e "  ${YELLOW}~${RESET} Install GitHub CLI (${CYAN}gh${RESET}) if you need GitHub API/PR commands"
+        return 1
+    fi
+    _github_via_broker && return 0
+    if ! gh auth status &>/dev/null 2>&1; then
+        echo -e "  ${YELLOW}~${RESET} ${CYAN}gh${RESET} is not authenticated (optional for API/PR usage)."
+        echo -e "     ${DIM}Git transport here is SSH-only; avoid gh auth login/setup-git.${RESET}"
+        return 1
+    fi
+    return 0
+}
+
 post_install() {
     step "Post-Install"
 
@@ -4644,17 +4732,8 @@ GITEOF"
     # --- speak-clipboard backend (herdr, macOS only) ---
     _check_speak_clipboard_backend
 
-    # --- gh (SSH-only model) ---
-    if command -v gh &>/dev/null; then
-        if gh auth status &>/dev/null 2>&1; then
-            success "GitHub CLI authenticated (optional for API operations)"
-        else
-            info "GitHub CLI (gh) is not authenticated."
-            info "This setup uses SSH-only Git auth; ${CYAN}do not run gh auth login${RESET} or ${CYAN}gh auth setup-git${RESET}."
-            info "Use SSH keys plus URL rewrites in ${CYAN}~/.gitconfig.private${RESET} (see README)."
-            info "For trusted LAN remotes that need agent forwarding, add private Host blocks with ${CYAN}ForwardAgent yes${RESET} to ${CYAN}~/.ssh/config.local${RESET} (loaded via ${CYAN}Include${RESET}). For sealed / untrusted boxes, keep ${CYAN}ForwardAgent no${RESET}."
-        fi
-    fi
+    # --- gh (SSH-only model, or the token broker) ---
+    _gh_post_install_note
 
     # --- Python via uv ---
     if [[ "$SKIP_UV" == true ]]; then
@@ -5146,6 +5225,20 @@ force_adopt() {
 # Summary
 # ==============================================================================
 
+# The closing "Next steps". On a re-install (check_conflicts found links already pointing
+# here) the onboarding has long since run and the ~/.zshrc.private hint is already in the
+# post-install output, so only the new-terminal step is left (25 Oct 2026, #3965).
+_print_next_steps() {
+    echo
+    echo -e "${BOLD}Next steps:${RESET}"
+    echo -e "  1. Open a new terminal (or: ${CYAN}exec zsh${RESET}) — nvm/pnpm/bun usable immediately in this terminal if installed above"
+    if [[ "$REINSTALL" != true ]]; then
+        echo -e "  2. The onboarding script will run automatically on first start"
+        echo -e "  3. Create ${CYAN}~/.zshrc.private${RESET} for API keys and secrets"
+    fi
+    echo
+}
+
 show_summary() {
     step "Installation Complete"
     echo
@@ -5233,14 +5326,7 @@ ${CC_SDK_VER:+  ·  SDK ${CYAN}${CC_SDK_VER}${RESET}}"
         all_good=false
     fi
 
-    if ! command -v gh &>/dev/null; then
-        echo -e "  ${YELLOW}~${RESET} Install GitHub CLI (${CYAN}gh${RESET}) if you need GitHub API/PR commands"
-        all_good=false
-    elif ! gh auth status &>/dev/null 2>&1; then
-        echo -e "  ${YELLOW}~${RESET} ${CYAN}gh${RESET} is not authenticated (optional for API/PR usage)."
-        echo -e "     ${DIM}Git transport here is SSH-only; avoid gh auth login/setup-git.${RESET}"
-        all_good=false
-    fi
+    _summary_gh_lines || all_good=false
     if [[ -d "$HOME/.tmux/plugins/tpm" ]] && command -v tmux &>/dev/null; then
         echo -e "  ${YELLOW}~${RESET} Start tmux and press ${CYAN}prefix + I${RESET} to install tmux plugins"
         all_good=false
@@ -5263,12 +5349,7 @@ ${CC_SDK_VER:+  ·  SDK ${CYAN}${CC_SDK_VER}${RESET}}"
         echo -e "${BOLD}Profile ${PROFILE}:${RESET} the parts it leaves out are listed on the Mode line at the top; ${CYAN}./install.sh --help${RESET} lists every flag."
     fi
 
-    echo
-    echo -e "${BOLD}Next steps:${RESET}"
-    echo -e "  1. Open a new terminal (or: ${CYAN}exec zsh${RESET}) — nvm/pnpm/bun usable immediately in this terminal if installed above"
-    echo -e "  2. The onboarding script will run automatically on first start"
-    echo -e "  3. Create ${CYAN}~/.zshrc.private${RESET} for API keys and secrets"
-    echo
+    _print_next_steps
     echo -e "${BOLD}Useful commands:${RESET}"
     echo -e "  ${CYAN}./install.sh --check${RESET}      Check prerequisites"
     echo -e "  ${CYAN}./install.sh --update${RESET}     Pull latest and restow"
@@ -6174,8 +6255,9 @@ _apply_profile() {
             # Explicitly no profile. Also what clears a stored one (see _write_stow_state).
             ;;
         codebox)
-            # Gavin's throwaway Claude Code box (Ubuntu 24.04, user without sudo, no
-            # ~/.claude, no ~/.ssh, no tmux, no Docker; git over HTTPS only). The root
+            # Gavin's throwaway Claude Code box (Ubuntu 26.04.1 on 25 Oct 2026, user
+            # without sudo, no ~/.claude, no ~/.ssh, no tmux, no Docker; git over
+            # HTTPS only, through the token broker). The root
             # side installs zsh, stow, jq, trash-cli, fzf, zoxide and direnv before this
             # runs (Network_Plan boxes/codebox-vm-205/scripts/golden-system.sh). What
             # this profile installs as the user: uv + Python 3.13, nvm + Node

@@ -874,7 +874,9 @@ What it does on a Linux/WSL box, in order:
    start a second server that exits 1, and `Restart=` would retry it -- the
    same respawn loop the leftover-LaunchAgent section above describes. The
    unit caps that at five tries in two minutes, but install.sh does not get
-   there: it prints the two-command fix and leaves the running server alone.
+   there: it prints the one-line move (`_herdr_move_cmd`) and leaves the
+   running server alone. When the unit is already enabled it says so rather
+   than "NOT enabling" (codebox, 25 Oct 2026, #3693).
 4. `daemon-reload`, then `enable --now`.
 5. `loginctl enable-linger $USER`. Without linger the user manager, and this
    service with it, stops at the last logout -- which on a headless box is
@@ -883,7 +885,45 @@ What it does on a Linux/WSL box, in order:
    form instead of aborting.
 
 The prerequisites summary reports the real state (`is-active`, plus linger),
-not whether the unit file exists.
+not whether the unit file exists, and names a server started outside systemd
+when one holds the socket.
+
+### A server started outside systemd
+
+Measured on codebox, 20 to 25 Oct 2026 (records #3693, #3962, #3963). On 20 Oct
+at 12:10:32 PM the kernel OOM killer killed the program in herdr's first pane.
+The unit then had the default
+`OOMPolicy=stop`, so systemd killed the whole unit, herdr included: "Failed with
+result 'oom-kill'". One second later a herdr server started with parent 1, and
+a client connected to it a tenth of a second after that, so a client most likely
+spawned it while reconnecting. systemd's restart came at the 10-second mark, found
+the socket taken, and failed five times. Every unit start for the next five days
+exited 1.
+
+Three changes followed (Gavin's dotfiles-main Q1: 1, 25 Oct 2026):
+
+1. The unit sets `OOMPolicy=continue`: a pane killed for memory dies alone and
+   the server stays. Proved on codebox with two throwaway units under a 50 MB
+   limit: `OOMPolicy=stop` read failed with `oom-kill`, `continue` stayed active.
+2. The `herdr()` guard asks whether a server answers before it starts the unit
+   (next section). Before, each login and each herdr call set off about 50
+   seconds of failed starts.
+3. install.sh names the outside server and prints the move in both places it
+   reports the unit.
+
+Moving such a server under the unit ends its panes, so it waits until nothing
+needs them:
+
+```bash
+herdr server stop && systemctl --user reset-failed herdr.service && systemctl --user enable --now herdr.service
+```
+
+A Mac that saved the box as a herdr machine keeps its view connected and may start
+a new server in the gap. Switch it off on the Mac first with
+`herdr machine disable <profile-id>` (`herdr machine list --json` has the id) and on
+again after. On 25 Oct a client the size of the Mac window still connected while the
+machine was switched off, so this likely does not cut a view already open; the move
+worked anyway.
 
 **Why a service and not a hand start.** Every hand-started `herdr server`
 inherits the shell it was started from. On the 3090 box that shell had already
@@ -929,14 +969,15 @@ only where a service manages the server, detected by the file the service
 leaves behind: the stowed unit symlink on Linux, the brew plist on macOS. A
 box with neither is untouched.
 
-| You type                                     | What happens                                                                                                                   | Why                                                                                                                                                                                                                                                                                           |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `herdr server`                               | **Refused.** Prints `systemctl --user start herdr.service` (Linux), or on a Mac with a leftover LaunchAgent, how to remove it. | A hand-started server inherits the shell's environment and dies with the session -- the whole reason the service exists. With a leftover LaunchAgent it also exits 1 on the socket and `keep_alive` respawns it forever. A Mac without one is not guarded: herdr starts its own server there. |
-| `herdr server stop`, `reload-config`, ...    | Pass through.                                                                                                                  | Only the bare form starts a server.                                                                                                                                                                                                                                                           |
-| `herdr update`                               | **Refused** (2026-09-17). Prints `herdr-cooldown-check` and `./install.sh`.                                                    | herdr ships its own updater. It downloads and installs a release directly, walking around Homebrew, `brew pin` and the whole `HERDR_COOLDOWN_DAYS` gate in one command.                                                                                                                       |
-| `herdr channel set preview`                  | **Refused** (2026-09-17).                                                                                                      | Same hole by another route: it repoints that updater at preview builds. `channel set stable` passes through.                                                                                                                                                                                  |
-| `herdr` (attach), Linux, unit down           | Starts the unit first, then attaches.                                                                                          | Upstream attach "starts or attaches to" a server: with the unit down it would spawn the same hand-started server with no visible command.                                                                                                                                                     |
-| Anything inside a herdr pane (`HERDR_ENV=1`) | No check at all.                                                                                                               | The server is by definition running; agents call the CLI constantly and should pay nothing.                                                                                                                                                                                                   |
+| You type                                           | What happens                                                                                                                   | Why                                                                                                                                                                                                                                                                                           |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `herdr server`                                     | **Refused.** Prints `systemctl --user start herdr.service` (Linux), or on a Mac with a leftover LaunchAgent, how to remove it. | A hand-started server inherits the shell's environment and dies with the session -- the whole reason the service exists. With a leftover LaunchAgent it also exits 1 on the socket and `keep_alive` respawns it forever. A Mac without one is not guarded: herdr starts its own server there. |
+| `herdr server stop`, `reload-config`, ...          | Pass through.                                                                                                                  | Only the bare form starts a server.                                                                                                                                                                                                                                                           |
+| `herdr update`                                     | **Refused** (2026-09-17). Prints `herdr-cooldown-check` and `./install.sh`.                                                    | herdr ships its own updater. It downloads and installs a release directly, walking around Homebrew, `brew pin` and the whole `HERDR_COOLDOWN_DAYS` gate in one command.                                                                                                                       |
+| `herdr channel set preview`                        | **Refused** (2026-09-17).                                                                                                      | Same hole by another route: it repoints that updater at preview builds. `channel set stable` passes through.                                                                                                                                                                                  |
+| `herdr` (attach), Linux, unit down                 | Starts the unit first, then attaches.                                                                                          | Upstream attach "starts or attaches to" a server: with the unit down it would spawn the same hand-started server with no visible command.                                                                                                                                                     |
+| Any herdr call, Linux, unit down, a server answers | **Does not start the unit.** Says a server started outside systemd is running, prints the move, then runs the command.         | That server holds the socket, so a unit start can only exit 1 and retry for about 50 seconds (codebox, 25 Oct 2026, #3963). Tested by `zsh-herdr-guard-selftest`.                                                                                                                             |
+| Anything inside a herdr pane (`HERDR_ENV=1`)       | No check at all.                                                                                                               | The server is by definition running; agents call the CLI constantly and should pay nothing.                                                                                                                                                                                                   |
 
 Its notices go to stderr, so `herdr status server --json | jq` keeps working
 (the first live test broke exactly that).
@@ -1277,7 +1318,8 @@ the whole grid and does not know pane borders exist.
 
 Read in the herdr 0.9.5 source (tag v0.9.5) and seen live on 22 Oct 2026, with
 herdr run as a server and client. herdr is never built or patched here (ruling
-#3636), so only `config.toml` and our own callers can change a pop-up.
+
+# 3636), so only `config.toml` and our own callers can change a pop-up
 
 | Pop-up                               | First line / second line                                   | Time | Sound                                              |
 | ------------------------------------ | ---------------------------------------------------------- | ---- | -------------------------------------------------- |

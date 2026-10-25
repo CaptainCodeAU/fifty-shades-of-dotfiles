@@ -808,8 +808,11 @@ pnpm() {
 #   2. Bare `herdr` (attach). Upstream: "starts or attaches to the remote Herdr
 #      server" -- when the service is down, attaching quietly spawns the very
 #      hand-started server this guard exists to prevent. So on Linux the unit is
-#      started first. Skipped inside a herdr pane (HERDR_ENV=1: the server is
-#      by definition running) so agents' frequent CLI calls pay nothing.
+#      started first, unless a server already answers: then it was started
+#      outside systemd, a unit start could only fail, and the guard says so
+#      instead (#3963, 25 Oct 2026). Skipped inside a herdr pane (HERDR_ENV=1:
+#      the server is by definition running) so agents' frequent CLI calls pay
+#      nothing. Tested by zsh-herdr-guard-selftest.
 #
 # A shell function only guards interactive use and Claude's Bash tool (which
 # sources the snapshotted functions). Scripts calling the binary by path are
@@ -884,8 +887,16 @@ herdr() {
     if [[ -z "${HERDR_ENV:-}" && "$1" != "server" && -L "$_unit" ]] && command -v systemctl &>/dev/null; then
         if [[ "$(systemctl --user is-active herdr.service 2>/dev/null)" != "active" ]]; then
             # stderr: stdout may be a pipe (`herdr status server --json | jq`).
-            echo "${warn}herdr.service is not running; starting it so attach does not spawn a hand-started server${done}" >&2
-            systemctl --user start herdr.service || echo "${err}systemctl --user start herdr.service failed -- see journalctl --user -u herdr.service${done}" >&2
+            # A server that answers while the unit is down was started outside systemd and
+            # holds the socket: a unit start exits 1 and Restart= retries it for about 50
+            # seconds (codebox, 20 to 25 Oct 2026, #3963). Say so instead of starting it.
+            if [[ "$(command herdr status server --json 2>/dev/null)" == *'"running":true'* ]]; then
+                echo "${warn}herdr: a server started outside systemd is running, so herdr.service was not started${done}" >&2
+                echo "${warn}  to move it under the service (ends its panes): herdr server stop && systemctl --user reset-failed herdr.service && systemctl --user start herdr.service${done}" >&2
+            else
+                echo "${warn}herdr.service is not running; starting it so attach does not spawn a hand-started server${done}" >&2
+                systemctl --user start herdr.service || echo "${err}systemctl --user start herdr.service failed -- see journalctl --user -u herdr.service${done}" >&2
+            fi
         fi
     fi
     # herdr ships its own updater. `herdr update` downloads and installs a

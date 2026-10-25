@@ -32,10 +32,10 @@ All files in `home/` are deployed directly to your home directory (`~/`).
 
 #### Other Configuration Files
 
-| File         | Purpose                           | Deployed To    |
-| ------------ | --------------------------------- | -------------- |
-| `.p10k.zsh`  | Powerlevel10k theme configuration | `~/.p10k.zsh`  |
-| `.vimrc`     | Lightweight Vim configuration     | `~/.vimrc`     |
+| File        | Purpose                           | Deployed To   |
+| ----------- | --------------------------------- | ------------- |
+| `.p10k.zsh` | Powerlevel10k theme configuration | `~/.p10k.zsh` |
+| `.vimrc`    | Lightweight Vim configuration     | `~/.vimrc`    |
 
 ### `home/.config/` - Files for `~/.config/`
 
@@ -255,6 +255,7 @@ Each one drives its tool to pass and to fail on throwaway fixtures, and touches 
 | `claude-hooks-sync-selftest`              | `claude-hooks-sync`, including the engage cross-check                                      |
 | `claude-project-settings-render-selftest` | `claude-project-settings-render`, including the hooks merge                                |
 | `install-preflight-selftest`              | `install.sh`'s toolchain quirk checks fire                                                 |
+| `install-codebox-messages-selftest`       | `install.sh` reports codebox's herdr unit, GitHub, skipped parts and next steps truthfully |
 | `mandatory-checks-selftest`               | Every script in `mandatory-checks/` against its pass and fail fixtures                     |
 | `ccw-watch-selftest`                      | `ccw-watch`                                                                                |
 | `ci-watch-selftest`                       | `ci-watch` cannot show a cached result as live                                             |
@@ -268,6 +269,7 @@ Each one drives its tool to pass and to fail on throwaway fixtures, and touches 
 | `pj-start-card-selftest`                  | Every arm of `pj-start-card`                                                               |
 | `pj-wrap-selftest`                        | Every arm of `pj-wrap`, including push conflicts                                           |
 | `zsh-claude-paneguard-selftest`           | `.zshrc`'s `claude()` herdr pane guard                                                     |
+| `zsh-herdr-guard-selftest`                | `.zshrc`'s `herdr()` guard starts herdr.service only when no server answers                |
 | `zsh-node-functions-selftest`             | `pnpm_update`'s deny list refuses                                                          |
 | `pnpm-guide-selftest`                     | PNPM_SETUP_GUIDE.md still matches the machine: doctor block, floor, section 0 facts        |
 | `zsh-welcome-selftest`                    | The welcome banner's pnpm-vs-nvm PATH check fires                                          |
@@ -317,59 +319,59 @@ require iTerm2 to be fully quit first.
 
 Documentation and reference materials.
 
-| File/Directory                        | Purpose                                                                                                                                                                                       |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AGENT_BRIEF.md`                      | Safe cross-agent interaction patterns and stow/branch-switching hazards for sibling-project agents                                                                                            |
-| `CLAUDE_SESSION_ATTRIBUTION.md`       | Auto-stamp commits with C-Sess-Id / C-Web-Id / C-Branch / C-Worktree / C-Wt-Path trailers (SessionStart identity hook + \_audit-chain step); fresh-machine runbook, verification, and gotchas |
-| `SECURITY.md`                         | Strict SSH posture rationale, alternative postures table, and drift-check commands                                                                                                            |
-| `MEMENTO_vscode_machine_colors.md`    | Complete guide for VSCode/Cursor machine-specific color setup                                                                                                                                 |
-| `ZED_MARKDOWN_FORMATTING.md`          | md-hardbreak: hard breaks / paragraph gaps / strip, Zed tasks + key bindings, and the rationale                                                                                               |
-| `ZED_PREVIEW_CHANGELOG.md`            | Living record of Zed Preview UI / configuration / theme changes, plus the standing watch-items; refreshed via the SessionStart version check                                                  |
-| `CLAUDE_CODE_SECURITY.md`             | Claude Code's own security surface — sandbox, permission modes, CVEs. Scope-stamped to a dated investigation; treat the version as history, not a currency claim                              |
-| `CLAUDE_CODE_AND_PAI_INTERNALS.md`    | How `~/.claude/` is actually organised: the three-system model, project-path encoding, and the migration hazards when a repo moves                                                            |
-| `CLAUDE_CODE_RESEARCH_NOTES.md`       | Living notes on researched Claude Code behaviour and mechanics (hook loading, permission modes, interactive quirks)                                                                           |
-| `GH_AUTH_GUARD_USER_LEVEL.md`         | GitHub API read-only token plus the `gh` auth guard, user-level install                                                                                                                       |
-| `NVM_SECURITY.md`                     | nvm / Node.js hardening: mirror pin, version floor, EOL policy, and GPG signature verification                                                                                                |
-| `TOOLCHAIN_CVE_CHECK.md`              | `toolchain-cve-check`: are the pinned floors and the installed versions CVE-exposed? Cites historically vulnerable pins on purpose as negative controls                                       |
-| `VULN_SCAN.md`                        | `vuln-scan`: incremental CVE scan of installed Homebrew formulae via NVD. Covers the Homebrew-revision false positive, the shell-safety cap, and the portable briefing file                   |
-| `PNPM_SETUP_GUIDE.md`                 | pnpm setup: where pnpm reads config from, the kebab-case silent-failure trap, macOS vs XDG paths                                                                                              |
-| `PNPM_AUDIT_TREE.md`                  | `pnpm-audit-tree`: recursive supply-chain auditor for pnpm / JS project trees                                                                                                                 |
-| `PNPM_AUDIT_PREPUSH_HOOK.md`          | The global, opt-in pnpm-audit pre-push git hook                                                                                                                                               |
-| `CI_WATCH.md`                         | `ci-watch`: the escalating, dismiss-only-by-fixing CI status line in the session dashboard                                                                                                    |
-| `TOOLCHAIN_TAKEOVER_CONSENT.md`       | `toolchain-stocktake` + `project-impact-scan`: survey + disclose + gate before install.sh's Python/uv and pnpm/npm takeover lands on a foreign machine                                        |
-| `IMSG.md`                             | `imsg`: send-only iMessage CLI. Covers the AppleScript injection trap, why the recipient is an argument in a public repo, and the Apple Events block inside Claude's Bash sandbox             |
-| `PJ_PING.md`                          | History: `pj-ping`, retired 22 Oct 2026 for `engage-ping`. Was the numbered attention signal. Message format, the id and its log, how to confirm which ping arrived and in what order, and the sandbox                                            |
-| `HERDR.md`                            | herdr: the release cooldown, daemon persistence, speak-selection bindings, and the tmux comparison                                                                                            |
-| `WHO_DENIED_THIS.md`                  | Which of five layers refused a command (our guards, this repo's hooks, Claude Code's built-in checks, permission rules, the sandbox), told apart by the message, and what to do for each      |
-| `DELETION_SAFETY.md`                  | What routes a delete to the Trash and what does not: the `rm` shim, `safe-rm`, the agent guard's rules, and what none of them can see                                                         |
-| `CLAUDE_HOOKS.md`                     | How a hook gets deployed and registered (`claude-hooks-sync`); the per-hook inventory is `.claude/hooks/README.md`                                                                            |
-| `ZSH_HELPER_NAMESPACE.md`             | Why private shell helpers are named `__like_this`: Claude Code's shell snapshot drops single-underscore functions                                                                             |
-| `DECIDED.md`                          | `decided`: why the decisions register exists, where it looks, and the 2026-09-21 split                                                                                                        |
-| `OPEN_ITEMS.md`                       | `open-items`: the reasoning behind the tool (the flags are in `--help`)                                                                                                                       |
-| `OPEN_ITEMS_CROSS_PROJECT.md`         | Open items across projects, and IDs unique across the machine: the 2026-09-23 rulings                                                                                                         |
-| `OPEN_ITEMS_CROSS_PROJECT_SAFETY.md`  | The read-only safety review of the cross-project design, with its rules P1 to P12                                                                                                             |
-| `PJ_HEALTH.md`                        | `pj-health`: what each check measures and what NOT MEASURED means                                                                                                                             |
-| `PJ_PROFILES.md`                      | Session launch profiles, the three roots, and `c2`                                                                                                                                            |
-| `PJ_TEMP_CLEANUP.md`                  | `pj-temp`: every session gets its own temp folder and empties it into the Trash                                                                                                               |
-| `PJ_WRAP_UP.md`                       | `/pj:wrap-up`: rulings, the state contract and the rewrites                                                                                                                                   |
-| `PROJECT_LIFEOS_BOUNDARY.md`          | What belongs to this repo and what to LifeOS: the 2026-09-19 plan and its execution log                                                                                                       |
-| `MEMORY_INDEX_CAP.md`                 | The per-project memory index cap, and why `CLAUDE_MEMORY_STORES` stays off                                                                                                                    |
-| `REDTEAM_20260928_RULINGS.md`         | Gavin's rulings on the gaps the 2026-09-28 red team found                                                                                                                                     |
-| `GITHUB_AGENT_USAGE.md`               | The GitHub App credential system: how it works, every flag, what lives where (real values are in a private companion)                                                                         |
-| `GITHUB_AGENT_RECIPES.md`             | Step-by-step recipes for the GitHub App system; the reference is `GITHUB_AGENT_USAGE.md`                                                                                                      |
-| `GITHUB_CREDENTIAL_LANES.md`          | Every GitHub credential on this machine, what each can do, and what is still open                                                                                                             |
-| `AGENTIC_CODING_SECURITY_RESEARCH.md` | Research dossier on git/GitHub authentication and on securing a coding agent with real repository access                                                                                      |
-| `HERDR_AGENT_SKILL.md`                | herdr for agents, group A: read before issuing any `herdr` command                                                                                                                            |
-| `HERDR_AGENT_AUTOMATION.md`           | herdr for agents, group B: automation                                                                                                                                                         |
-| `HERDR_PLUGINS.md`                    | herdr for agents, group C: plugins                                                                                                                                                            |
-| `attic/`                              | Code removed on purpose, kept for reading. Nothing here runs, and it sits outside `home/` so stow never links it back                                                                         |
-| `lexer-comparison/`                   | Comparison of the three shell lexers in `home/.claude/hooks/`, with the case table and the script that runs it                                                                                |
-| `trash-guard/`                        | Brief, progress log and report from building the machine-wide trash guard (2026-09-29)                                                                                                        |
-| `comms/`                              | Dated outbound notes to peer agent projects (CONVENTION.md spec v1.15; read on-demand only — see `comms/README.md` for the index; contents are NOT enumerated here by design)                 |
-| `reference/colors.md`                 | Color palette reference                                                                                                                                                                       |
-| `reference/mermaid_examples.md`       | Mermaid diagram examples                                                                                                                                                                      |
-| `reference/pai_memory_system.md`      | How Claude remembers across conversations, projects and sessions — the memory and persistence mechanisms, written as a read-at-leisure explainer                                              |
-| `reference/windows/`                  | Historical Windows batch scripts (reference only, not for deployment)                                                                                                                         |
+| File/Directory                        | Purpose                                                                                                                                                                                                |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AGENT_BRIEF.md`                      | Safe cross-agent interaction patterns and stow/branch-switching hazards for sibling-project agents                                                                                                     |
+| `CLAUDE_SESSION_ATTRIBUTION.md`       | Auto-stamp commits with C-Sess-Id / C-Web-Id / C-Branch / C-Worktree / C-Wt-Path trailers (SessionStart identity hook + \_audit-chain step); fresh-machine runbook, verification, and gotchas          |
+| `SECURITY.md`                         | Strict SSH posture rationale, alternative postures table, and drift-check commands                                                                                                                     |
+| `MEMENTO_vscode_machine_colors.md`    | Complete guide for VSCode/Cursor machine-specific color setup                                                                                                                                          |
+| `ZED_MARKDOWN_FORMATTING.md`          | md-hardbreak: hard breaks / paragraph gaps / strip, Zed tasks + key bindings, and the rationale                                                                                                        |
+| `ZED_PREVIEW_CHANGELOG.md`            | Living record of Zed Preview UI / configuration / theme changes, plus the standing watch-items; refreshed via the SessionStart version check                                                           |
+| `CLAUDE_CODE_SECURITY.md`             | Claude Code's own security surface — sandbox, permission modes, CVEs. Scope-stamped to a dated investigation; treat the version as history, not a currency claim                                       |
+| `CLAUDE_CODE_AND_PAI_INTERNALS.md`    | How `~/.claude/` is actually organised: the three-system model, project-path encoding, and the migration hazards when a repo moves                                                                     |
+| `CLAUDE_CODE_RESEARCH_NOTES.md`       | Living notes on researched Claude Code behaviour and mechanics (hook loading, permission modes, interactive quirks)                                                                                    |
+| `GH_AUTH_GUARD_USER_LEVEL.md`         | GitHub API read-only token plus the `gh` auth guard, user-level install                                                                                                                                |
+| `NVM_SECURITY.md`                     | nvm / Node.js hardening: mirror pin, version floor, EOL policy, and GPG signature verification                                                                                                         |
+| `TOOLCHAIN_CVE_CHECK.md`              | `toolchain-cve-check`: are the pinned floors and the installed versions CVE-exposed? Cites historically vulnerable pins on purpose as negative controls                                                |
+| `VULN_SCAN.md`                        | `vuln-scan`: incremental CVE scan of installed Homebrew formulae via NVD. Covers the Homebrew-revision false positive, the shell-safety cap, and the portable briefing file                            |
+| `PNPM_SETUP_GUIDE.md`                 | pnpm setup: where pnpm reads config from, the kebab-case silent-failure trap, macOS vs XDG paths                                                                                                       |
+| `PNPM_AUDIT_TREE.md`                  | `pnpm-audit-tree`: recursive supply-chain auditor for pnpm / JS project trees                                                                                                                          |
+| `PNPM_AUDIT_PREPUSH_HOOK.md`          | The global, opt-in pnpm-audit pre-push git hook                                                                                                                                                        |
+| `CI_WATCH.md`                         | `ci-watch`: the escalating, dismiss-only-by-fixing CI status line in the session dashboard                                                                                                             |
+| `TOOLCHAIN_TAKEOVER_CONSENT.md`       | `toolchain-stocktake` + `project-impact-scan`: survey + disclose + gate before install.sh's Python/uv and pnpm/npm takeover lands on a foreign machine                                                 |
+| `IMSG.md`                             | `imsg`: send-only iMessage CLI. Covers the AppleScript injection trap, why the recipient is an argument in a public repo, and the Apple Events block inside Claude's Bash sandbox                      |
+| `PJ_PING.md`                          | History: `pj-ping`, retired 22 Oct 2026 for `engage-ping`. Was the numbered attention signal. Message format, the id and its log, how to confirm which ping arrived and in what order, and the sandbox |
+| `HERDR.md`                            | herdr: the release cooldown, daemon persistence, speak-selection bindings, and the tmux comparison                                                                                                     |
+| `WHO_DENIED_THIS.md`                  | Which of five layers refused a command (our guards, this repo's hooks, Claude Code's built-in checks, permission rules, the sandbox), told apart by the message, and what to do for each               |
+| `DELETION_SAFETY.md`                  | What routes a delete to the Trash and what does not: the `rm` shim, `safe-rm`, the agent guard's rules, and what none of them can see                                                                  |
+| `CLAUDE_HOOKS.md`                     | How a hook gets deployed and registered (`claude-hooks-sync`); the per-hook inventory is `.claude/hooks/README.md`                                                                                     |
+| `ZSH_HELPER_NAMESPACE.md`             | Why private shell helpers are named `__like_this`: Claude Code's shell snapshot drops single-underscore functions                                                                                      |
+| `DECIDED.md`                          | `decided`: why the decisions register exists, where it looks, and the 2026-09-21 split                                                                                                                 |
+| `OPEN_ITEMS.md`                       | `open-items`: the reasoning behind the tool (the flags are in `--help`)                                                                                                                                |
+| `OPEN_ITEMS_CROSS_PROJECT.md`         | Open items across projects, and IDs unique across the machine: the 2026-09-23 rulings                                                                                                                  |
+| `OPEN_ITEMS_CROSS_PROJECT_SAFETY.md`  | The read-only safety review of the cross-project design, with its rules P1 to P12                                                                                                                      |
+| `PJ_HEALTH.md`                        | `pj-health`: what each check measures and what NOT MEASURED means                                                                                                                                      |
+| `PJ_PROFILES.md`                      | Session launch profiles, the three roots, and `c2`                                                                                                                                                     |
+| `PJ_TEMP_CLEANUP.md`                  | `pj-temp`: every session gets its own temp folder and empties it into the Trash                                                                                                                        |
+| `PJ_WRAP_UP.md`                       | `/pj:wrap-up`: rulings, the state contract and the rewrites                                                                                                                                            |
+| `PROJECT_LIFEOS_BOUNDARY.md`          | What belongs to this repo and what to LifeOS: the 2026-09-19 plan and its execution log                                                                                                                |
+| `MEMORY_INDEX_CAP.md`                 | The per-project memory index cap, and why `CLAUDE_MEMORY_STORES` stays off                                                                                                                             |
+| `REDTEAM_20260928_RULINGS.md`         | Gavin's rulings on the gaps the 2026-09-28 red team found                                                                                                                                              |
+| `GITHUB_AGENT_USAGE.md`               | The GitHub App credential system: how it works, every flag, what lives where (real values are in a private companion)                                                                                  |
+| `GITHUB_AGENT_RECIPES.md`             | Step-by-step recipes for the GitHub App system; the reference is `GITHUB_AGENT_USAGE.md`                                                                                                               |
+| `GITHUB_CREDENTIAL_LANES.md`          | Every GitHub credential on this machine, what each can do, and what is still open                                                                                                                      |
+| `AGENTIC_CODING_SECURITY_RESEARCH.md` | Research dossier on git/GitHub authentication and on securing a coding agent with real repository access                                                                                               |
+| `HERDR_AGENT_SKILL.md`                | herdr for agents, group A: read before issuing any `herdr` command                                                                                                                                     |
+| `HERDR_AGENT_AUTOMATION.md`           | herdr for agents, group B: automation                                                                                                                                                                  |
+| `HERDR_PLUGINS.md`                    | herdr for agents, group C: plugins                                                                                                                                                                     |
+| `attic/`                              | Code removed on purpose, kept for reading. Nothing here runs, and it sits outside `home/` so stow never links it back                                                                                  |
+| `lexer-comparison/`                   | Comparison of the three shell lexers in `home/.claude/hooks/`, with the case table and the script that runs it                                                                                         |
+| `trash-guard/`                        | Brief, progress log and report from building the machine-wide trash guard (2026-09-29)                                                                                                                 |
+| `comms/`                              | Dated outbound notes to peer agent projects (CONVENTION.md spec v1.15; read on-demand only — see `comms/README.md` for the index; contents are NOT enumerated here by design)                          |
+| `reference/colors.md`                 | Color palette reference                                                                                                                                                                                |
+| `reference/mermaid_examples.md`       | Mermaid diagram examples                                                                                                                                                                               |
+| `reference/pai_memory_system.md`      | How Claude remembers across conversations, projects and sessions — the memory and persistence mechanisms, written as a read-at-leisure explainer                                                       |
+| `reference/windows/`                  | Historical Windows batch scripts (reference only, not for deployment)                                                                                                                                  |
 
 **Hook documentation lives outside `docs/`** — and since 2026-09-21 there is exactly **one**
 file, not two:

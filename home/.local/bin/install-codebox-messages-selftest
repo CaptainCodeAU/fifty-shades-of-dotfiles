@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# install-codebox-messages-selftest -- prove install.sh tells codebox the truth about its own
+# state (Gavin's dotfiles-main Q1: 1, 25 Oct 2026; records #3693, #3964, #3965).
+#
+# The codebox run of 25 Oct 2026 said four wrong things, each driven here:
+#   1. herdr: "NOT enabling the unit" about a unit enabled since 10 Oct, and "stowed but
+#      activating" for a unit that could never start, because a server started outside
+#      systemd held the socket (#3693). Both now name that server and the one-line move.
+#   2. gh: SSH-key advice on a box whose GitHub goes through the token broker (#3964).
+#   3. TPM and Nerd Font listed as missing, though the profile leaves them out (#3965).
+#   4. First-install next steps on a re-install (#3965).
+#
+# THE SEAM is each function's output. The functions are cut out of install.sh with sed and
+# run in this shell against stubs (systemctl, git, gh, fc-list, the print helpers); main is
+# never called, and nothing here touches a real unit, server or credential. Every arm that
+# expects a line to be ABSENT has a twin that expects it PRESENT in the other world, so a
+# function that printed nothing at all cannot pass.
+#
+# Usage: install-codebox-messages-selftest      (exit 0 = all passed; 2 = REFUSED, not a pass)
+
+# Read this whole file before running any of it, so an edit saved mid-run cannot change
+# the run (W-20260923-A57). A crash under it exits 127 (unbound var) or 1 (bash 3.2 syntax
+# error); `selftest-whole-read --help` has the map. Do not move or reword these lines.
+[ -n "${SELFTEST_WHOLE_READ-}" ] || SELFTEST_WHOLE_READ=1 exec "$BASH" -c 'shopt -u sourcepath; . "$0"' "$0" "$@"
+unset SELFTEST_WHOLE_READ
+
+set -uo pipefail
+
+PASS=0; FAIL=0; WORK=""
+_resolve_repo() {
+    local self="${BASH_SOURCE[0]}" dir target
+    dir="$(cd -- "$(dirname -- "$self")" && pwd)"
+    if [[ -L "$self" ]]; then
+        target="$(readlink "$self")"
+        [[ "$target" != /* ]] && target="$dir/$target"   # re-base a relative stow link
+        dir="$(cd -- "$(dirname -- "$target")" && pwd)"
+    fi
+    (cd -- "$dir/../../.." && pwd)                      # <repo>/home/.local/bin -> <repo>
+}
+REPO="$(_resolve_repo)"
+INSTALL_SH="${INSTALL_SH_OVERRIDE:-$REPO/install.sh}"
+
+cleanup() { [[ -n "$WORK" && -d "$WORK" ]] && { rm -rf "$WORK" >/dev/null 2>&1 || true; }; WORK=""; }
+trap cleanup EXIT
+
+ok()  { PASS=$(( PASS + 1 )); printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
+bad() { FAIL=$(( FAIL + 1 )); printf '  \033[31mFAIL\033[0m  %s\n' "$1"
+        [[ $# -gt 1 ]] && printf '        %s\n' "$2"; }
+has() { [[ "$1" == *"$2"* ]]; }
+
+echo "install.sh codebox messages selftest"
+echo
+
+[[ -f "$INSTALL_SH" ]] || { echo "  REFUSED: no install.sh at $INSTALL_SH" >&2; exit 2; }
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/install-cbm.XXXXXX")" || WORK=""
+[[ -n "$WORK" && -d "$WORK" ]] || { echo "  REFUSED: no temp dir" >&2; exit 2; }
+mkdir -p "$WORK/home/.config/systemd/user" || exit 2
+ln -s /dev/null "$WORK/home/.config/systemd/user/herdr.service" || exit 2
+
+# --- the functions under test, cut out of install.sh ---------------------------------
+FUNCS=(_herdr_move_cmd _herdr_unit_enabled _herdr_service_summary_line
+       _post_stow_herdr_systemd_service _github_via_broker _gh_post_install_note
+       _summary_gh_lines _check_tpm_and_font _print_next_steps)
+MISSING=()
+for f in "${FUNCS[@]}"; do
+    src=$(sed -n "/^${f}() {/,/^}/p" "$INSTALL_SH")
+    if [[ -n "$src" ]]; then eval "$src"; else MISSING+=("$f"); fi
+done
+if (( ${#MISSING[@]} > 0 )); then
+    for f in "${MISSING[@]}"; do bad "$f is defined in install.sh"; done
+    echo; echo "  $PASS passed, $FAIL failed"; exit 1
+fi
+
+# --- stubs -----------------------------------------------------------------------------
+RESET=""; BOLD=""; DIM=""; CYAN=""; GREEN=""; YELLOW=""; RED=""
+DRY_RUN=false; USER="${USER:-tester}"
+CALLS="$WORK/calls"
+step()    { echo "STEP $*"; }
+warn()    { echo "WARN $*"; }
+info()    { echo "INFO $*"; }
+success() { echo "OK $*"; }
+verbose() { :; }
+run_cmd() { echo "RUN $*" >> "$CALLS"; return 0; }
+check_os() { echo linux; }
+_herdr_unit_state()            { echo "$ST_UNIT"; }
+_herdr_server_restart_status() { [[ "$ST_OUTSIDE" == yes ]] && echo no; return 0; }
+_herdr_linger()                { echo yes; }
+_herdr_offer_restart()         { :; }
+herdr() { :; }
+systemctl() {
+    case "$*" in
+        "--user is-system-running") echo running ;;
+        "--user is-enabled herdr.service") echo "$ST_ENABLED"; [[ "$ST_ENABLED" == enabled ]] ;;
+        *) echo "SYSTEMCTL $*" >> "$CALLS" ;;
+    esac
+}
+git() { [[ "$*" == "config --get-all credential.https://github.com.helper" ]] && [[ -n "$ST_HELPER" ]] && echo "$ST_HELPER"; return 0; }
+gh() { return 1; }                      # never authenticated: the codebox case
+fc-list() { :; }                        # no fonts at all
+HOME="$WORK/home"
+
+# --- 1. herdr service, post-install ----------------------------------------------------
+echo "herdr.service after stow:"
+: > "$CALLS"; ST_UNIT=failed; ST_OUTSIDE=yes; ST_ENABLED=enabled
+out=$(_post_stow_herdr_systemd_service 2>&1)
+if has "$out" "NOT enabling"; then bad "enabled unit + outside server: does not claim it is 'NOT enabling'" "$out"
+else ok "enabled unit + outside server: does not claim it is 'NOT enabling'"; fi
+if has "$out" "is enabled" && has "$out" "outside systemd"; then ok "enabled unit + outside server: names both facts"
+else bad "enabled unit + outside server: names both facts" "$out"; fi
+if has "$out" "$(_herdr_move_cmd)"; then ok "enabled unit + outside server: prints the move command"
+else bad "enabled unit + outside server: prints the move command" "$out"; fi
+if has "$(<"$CALLS")" "enable --now"; then bad "enabled unit + outside server: enables nothing" "$(<"$CALLS")"
+else ok "enabled unit + outside server: enables nothing"; fi
+
+: > "$CALLS"; ST_UNIT=inactive; ST_OUTSIDE=yes; ST_ENABLED=disabled
+out=$(_post_stow_herdr_systemd_service 2>&1)
+if has "$out" "NOT enabling"; then ok "disabled unit + outside server: says it is NOT enabling it"
+else bad "disabled unit + outside server: says it is NOT enabling it" "$out"; fi
+
+: > "$CALLS"; ST_UNIT=inactive; ST_OUTSIDE=no; ST_ENABLED=disabled
+out=$(_post_stow_herdr_systemd_service 2>&1)
+if has "$(<"$CALLS")" "systemctl --user enable --now herdr.service"; then ok "no outside server: enables the unit"
+else bad "no outside server: enables the unit" "calls: $(<"$CALLS")"; fi
+
+# --- 2. herdr service, prerequisites line -------------------------------------------------
+echo "herdr.service in the prerequisites:"
+ST_UNIT=activating; ST_OUTSIDE=yes
+out=$(_herdr_service_summary_line)
+if has "$out" "outside systemd" && has "$out" "$(_herdr_move_cmd)"; then ok "outside server: named, with the move command"
+else bad "outside server: named, with the move command" "$out"; fi
+ST_UNIT=failed; ST_OUTSIDE=no
+out=$(_herdr_service_summary_line)
+if has "$out" "stowed but failed" && ! has "$out" "outside systemd"; then ok "no outside server: the plain 'stowed but failed' line"
+else bad "no outside server: the plain 'stowed but failed' line" "$out"; fi
+ST_UNIT=active; ST_OUTSIDE=yes
+out=$(_herdr_service_summary_line)
+if has "$out" "managed by systemd"; then ok "active unit: managed by systemd"
+else bad "active unit: managed by systemd" "$out"; fi
+
+# --- 3. gh on a token-broker box ----------------------------------------------------------
+echo "GitHub CLI:"
+ST_HELPER="!gh-broker-ssh"
+out=$(_gh_post_install_note)
+if has "$out" "token broker" && ! has "$out" "SSH-only" && ! has "$out" "ForwardAgent"; then ok "broker box: names the broker, no SSH-key advice"
+else bad "broker box: names the broker, no SSH-key advice" "$out"; fi
+out=$(_summary_gh_lines); rc=$?
+if [[ -z "$out" && $rc -eq 0 ]]; then ok "broker box: nothing under Still needed"
+else bad "broker box: nothing under Still needed" "rc=$rc out=$out"; fi
+ST_HELPER=""
+out=$(_gh_post_install_note)
+if has "$out" "SSH-only"; then ok "no broker, gh not logged in: the SSH-only note stays"
+else bad "no broker, gh not logged in: the SSH-only note stays" "$out"; fi
+out=$(_summary_gh_lines); rc=$?
+if has "$out" "not authenticated" && [[ $rc -ne 0 ]]; then ok "no broker: listed under Still needed"
+else bad "no broker: listed under Still needed" "rc=$rc out=$out"; fi
+
+# --- 4. TPM and Nerd Font under the skip flags --------------------------------------------
+echo "TPM and Nerd Font:"
+SKIP_TMUX=true; SKIP_FONTS=true
+out=$(_check_tpm_and_font linux)
+if has "$out" "TPM (--skip-tmux)" && has "$out" "Nerd Font (--skip-fonts)" && ! has "$out" "needed for"; then ok "skipped: each named with its flag, nothing 'needed'"
+else bad "skipped: each named with its flag, nothing 'needed'" "$out"; fi
+SKIP_TMUX=false; SKIP_FONTS=false
+out=$(_check_tpm_and_font linux)
+if has "$out" "needed for tmux plugins" && has "$out" "needed for Powerlevel10k icons"; then ok "not skipped: both still reported missing"
+else bad "not skipped: both still reported missing" "$out"; fi
+
+# --- 5. next steps on a re-install -------------------------------------------------------
+echo "Next steps:"
+REINSTALL=true
+out=$(_print_next_steps)
+if has "$out" "exec zsh" && ! has "$out" "onboarding script will run" && ! has "$out" "zshrc.private"; then ok "re-install: only the new-terminal step"
+else bad "re-install: only the new-terminal step" "$out"; fi
+REINSTALL=false
+out=$(_print_next_steps)
+if has "$out" "exec zsh" && has "$out" "onboarding script will run" && has "$out" "zshrc.private"; then ok "first install: all three steps"
+else bad "first install: all three steps" "$out"; fi
+
+echo
+echo "  $PASS passed, $FAIL failed"
+(( FAIL == 0 ))
