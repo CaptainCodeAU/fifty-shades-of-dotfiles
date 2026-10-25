@@ -2010,14 +2010,29 @@ SNAP
   _median() { printf '%s\n' "$@" | sort -n | awk '{ a[NR] = $1 } END { print a[int((NR + 1) / 2)] }'; }
   _limit() { # $1 = budget ms, $2 = multiple (default cal_k) -> lim, calv (why the arm cannot be judged, or empty), calhow (the sum, printed)
     local k=${2:-$cal_k}
-    lim=$(( $1 + k * ov )); calhow="limit $lim = $1 + $k x overhead $ov (median of $ovs)"; calv=""
+    lim=$(( $1 + k * ov )); lim_b=$1; lim_k=$k; calhow="limit $lim = $1 + $k x overhead $ov (median of $ovs)"; calv=""
     [ "$calok" -eq 0 ] || calv="a trivial calibration call was not a clean allow, so the overhead measured something else"
     [ "$ov" -le "$cal_absurd" ] || calv="overhead $ov ms is above $cal_absurd ms: this machine is too loaded to time anything"
     return 0
   }
+  # tk_recal names the re-measure for a single-shot arm (_calb, set before the alarm route's
+  # arms); empty for a best-of-3 arm, whose late answer is a FAIL as before. See RECHECK below.
+  local tk_recal="" lim_b=0 lim_k=0 rcwhy=""
+  _recheck() { # $1 = the late ms -> 0 when the load explains it (not judged), 1 when not (a FAIL); sets rcwhy
+    local s_ov=$ov s_ovs=$ovs s_calok=$calok s_out=$out s_rc=$rc s_ms=$hb_ms s_d=$hb_d s_r=$hb_r lim2 r=1
+    "$tk_recal"
+    lim2=$(( lim_b + lim_k * ov ))
+    if [ "$calok" -ne 0 ]; then rcwhy="late, and a re-measuring call was not a clean allow"; r=0
+    elif [ "$1" -lt "$lim2" ]; then rcwhy="late, then re-measured: overhead $ov ms (median of $ovs) gives limit $lim2, so the machine got busier after the first measurement"; r=0   #M: recheck busy is not judged
+    else rcwhy="late, then re-measured: overhead $ov ms (median of $ovs) gives limit $lim2, still under $1 ms, so the guard itself was slow"; fi
+    ov=$s_ov; ovs=$s_ovs; calok=$s_calok; out=$s_out; rc=$s_rc; hb_ms=$s_ms; hb_d=$s_d; hb_r=$s_r   #M: recheck restores the arm's state
+    return $r
+  }
   _tchk() { # $1 = label, $2 = verdict ok (0), $3 = ms: the verdict, then the clock against lim
+    rcwhy=""
     if [ -n "$calv" ] && [ "$2" -eq 0 ]; then invalid=$((invalid + 1)); printf 'INVALID TRIAL %-18s %s\n' hook "$1: ${3} ms, timing not judged: $calv ($calhow)"
-    else [ "$2" -eq 0 ] && [ "$3" -lt "$lim" ]; _chk "$1: ${3} ms ($calhow)" $?; fi
+    elif [ "$2" -eq 0 ] && [ "$3" -ge "$lim" ] && [ -n "$tk_recal" ] && _recheck "$3"; then invalid=$((invalid + 1)); printf 'INVALID TRIAL %-18s %s\n' hook "$1: ${3} ms, timing not judged: $rcwhy ($calhow)"
+    else [ "$2" -eq 0 ] && [ "$3" -lt "$lim" ]; _chk "$1: ${3} ms ($calhow${rcwhy:+; $rcwhy})" $?; fi
   }
   local tsnap="$save_snap" tlabel="real snapshot" best p1 p2 i secs
   set +f; ls "$tsnap"/snapshot-*.sh >/dev/null 2>&1 || { tsnap="$fx/snap"; tlabel="fixture snapshot"; }; set -f
@@ -2091,6 +2106,34 @@ SNAP
   _calb; _limit 0; _bare; bf=$bare; [ "$bf" -ge 5 ] || bf=5
   if [ -n "$calv" ]; then invalid=$((invalid + 1)); printf 'INVALID TRIAL %-18s %s\n' hook "start-up (alarm route) not judged: $calv"
   else [ "$ov" -le $(( cal_ratio * bf )) ]; _chk "start-up (alarm route): a trivial call costs $ov ms (samples $ovs), a bare /bin/bash start $bare ms, so $(( ov / bf )) x (at most $cal_ratio x)" $?; fi
+  # RECHECK (Gavin, dotfiles-main Q1: 1, 25 Oct 2026; #3974). A load spike AFTER the calibration
+  # made single-shot arms late with a right verdict (makeitso's copy, 25 Oct 2026: overhead 35-85
+  # ms, arms 604-3795 ms). So a late single-shot arm times the trivial calls again at once. Still
+  # busy (the late reading fits the new limit): an INVALID TRIAL, never a pass. Quiet: the guard
+  # itself was slow, a FAIL. Proved here with the clock and the re-measure faked, in a subshell,
+  # so these arms leave the real counts alone.
+  local rq_out rq_called
+  _rq_busy() { rq_called=1; ov=500; ovs="500 500 500"; calok=0; hb_r=clobbered; }
+  _rq_quiet() { rq_called=1; ov=40; ovs="40 40 40"; calok=0; hb_r=clobbered; }
+  _rq() { # $1 = re-measure function ('' for a best-of-3 arm), $2 = ms -> the arm's output, then one line of counts
+    ( DEL_GUARD_FAILFAST=0; fails=0; invalid=0; rq_called=0; hb_r=kept; ov=40; ovs="40 40 40"; calok=0
+      _limit 200 "$cal_k1"; l0=$lim; tk_recal="$1"
+      _tchk "faked arm" 0 "$2"
+      echo "counts fails=$fails invalid=$invalid called=$rq_called hb_r=$hb_r lim_same=$([ "$lim" = "$l0" ] && echo y || echo n)" )
+  }
+  rq_out="$(_rq _rq_busy 1200)"
+  [[ $rq_out == *'INVALID TRIAL'*'got busier'* ]] && [[ $rq_out == *'counts fails=0 invalid=1 called=1 hb_r=kept lim_same=y'* ]]; _chk "recheck: late 1200 ms (limit 360), re-measured busy: an INVALID TRIAL, never a pass, the arm's own state kept" $?
+  rq_out="$(_rq _rq_quiet 1200)"
+  [[ $rq_out == *'FAIL'*'guard itself was slow'* ]] && [[ $rq_out == *'counts fails=1 invalid=0 called=1 hb_r=kept lim_same=y'* ]]; _chk "recheck: late 1200 ms (limit 360), re-measured quiet: a FAIL that says the guard was slow" $?
+  rq_out="$(_rq _rq_busy 100)"
+  [[ $rq_out == *'counts fails=0 invalid=0 called=0 '* ]]; _chk "recheck: on time (100 ms, limit 360): passes, nothing re-measured (the control)" $?
+  rq_out="$(_rq '' 1200)"
+  [[ $rq_out == *'counts fails=1 invalid=0 called=0 '* ]]; _chk "recheck: a best-of-3 arm late (no re-measure named): a FAIL as before" $?
+  # the real re-measure, _calb's three trivial calls through the hook: no load makes them cost
+  # 999999 ms, so this is a FAIL that names a measured overhead, with the arm's state kept
+  rq_out="$(_rq _calb 999999)"
+  [[ $rq_out == *'FAIL'*'re-measured: overhead '[1-9]*'guard itself was slow'* ]] && [[ $rq_out == *'counts fails=1 invalid=0 called=0 hb_r=kept lim_same=y'* ]]; _chk "recheck: the real re-measure (_calb) runs, measures, and keeps the arm's state" $?
+  tk_recal=_calb   # every _tchk from here on is a single-shot arm on the alarm route
   for f in 'time -o' 'nice -n' 'exec -a' 'echo x | xargs -n' 'echo x | xargs -I' 'echo x | gxargs --max-args' \
            'sudo -u' 'doas -u' 'env -u' 'env -C' 'env -S' 'env --split-string' 'timeout -s' 'gtimeout -k' \
            'caffeinate -t' 'stdbuf -o' 'watch -n' 'git -C' 'git -c' 'git --git-dir' \
@@ -2287,7 +2330,7 @@ trash-path|/usr/bin/trash x'
   # Trash (or fail inside the sandbox), and the OS clears $TMPDIR.
   echo
   echo "del-guard selftest: $passes passed, $fails failed (fixtures: $fx)"
-  echo "timing: each limit = budget + $cal_k x (best-of-3 arm) or $cal_k1 x (single-shot arm) the median of $cal_n trivial calls through the same route, printed per arm; $invalid INVALID TRIAL(s)"
+  echo "timing: each limit = budget + $cal_k x (best-of-3 arm) or $cal_k1 x (single-shot arm) the median of $cal_n trivial calls through the same route, printed per arm; a late single-shot arm is measured again, and still busy is not judged; $invalid INVALID TRIAL(s)"
   # 1 on any failure; 3 when nothing failed but a timing arm could not be judged (not a pass)
   [ "$fails" -eq 0 ] || return 1
   [ "$invalid" -eq 0 ] || { echo "del-guard selftest: NOT a pass: $invalid timing arm(s) were INVALID TRIALS (exit 3)"; return 3; }

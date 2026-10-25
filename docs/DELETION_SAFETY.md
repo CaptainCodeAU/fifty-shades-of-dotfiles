@@ -351,6 +351,17 @@ plus 200 ms for the watchdog, or the 5 KB parse. Rules that keep the arms honest
   to 40 bare `/bin/sh` (or `/bin/bash`) starts timed in the same breath. `--mutants` forces the
   overhead to 99999 ms (must be exit 3) and 4000 ms (must fail a start-up arm), and the trash
   suite adds `late`: a one-line fault whose refusal is right but waits for the whole search.
+- **A late single-shot hook arm is measured again at once** (Gavin, dotfiles-main Q1: 1,
+  25 Oct 2026; #3974). The load can jump between the calibration and a one-shot call: makeitso's
+  copy measured an overhead of 35 to 85 ms and then arms of 604 to 3,795 ms, every verdict right,
+  and this repo's copy did the same at load 31 the same day (4 shift arms, 722 to 985 ms against
+  556 and 652). So the hook's selftest times the 3 trivial calls again right after a late
+  single-shot arm with a right verdict. If the late reading fits the new limit, the machine got
+  busier: an **INVALID TRIAL**, exit 3, never a pass. If it does not, the trivial calls were quick
+  and the guard itself was slow: a FAIL, as before. Best-of-3 arms are unchanged, and so is
+  `trash-guard-selftest`. The selftest proves both cases with the re-measure faked, a control
+  that is on time, and the real re-measure; `--mutants recheck` removes each new line (2 of 2
+  caught, 25 Oct 2026).
 
 Why 3 and 4 (measured 2026-10-02, 10 cores, load 6 to 103): in the trash suite the non-search
 part of a timed call ran up to 1.44 x the median trivial call, and one call up to 1.45 x its own
