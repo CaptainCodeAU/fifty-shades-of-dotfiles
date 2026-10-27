@@ -467,12 +467,8 @@
     ]
   },
   "verbose": false,
-  "model": "opus",
-  "effortLevel": "high",
-  "fallbackModel": [
-    "claude-opus-5",
-    "sonnet"
-  ],
+  "effortLevel": "medium",
+  "fallbackModel": ["claude-opus-5", "sonnet"],
   "autoCompactEnabled": true,
   "contextDisplay": {
     "compactionThreshold": 83
@@ -488,17 +484,17 @@
   "awaySummaryEnabled": false,
   "skipDangerousModePermissionPrompt": true,
   "modelSettings": {
-    "claude-sonnet-5": {
-      "effortLevel": "high"
+    "claude-sonnet-5-5": {
+      "effortLevel": "medium"
     },
     "claude-fable-5-1": {
       "effortLevel": "medium"
     },
     "claude-opus-5": {
-      "effortLevel": "high"
+      "effortLevel": "medium"
     },
     "claude-opus-5-5": {
-      "effortLevel": "high"
+      "effortLevel": "medium"
     }
   },
   "env": {
