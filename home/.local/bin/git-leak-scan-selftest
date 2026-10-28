@@ -37,6 +37,7 @@
 #   red team: range validation, filename spoofing        42 passed,  6 failed
 #   leakscan.skip; range-mode summary line               53 passed,  6 failed
 #   net diff cancels an add-then-remove in range         60 passed,  3 failed
+#   leakscan.allow, one file by hash (#4043)            121 passed,  6 failed
 #   --control                                            NOT MEASURABLE this way
 #
 # --control has no honest number: the flag did not exist, so its cases ERRORED
@@ -757,6 +758,106 @@ fixture
 git -C "$REPO" config leakscan.disable true
 if [[ "$(scan_rc --control)" == "2" ]]; then ok "control: leakscan.disable REFUSES (exit 2)"
 else bad "control: leakscan.disable REFUSES (exit 2)" "$(scan --control)"; fi
+cleanup
+
+# ===========================================================================
+# leakscan.allow -- ONE FILE, BY ITS EXACT CONTENT, PAST NAMED RULES (#4043)
+# ===========================================================================
+# win_go_app_test could not commit a vendored Mermaid build: a constant in its
+# random-number code has the E.164 shape. Gavin chose a per-file allow over
+# disarming the phone rule for the whole repo (Q578: 1, 27 Oct 2026), and a hash
+# over a path (dotfiles-main Q1: 1, 28 Oct 2026), so a changed file is scanned
+# again. The entry is "<sha256 of the file> <rule id>...". The hash below is
+# taken with shasum on the working file, the way a person would, not the way the
+# tool does, so the two are checked against each other.
+sha_of() { shasum -a 256 < "$1" | cut -d' ' -f1; }
+VENDOR_LINE="n = n $NOT_FICTION_E164;"
+
+# --- 44. the allowed file passes, and says so -------------------------------
+fixture
+printf '%s\n' "$VENDOR_LINE" > "$REPO/lib.js"; git -C "$REPO" add lib.js
+git -C "$REPO" config --add leakscan.allow "$(sha_of "$REPO/lib.js") phone"
+out="$(scan)"
+if [[ "$(scan_rc)" == "0" ]]; then ok "allow: the allowed file passes the phone rule"
+else bad "allow: the allowed file passes the phone rule" "$out"; fi
+if grep -q "lib.js" <<<"$out" && grep -q "leakscan.allow" <<<"$out"; then
+    ok "allow: a pass by hash is announced, naming the file"
+else bad "allow: a pass by hash is announced, naming the file" "$out"; fi
+
+# --- 45. the same entry, other rules still armed in that file -------------
+printf '%s\ntoken = "%s"\n' "$VENDOR_LINE" "$GH_TOKEN" > "$REPO/lib.js"; git -C "$REPO" add lib.js
+git -C "$REPO" config --unset-all leakscan.allow
+git -C "$REPO" config --add leakscan.allow "$(sha_of "$REPO/lib.js") phone"
+out="$(scan)"
+if [[ "$(scan_rc)" == "1" ]] && grep -q "github-token" <<<"$out"; then
+    ok "allow: a rule not named still blocks inside the allowed file"
+else bad "allow: a rule not named still blocks inside the allowed file" "$out"; fi
+cleanup
+
+# --- 46. a changed file is scanned again --------------------------------------
+fixture
+printf '%s\n' "$VENDOR_LINE" > "$REPO/lib.js"
+git -C "$REPO" config --add leakscan.allow "$(sha_of "$REPO/lib.js") phone"
+printf '%s\n%s\n' "$VENDOR_LINE" "one more line" > "$REPO/lib.js"; git -C "$REPO" add lib.js
+if [[ "$(scan_rc)" == "1" ]]; then ok "allow: a file whose content changed is blocked again"
+else bad "allow: a file whose content changed is blocked again" "$(scan)"; fi
+cleanup
+
+# --- 47. the allow is for that file, not for a line that looks the same ------
+fixture
+printf '%s\n' "$VENDOR_LINE" > "$REPO/lib.js"; git -C "$REPO" add lib.js
+git -C "$REPO" config --add leakscan.allow "$(sha_of "$REPO/lib.js") phone"
+printf 'call %s now\n' "$NOT_FICTION_E164" > "$REPO/notes.txt"; git -C "$REPO" add notes.txt
+out="$(scan)"
+if [[ "$(scan_rc)" == "1" ]] && grep -q "notes.txt: phone-number" <<<"$out"; then
+    ok "allow: another file with the same shape is still blocked"
+else bad "allow: another file with the same shape is still blocked" "$out"; fi
+if ! grep -q "lib.js: phone-number" <<<"$out"; then ok "allow: the allowed file is not blocked beside it"
+else bad "allow: the allowed file is not blocked beside it" "$out"; fi
+cleanup
+
+# --- 48. a broken entry fails SAFE, and says so -------------------------------
+fixture
+printf '%s\n' "$VENDOR_LINE" > "$REPO/lib.js"; git -C "$REPO" add lib.js
+git -C "$REPO" config --add leakscan.allow "581ed7d7 phone"
+out="$(scan)"
+if [[ "$(scan_rc)" == "1" ]] && grep -qi "leakscan.allow" <<<"$out" && grep -qi "ignored" <<<"$out"; then
+    ok "allow: a short hash is ignored by name, and the file is still blocked"
+else bad "allow: a short hash is ignored by name, and the file is still blocked" "$out"; fi
+git -C "$REPO" config --unset-all leakscan.allow
+git -C "$REPO" config --add leakscan.allow "$(sha_of "$REPO/lib.js") phnoe"
+out="$(scan)"
+if [[ "$(scan_rc)" == "1" ]] && grep -q "phnoe" <<<"$out"; then
+    ok "allow: a mistyped rule id is named, and that rule stays armed"
+else bad "allow: a mistyped rule id is named, and that rule stays armed" "$out"; fi
+git -C "$REPO" config --unset-all leakscan.allow
+git -C "$REPO" config --add leakscan.allow "$(sha_of "$REPO/lib.js")"
+if [[ "$(scan_rc)" == "1" ]]; then ok "allow: an entry naming no rule allows nothing"
+else bad "allow: an entry naming no rule allows nothing" "$(scan)"; fi
+cleanup
+
+# --- 49. audit mode reads the file as it was in each commit -----------------
+fixture
+stage "harmless"
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m base --no-verify
+base="$(git -C "$REPO" rev-parse HEAD)"
+printf '%s\n' "$VENDOR_LINE" > "$REPO/lib.js"; git -C "$REPO" add lib.js
+git -C "$REPO" config --add leakscan.allow "$(sha_of "$REPO/lib.js") phone"
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m vendor --no-verify
+out="$(scan --since "$base")"
+if [[ "$(scan_rc --since "$base")" == "0" ]] && grep -q "leakscan.allow" <<<"$out"; then
+    ok "allow: a range holding the allowed file passes, and says so"
+else bad "allow: a range holding the allowed file passes, and says so" "$out"; fi
+printf '%s\n%s\n' "$VENDOR_LINE" "$VENDOR_LINE" > "$REPO/lib.js"; git -C "$REPO" add lib.js
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m changed --no-verify
+if [[ "$(scan_rc --since "$base")" == "1" ]]; then
+    ok "allow: a later commit that changed the file is blocked in the range"
+else bad "allow: a later commit that changed the file is blocked in the range" "$(scan --since "$base")"; fi
+
+# --- 50. the control is untouched by an allow ---------------------------------
+if grep -qE "tested 14 of 14 rules, 0 disarmed" <<<"$(scan --control)"; then
+    ok "allow: the control still tests every rule"
+else bad "allow: the control still tests every rule" "$(scan --control)"; fi
 cleanup
 
 echo

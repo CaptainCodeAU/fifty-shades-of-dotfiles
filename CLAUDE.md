@@ -338,7 +338,7 @@ This repo commits constantly, so by the end of a stage **nothing is staged** —
 
 Known limits, all measured: commit messages and annotated tag messages are invisible to any diff-based scan; so is binary content; removed lines are deliberately not scanned, so a secret added _before_ a range and removed inside it stays invisible. **A range scan certifies the RANGE, never the repo.**
 
-Prefer `git config leakscan.skip "<rule-ids>"` over `leakscan.disable` when one rule is noisy — the blunt knob switches off tokens and private keys as collateral.
+Prefer `git config leakscan.skip "<rule-ids>"` over `leakscan.disable` when one rule is noisy — the blunt knob switches off tokens and private keys as collateral. When one FILE is the false alarm (a vendored library), narrower still: `git config --add leakscan.allow "<sha256 of the file> <rule-ids>"` lets only that exact content past only those rules, and a changed file is scanned again (#4043).
 
 ## Deletion safety
 

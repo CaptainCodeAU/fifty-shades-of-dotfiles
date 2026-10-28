@@ -36,6 +36,15 @@
 # else. Use this when one rule is noisy in a repo; reaching for leakscan.disable
 # instead switches off tokens and private keys as collateral.
 #
+# ONE FILE PAST NAMED RULES, BY ITS EXACT CONTENT (narrower still):
+#   git config --add leakscan.allow "<sha256 of the file> <rule-id> ..."
+#   (the hash: shasum -a 256 < FILE). For a vendored file a rule misreads, such
+#   as a library constant with the E.164 shape. Only a file whose whole content
+#   hashes to that value, in the index or in the commit scanned, skips the named
+#   rules; every other rule stays armed in it, and a changed file is scanned
+#   again. Each pass by hash is announced. A bad hash, an unknown id or an entry
+#   naming no rule is ignored by name (fails safe). Multi-valued: one --add per file.
+#
 # PER-REPO OPT-OUT, the blunt instrument (whole scan off):
 #   git config leakscan.disable true          # this repo, this machine only
 # The knob lives in .git/config (never committed/pushed), so cloning the repo
@@ -66,7 +75,7 @@ while [ $# -gt 0 ]; do
         --range)  MODE="range"; RANGE="${2:-}"; shift 2 || shift ;;
         --since)  MODE="range"; RANGE="${2:-}..HEAD"; shift 2 || shift ;;
         -h|--help)
-            sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//'
             printf '\nUsage:\n'
             printf '  git-leak-scan                 scan the staged diff (the pre-commit path)\n'
             printf '  git-leak-scan --since <ref>   audit everything committed since <ref>\n'
@@ -156,7 +165,78 @@ if [ -n "$_requested_skip" ]; then
         printf 'git-leak-scan: rule(s) DISARMED for this repo (leakscan.skip):%s\n' "$SKIP_RULES" >&2
     fi
 fi
-rule_off() { case " $SKIP_RULES " in *" $1 "*) return 0 ;; esac; return 1; }
+# FILE_SKIP holds the rules leakscan.allow lifts for the file being read now; it
+# is empty everywhere else, --control included.
+FILE_SKIP=""
+rule_off() { case " $SKIP_RULES $FILE_SKIP " in *" $1 "*) return 0 ;; esac; return 1; }
+
+# ---- per-file opt-out: leakscan.allow (#4043) -------------------------------
+# win_go_app_test could not commit a vendored Mermaid build: a constant in its
+# seeded random-number code has the E.164 shape. leakscan.skip would have
+# disarmed the phone rule for the whole repo, real numbers included. Gavin chose
+# one file instead (Q578: 1, 27 Oct 2026), pinned by its hash rather than its
+# path (dotfiles-main Q1: 1, 28 Oct 2026): a path would let anything later
+# written there through, a hash lets only those exact bytes through.
+#
+# Each entry is "<sha256> <rule id>...". The same fail-safe as leakscan.skip: a
+# bad hash, an unknown id, or an entry naming no rule is dropped by name, so a
+# typo can only leave MORE armed, never less.
+_sha256() {
+    if command -v shasum >/dev/null 2>&1; then shasum -a 256 | cut -d' ' -f1
+    elif command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1
+    else return 1; fi
+}
+ALLOW_ENTRIES=""
+_requested_allow="$(git config --get-all leakscan.allow 2>/dev/null || true)"
+if [ -n "$_requested_allow" ]; then
+    if ! printf '' | _sha256 >/dev/null 2>&1; then
+        printf 'git-leak-scan: leakscan.allow is set but neither shasum nor sha256sum is here -- every entry ignored, every rule stays ARMED\n' >&2
+    else
+        while IFS= read -r _e; do
+            [ -n "$_e" ] || continue
+            read -r _h _ids <<EOF
+$_e
+EOF
+            _h="$(printf '%s' "$_h" | tr 'A-F' 'a-f')"
+            if ! [[ $_h =~ ^[0-9a-f]{64}$ ]]; then
+                printf 'git-leak-scan: leakscan.allow entry ignored -- "%s" is not a full SHA-256 (64 hex digits)\n' "$_h" >&2
+                continue
+            fi
+            _ok_ids=""
+            for _r in $_ids; do
+                case " $KNOWN_RULES " in
+                    *" $_r "*) _ok_ids="$_ok_ids $_r" ;;
+                    *) printf 'git-leak-scan: UNKNOWN rule id in leakscan.allow: %s -- ignored, that rule stays ARMED\n' "$_r" >&2 ;;
+                esac
+            done
+            if [ -z "$_ok_ids" ]; then
+                printf 'git-leak-scan: leakscan.allow entry ignored -- %s... names no known rule, so it allows nothing\n' "${_h:0:12}" >&2
+                continue
+            fi
+            ALLOW_ENTRIES="${ALLOW_ENTRIES}${_h}${_ok_ids}
+"
+        done <<EOF
+$_requested_allow
+EOF
+    fi
+fi
+
+# set_file_skip <blob spec> -- FILE_SKIP for the file whose content that names
+# (":path" for the index, "<commit>:path" in a range). A blob that cannot be
+# read, such as a deleted file, gets no allow.
+set_file_skip() {
+    FILE_SKIP=""
+    [ -n "$ALLOW_ENTRIES" ] || return 0
+    local h _ah _aids
+    h="$(git cat-file blob "$1" 2>/dev/null | _sha256)" || return 0
+    [ -n "$h" ] || return 0
+    while read -r _ah _aids; do
+        [ "$_ah" = "$h" ] && FILE_SKIP="$FILE_SKIP $_aids"
+    done <<EOF
+$ALLOW_ENTRIES
+EOF
+    return 0
+}
 
 user="$(id -un 2>/dev/null || echo "${USER:-}")"
 
@@ -535,20 +615,48 @@ added=0
 # In real `git diff` output a "+++ b/x" header is always preceded by "--- a/x"
 # (or "--- /dev/null" for a new file), and a content line never is.
 prev_minus=0
+allow_hits=""
+cur_commit=""
 while IFS= read -r line; do
     case "$line" in
         "--- "*) prev_minus=1; continue ;;
     esac
+    # A range is git log -p: each commit opens with "commit <sha>" (a merge adds
+    # " (from <parent>)"). A content line always carries a +, - or space first,
+    # so it cannot start this way. leakscan.allow reads the file as of here.
+    if [ "$MODE" = "range" ]; then
+        case "$line" in
+            "commit "*) _cm="${line#commit }"; cur_commit="${_cm%% *}"; FILE_SKIP=""; prev_minus=0; continue ;;
+        esac
+    fi
     # Only HERE is a "+++ " line a real header. A spoofed one must fall through
     # to the content scan below rather than being consumed -- swallowing it
     # would let a line be skipped entirely, which is a worse bug than the
     # mislabelling this fixes.
     if [ "$prev_minus" = 1 ]; then
         prev_minus=0
+        _hdr=1
         case "$line" in
-            "+++ b/"*) file="${line#+++ b/}"; continue ;;
-            "+++ "*)   file="${line#+++ }";   continue ;;
+            "+++ b/"*) file="${line#+++ b/}" ;;
+            "+++ "*)   file="${line#+++ }" ;;
+            *) _hdr=0 ;;
         esac
+        if [ "$_hdr" = 1 ]; then
+            FILE_SKIP=""
+            if [ -n "$ALLOW_ENTRIES" ]; then
+                if [ "$MODE" = "range" ]; then
+                    [ -n "$cur_commit" ] && set_file_skip "$cur_commit:$file"
+                else
+                    set_file_skip ":$file"
+                fi
+                if [ -n "$FILE_SKIP" ]; then
+                    _where=""; [ -n "$cur_commit" ] && _where=" in ${cur_commit:0:9}"
+                    allow_hits="${allow_hits}${file}${_where}: past [${FILE_SKIP# }] by its hash
+"
+                fi
+            fi
+            continue
+        fi
     fi
     prev_minus=0
     case "$line" in
@@ -570,6 +678,14 @@ EOF
             ;;
     esac
 done < <(printf '%s\n' "$diff_text")
+FILE_SKIP=""
+
+# A gate standing down must be observable, so every pass by hash is named, in
+# hook mode too.
+if [ -n "$allow_hits" ]; then
+    printf 'git-leak-scan: file(s) let past named rules by leakscan.allow (every other rule stayed armed):\n' >&2
+    printf '%s' "$allow_hits" | sort -u | sed 's/^/  /' >&2
+fi
 
 block_hits="$(printf '%s' "$block_hits" | grep -v '^$' | sort -u)"
 warn_hits="$(printf '%s' "$warn_hits" | grep -v '^$' | sort -u)"
@@ -625,7 +741,10 @@ if [ -n "$block_hits" ]; then
         printf '  2. If that rule is simply NOISY here (a private repo legitimately full of\n' >&2
         printf '     your own names, paths and LAN addresses), disarm only that rule, by id:\n' >&2
         printf '        git config leakscan.skip "%s"\n' "$_fired" >&2
-        printf '     Every other rule stays armed.\n\n' >&2
+        printf '     Every other rule stays armed.\n' >&2
+        printf '     If ONE FILE is the false alarm (a vendored library), let only that\n' >&2
+        printf '     file'"'"'s exact content past that rule instead:\n' >&2
+        printf '        git config --add leakscan.allow "$(shasum -a 256 < FILE | cut -d'"'"' '"'"' -f1) %s"\n\n' "$_fired" >&2
         printf '  3. LAST RESORT. Each of these turns off ALL rules, private-key and every\n' >&2
         printf '     token rule included. Prefer 2 unless you genuinely mean all of them:\n' >&2
         printf '        git config leakscan.disable true      (this repo, every future commit)\n' >&2
