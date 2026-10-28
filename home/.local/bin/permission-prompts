@@ -1,0 +1,82 @@
+#!/bin/bash
+# permission-prompts -- review the permission-prompt log.
+#
+# Gavin, dotfiles-main Q1 (v2): 2, 28 Oct 2026: "everything should be logged. So from time to time
+# we can review it here." The log (~/.local/state/dotfiles/permission-prompts.jsonl) holds three
+# kinds: "prompt" (Claude Code showed a permission dialog; notify-permission-prompt.sh pinged),
+# "caught" (enforce-zsh-parse.sh turned a zsh-only command away before any prompt) and "unchecked"
+# (that guard could not run its parser and let the command through).
+#
+#   permission-prompts           totals by kind, the zsh forms seen, prompts by session, and the
+#                                latest 20 entries, saying how many of how many
+#   permission-prompts -n N      the latest N entries instead
+#   permission-prompts --selftest
+#
+# The raw lines are JSON, for anything more: jq . ~/.local/state/dotfiles/permission-prompts.jsonl
+# Built test-first, 28 Oct 2026; the selftest's slices are the specification.
+
+if [ "${1-}" = --selftest ]; then
+  self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+  . "$HOME/.local/bin/test-temp.sh" new permission-prompts-selftest || exit 2
+  fails=0
+  ok()  { printf 'ok    %s\n' "$1"; }
+  bad() { printf 'FAIL  %s\n' "$1"; fails=$((fails + 1)); }
+  log="$TT/log.jsonl"
+  cat > "$log" <<'EOF'
+{"time":"11:44:00 AM Wed 28 Oct 2026","kind":"prompt","session_name":"e-conductor","tool":"Bash","command":"print -rl -- ${(s.:.)PATH}","agent_type":"general-purpose"}
+{"time":"1:00:00 PM Wed 28 Oct 2026","kind":"caught","session_name":"e-conductor","tool":"Bash","command":"echo ${(f)x}","form":"${(f)","found_in":"command"}
+{"time":"1:01:00 PM Wed 28 Oct 2026","kind":"caught","session_name":"dotfiles-main","tool":"Bash","command":"ls *(.N)","form":"*(.N)","found_in":"command"}
+{"time":"1:02:00 PM Wed 28 Oct 2026","kind":"caught","session_name":"e-conductor","tool":"Bash","command":"echo ${(j.:.)a}","form":"${(j.:.)","found_in":"command"}
+{"time":"1:03:00 PM Wed 28 Oct 2026","kind":"unchecked","session_name":"dotfiles-main","tool":"Bash","command":"echo ${(f)y}","form":"${(f)"}
+{"time":"1:04:00 PM Wed 28 Oct 2026","kind":"prompt","session_name":"dotfiles-main","tool":"Edit","input":{"file_path":"~/a.txt"}}
+EOF
+
+  # slice 1: the total for each kind
+  out="$(PERMISSION_PROMPT_LOG="$log" "$self")"
+  case "$out" in *"Prompts shown: 2."*"Caught before a prompt: 3."*"Let through unchecked: 1."*) ok "totals by kind" ;;
+    *) bad "totals by kind: $(printf '%s' "$out" | head -n 5)" ;; esac
+
+  # slice 2: forms caught, most first; prompts by session, most first
+  case "$out" in *"Zsh forms the guard saw (caught or unchecked):"*"  2  \${(f)"*"  1  "*"Prompts by session:"*"  1  dotfiles-main"*) ok "forms and sessions, most first" ;;
+    *) bad "forms and sessions: $(printf '%s' "$out" | sed -n '4,12p')" ;; esac
+
+  # slice 3: the latest entries, newest last, and how many of how many
+  out3="$(PERMISSION_PROMPT_LOG="$log" "$self" -n 2)"
+  case "$out3" in *"Latest 2 of 6:"*"1:03:00 PM Wed 28 Oct 2026  unchecked  dotfiles-main  echo \${(f)y}"*"1:04:00 PM Wed 28 Oct 2026  prompt  dotfiles-main  Edit ~/a.txt"*) ok "latest 2 of 6, newest last" ;;
+    *) bad "latest entries: $(printf '%s' "$out3" | tail -n 4)" ;; esac
+  case "$out" in *"All 6 entries:"*) ok "default shows all when there are few" ;; *) bad "default: no 'All 6 entries' line" ;; esac
+
+  # slice 4: no log yet is said out loud, exit 0, never silence
+  out4="$(PERMISSION_PROMPT_LOG="$TT/none.jsonl" "$self")"; rc=$?
+  [ "$rc" = 0 ] && case "$out4" in "No permission-prompt log yet"*) true ;; *) false ;; esac \
+    && ok "no log: said, exit 0" || bad "no log: rc $rc, said '$out4'"
+
+  [ "$fails" = 0 ] && echo "selftest: all passed" || echo "selftest: $fails FAILED"
+  [ "$fails" = 0 ]; exit $?
+fi
+
+LOG="${PERMISSION_PROMPT_LOG:-$HOME/.local/state/dotfiles/permission-prompts.jsonl}"
+if [ ! -s "$LOG" ]; then
+  echo "No permission-prompt log yet at ${LOG/#$HOME/~}  : no prompt, catch or unchecked command has been logged."
+  exit 0
+fi
+N=20
+[ "${1-}" = -n ] && [ -n "${2-}" ] && N="$2"
+jq -rs --argjson n "$N" '
+  def n(k): [.[] | select(.kind == k)] | length;
+  "Prompts shown: \(n("prompt")).",
+  "Caught before a prompt: \(n("caught")).",
+  "Let through unchecked: \(n("unchecked")).",
+  "",
+  "Zsh forms the guard saw (caught or unchecked):",
+  ([.[] | select(.kind == "caught" or .kind == "unchecked") | .form // "?"]
+    | group_by(.) | map([length, .[0]]) | sort_by(-.[0], .[1]) | .[] | "  \(.[0])  \(.[1])"),
+  "",
+  "Prompts by session:",
+  ([.[] | select(.kind == "prompt") | .session_name // .folder_name // "?"]
+    | group_by(.) | map([length, .[0]]) | sort_by(-.[0], .[1]) | .[] | "  \(.[0])  \(.[1])"),
+  "",
+  (length as $all | (if $all <= $n then "All \($all) entries:" else "Latest \($n) of \($all):" end)),
+  (.[-$n:][] | "  \(.time // "?")  \(.kind // "?")  \(.session_name // .folder_name // "?")  "
+     + (if .command then .command else ((.tool // "?") + " " + (.input.file_path // "")) end
+        | gsub("[\n\r\t]"; " ") | .[0:160]))' "$LOG"

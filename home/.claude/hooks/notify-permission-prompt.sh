@@ -17,13 +17,28 @@
 #
 # It never decides: it prints nothing, so the dialog shows as before, and it always exits 0.
 # The ping runs detached through engage-ping (kind waiting, topic agents), so the dialog never
-# waits for it.
+# waits for it. engage-ping decides whether to send: in a session that another session started
+# (PJ_LAUNCHED_BY set) it stays silent by engage's rule, so the log says "handed to engage-ping"
+# and never "sent" (live test, 1:37 PM 28 Oct 2026: ping.log read "waiting silent launched-by").
+#
+# LIVE TEST, 28 Oct 2026, Claude Code 2.1.312, bypass mode, in a herdr pane: with
+# enforce-zsh-parse.sh on, e-conductor's 11:44 AM command was turned away at once, no prompt, one
+# "caught" line. With the guard's parser broken on purpose, the same command logged "unchecked",
+# then showed "Dangerous rm operation not ruled out", and this hook logged "prompt". The session
+# itself then reported "Permission prompt: none": the prompt goes to the person, not the model,
+# so a session's own word cannot show a prompt happened; this log and the screen can.
+#
+# The session name: CLAUDE_CODE_SESSION_NAME when the hook has it; it did not in that test, so
+# the name is then read from Claude Code's session record (~/.claude/sessions/<pid>.json) by id.
 #
 # Side effect worth knowing: Claude Code switches off CLAUDE_CODE_EVEN_MORE_DANGEROUSLY_SKIP_PERMISSIONS
 # in any session that registers a PermissionRequest hook (2.1.312). That switch is not used here.
 #
 # THE LOG: one JSON object per line, file mode 600, in PERMISSION_PROMPT_LOG (default
-# ~/.local/state/dotfiles/permission-prompts.jsonl). Fields: time (12-hour Melbourne), iso, session
+# ~/.local/state/dotfiles/permission-prompts.jsonl). kind: "prompt" (a dialog was shown, pinged),
+# "caught" (enforce-zsh-parse.sh turned the command away first) or "unchecked" (that guard could
+# not run its parser and let it through); the last two add form and found_in, and never ping.
+# Other fields: time (12-hour Melbourne), iso, session
 # name, session id, folder (from ~), project (the git top folder's name), tool, command (Bash) or
 # the tool's input, description, permission mode, agent id and type, transcript (from ~), Claude
 # Code version, host, the herdr pane, and what happened to the ping. Known secret shapes in the
@@ -59,6 +74,9 @@ print -rl -- "$@" > "'"$TT"'/ping-args"' > "$fake"; chmod +x "$fake"
   [[ "$(print -r -- "$line" | jq -r '.folder')" == "~/CODE/x" ]] && ok "log: folder from ~" || bad "log: folder from ~"
   [[ "$(print -r -- "$line" | jq -r '.command')" == 'print -rl -- ${(s.:.)PATH}' ]] && ok "log: command" || bad "log: command"
   [[ "$(print -r -- "$line" | jq -r '.agent_type')" == general-purpose ]] && ok "log: agent type" || bad "log: agent type"
+  # engage-ping decides, and stays quiet for a session another session started (live test, 28 Oct),
+  # so the log says only what this hook knows
+  [[ "$(print -r -- "$line" | jq -r '.ping')" == "handed to engage-ping, which decides whether to send" ]] && ok "log: ping handed over, not claimed sent" || bad "log: ping says $(print -r -- "$line" | jq -r '.ping')"
   [[ "$(print -r -- "$line" | jq -r '.time')" == *(AM|PM)* ]] && ok "log: 12-hour time" || bad "log: 12-hour time"
   [[ "$(stat -f %Lp "$log")" == 600 ]] && ok "log: mode 600" || bad "log: mode $(stat -f %Lp "$log")"
   [[ "$(<"$TT/ping-args" 2>/dev/null)" == waiting$'\n'* ]] && ok "ping: kind waiting" || bad "ping: not sent as waiting"
@@ -87,11 +105,58 @@ print -rl -- "$@" > "'"$TT"'/ping-args"' > "$fake"; chmod +x "$fake"
   [[ $rc == 0 && -z "$out" ]] && ok "bad payload: exit 0, silent" || bad "bad payload: rc $rc, said '$out'"
   [[ "$(tail -n 1 "$log" | jq -r '.ping')" == "not sent: unreadable payload" ]] && ok "bad payload: logged" || bad "bad payload: not logged"
 
+  # 5. a catch from the guard: kind caught, the form named, no ping
+  : > "$TT/ping-args"
+  print -r -- '{"session_id":"s5","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"echo ${(f)x}"}}' \
+    | PERMISSION_PROMPT_LOG="$log" PERMISSION_PROMPT_PING="$fake" "$self" --caught '${(' command
+  sleep 0.5
+  line="$(tail -n 1 "$log")"
+  [[ "$(print -r -- "$line" | jq -r '.kind + " " + .form + " " + .found_in')" == 'caught ${( command' ]] && ok "caught: logged with kind and form" || bad "caught: $line"
+  [[ ! -s "$TT/ping-args" ]] && ok "caught: no ping" || bad "caught: a ping went out"
+  [[ "$(sed -n 1p "$log" | jq -r '.kind')" == prompt ]] && ok "a prompt is logged as kind prompt" || bad "prompt kind missing"
+
+  # 6. the guard could not check a command: kind unchecked, the form named, no ping
+  : > "$TT/ping-args"
+  print -r -- '{"session_id":"s6","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"echo ${(f)x}"}}' \
+    | PERMISSION_PROMPT_LOG="$log" PERMISSION_PROMPT_PING="$fake" "$self" --unchecked '${('
+  sleep 0.5
+  line="$(tail -n 1 "$log")"
+  [[ "$(print -r -- "$line" | jq -r '[.kind, .form, .ping] | join("|")')" == 'unchecked|${(|not sent: parser unavailable, allowed' ]] && ok "unchecked: logged with kind and form" || bad "unchecked: $line"
+  [[ ! -s "$TT/ping-args" ]] && ok "unchecked: no ping" || bad "unchecked: a ping went out"
+
+  # 8. no name in the environment: the name comes from Claude Code's session record, by session id
+  mkdir -p "$TT/sessions"
+  print -r -- '{"pid":1,"sessionId":"s8","name":"named-from-record"}' > "$TT/sessions/1.json"
+  print -r -- '{"pid":2,"sessionId":"other","name":"wrong-one"}' > "$TT/sessions/2.json"
+  print -r -- '{"session_id":"s8","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"x"}}' \
+    | env -u CLAUDE_CODE_SESSION_NAME PERMISSION_PROMPT_LOG="$log" PERMISSION_PROMPT_NO_PING=1 \
+      CLAUDE_SESSIONS_DIR="$TT/sessions" "$self"
+  [[ "$(tail -n 1 "$log" | jq -r '.session_name')" == named-from-record ]] && ok "name from the session record" || bad "name from record: $(tail -n 1 "$log" | jq -c '.session_name')"
+
+  # 7. an unknown flag is logged and never pings
+  : > "$TT/ping-args"
+  print -r -- '{"session_id":"s7","cwd":"/tmp","tool_name":"Bash","tool_input":{"command":"x"}}' \
+    | PERMISSION_PROMPT_LOG="$log" PERMISSION_PROMPT_PING="$fake" "$self" --no-such-mode
+  sleep 0.5
+  [[ ! -s "$TT/ping-args" ]] && ok "unknown flag: no ping" || bad "unknown flag: a ping went out"
+  [[ "$(tail -n 1 "$log" | jq -r '.ping')" == "not sent: unknown mode --no-such-mode" ]] && ok "unknown flag: logged" || bad "unknown flag: $(tail -n 1 "$log")"
+
   n="$(wc -l < "$log" | tr -d ' ')"
-  [[ "$n" == 4 ]] && ok "4 log lines for 4 runs" || bad "$n log lines for 4 runs"
+  [[ "$n" == 8 ]] && ok "8 log lines for 8 runs" || bad "$n log lines for 8 runs"
   (( fails == 0 )) && print -r -- "selftest: all passed" || print -r -- "selftest: $fails FAILED"
   return $(( fails > 0 ))
 fi
+
+# --caught FORM WHERE: called by enforce-zsh-parse.sh when it turned a command away before any
+# prompt; the line is logged with kind "caught" and no ping goes out (Gavin, dotfiles-main
+# Q1 (v2): 2, 28 Oct 2026: "everything should be logged", caught and still-prompted alike).
+kind=prompt form="" where=""
+# --unchecked FORM: the guard found a zsh form but could not run its parser, so it let the command
+# through; logged as kind "unchecked", no ping, so a review shows the gap.
+if [[ "${1-}" == --caught ]]; then kind=caught form="${2-}" where="${3-}"; fi
+if [[ "${1-}" == --unchecked ]]; then kind=unchecked form="${2-}"; fi
+badmode=""
+[[ "${1-}" == -* && "$kind" == prompt ]] && badmode="$1"   # an unknown flag: log it, never ping
 
 exec 1>/dev/null 2>/dev/null   # nothing reaches Claude Code from here, whatever fails below
 in="$(cat)"
@@ -101,6 +166,13 @@ H="${HOME%/}"
 now_local="$(TZ=Australia/Melbourne date '+%-I:%M:%S %p %a %-d %b %Y')"
 now_iso="$(TZ=Australia/Melbourne date '+%Y-%m-%dT%H:%M:%S%z')"
 name="${CLAUDE_CODE_SESSION_NAME-}"
+if [[ -z "$name" ]]; then   # not in a hook's environment (measured 28 Oct): read it from the session record
+  sid="$(print -r -- "$in" | jq -r '.session_id // empty' 2>/dev/null)"
+  sdir="${CLAUDE_SESSIONS_DIR:-$HOME/.claude/sessions}"
+  if [[ -n "$sid" && -d "$sdir" ]]; then
+    name="$(jq -r --arg s "$sid" 'select(.sessionId == $s) | .name // empty' "$sdir"/*.json(N) 2>/dev/null | head -n 1)"
+  fi
+fi
 ver="${$(readlink "$HOME/.local/bin/claude" 2>/dev/null):t}"
 host="$(hostname -s 2>/dev/null)"
 
@@ -113,7 +185,8 @@ writelog() {   # writelog <json>: append one line, the file kept at mode 600
 # The record, built by jq from the payload. Paths under the home folder become ~, known secret
 # shapes become <redacted>.
 rec="$(print -r -- "$in" | jq -c --arg h "$H" --arg t "$now_local" --arg iso "$now_iso" \
-  --arg name "$name" --arg ver "$ver" --arg host "$host" --arg pane "${HERDR_PANE_ID-}" '
+  --arg name "$name" --arg ver "$ver" --arg host "$host" --arg pane "${HERDR_PANE_ID-}" \
+  --arg kind "$kind" --arg form "$form" --arg where "$where" '
   def tilde: if type == "string" and $h != "" and startswith($h) then "~" + .[($h | length):] else . end;
   def red: if type == "string" then
       gsub("(ghp_|gho_|ghs_|ghu_|github_pat_|sk-ant-|sk-|xox[abpr]-|AKIA|glpat-)[A-Za-z0-9_\\-]{8,}"; "<redacted>")
@@ -122,7 +195,9 @@ rec="$(print -r -- "$in" | jq -c --arg h "$H" --arg t "$now_local" --arg iso "$n
   select(type == "object")
   | (.tool_input // {}) as $in
   | (.cwd // "") as $cwd
-  | {time: $t, iso: $iso,
+  | {time: $t, iso: $iso, kind: $kind,
+     form: (if $form != "" then $form else null end),
+     found_in: (if $where != "" then $where else null end),
      session_name: (if $name != "" then $name else null end),
      session_id: (.session_id // null),
      folder: ($cwd | tilde),
@@ -141,7 +216,7 @@ rec="$(print -r -- "$in" | jq -c --arg h "$H" --arg t "$now_local" --arg iso "$n
 
 if [[ -z "$rec" ]]; then
   writelog "$(jq -cn --arg t "$now_local" --arg iso "$now_iso" --arg name "$name" \
-    '{time: $t, iso: $iso, session_name: $name, ping: "not sent: unreadable payload"}')"
+    --arg kind "$kind" '{time: $t, iso: $iso, kind: $kind, session_name: $name, ping: "not sent: unreadable payload"}')"
   exit 0
 fi
 
@@ -152,6 +227,15 @@ proj=""
 proj="${proj:t}"; [[ -n "$proj" ]] || proj="$(print -r -- "$rec" | jq -r '.folder_name // empty')"
 [[ -n "$proj" ]] && rec="$(print -r -- "$rec" | jq -c --arg p "$proj" '. + {project: $p}')"
 
+if [[ "$kind" == caught ]]; then
+  writelog "$(print -r -- "$rec" | jq -c '. + {ping: "not sent: caught before the prompt"}')"; exit 0
+fi
+if [[ -n "$badmode" ]]; then
+  writelog "$(print -r -- "$rec" | jq -c --arg m "$badmode" '. + {ping: ("not sent: unknown mode " + $m)}')"; exit 0
+fi
+if [[ "$kind" == unchecked ]]; then
+  writelog "$(print -r -- "$rec" | jq -c '. + {ping: "not sent: parser unavailable, allowed"}')"; exit 0
+fi
 ping="${PERMISSION_PROMPT_PING:-$(whence -p engage-ping 2>/dev/null)}"
 if [[ "${PERMISSION_PROMPT_NO_PING-}" == 1 ]]; then
   writelog "$(print -r -- "$rec" | jq -c '. + {ping: "not sent: switched off"}')"; exit 0
@@ -173,5 +257,5 @@ args=(waiting "Needs your OK" --line "Session: ${who[1,30]}" --line "Tool: $tool
 args+=(--you "approve or deny in the pane" --topic agents --detach)
 
 ( cd "${cwd:-$HOME}" 2>/dev/null; "$ping" "${args[@]}" </dev/null >/dev/null 2>&1 ) &!
-writelog "$(print -r -- "$rec" | jq -c '. + {ping: "sent to engage-ping"}')"
+writelog "$(print -r -- "$rec" | jq -c '. + {ping: "handed to engage-ping, which decides whether to send"}')"
 exit 0
