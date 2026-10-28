@@ -913,6 +913,8 @@ shape_run() {   # shape_run <manifest> -> sets SP SF SHELLS
                 elif [[ "$rc" == 0 ]] && printf '%s' "$out" | jq -e --arg s "$s" --arg ev "$ev" '
                         (.systemMessage | startswith("HOOK MISSING: " + $s + " "))
                         and (if $ev == "SessionEnd" then true
+                             # PermissionRequest output takes only a decision (2.1.312 schema), so no additionalContext
+                             elif $ev == "PermissionRequest" then (has("hookSpecificOutput") | not)
                              else .hookSpecificOutput.hookEventName == $ev
                                   and (.hookSpecificOutput.additionalContext | startswith("HOOK MISSING")) end)' >/dev/null 2>&1; then
                     SP=$((SP+1))
