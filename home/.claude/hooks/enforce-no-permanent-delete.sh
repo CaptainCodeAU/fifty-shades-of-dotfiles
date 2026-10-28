@@ -428,6 +428,7 @@ _msg() { # $1 = rule id -> what it does, then the safe route
     tmutil)         echo "tmutil delete* removes backups or snapshots. SAFE ROUTE: ask Gavin." ;;
     guard-timeout)  echo "the guard gave NO VERDICT within ${DEADLINE:-3} s (a timeout, not a match). SAFE ROUTE: split the command into smaller pieces, or ask Gavin." ;;
     guard-no-verdict) echo "the guard exited without a verdict (a crash, not a match). SAFE ROUTE: ask Gavin; the guard's --selftest shows what broke." ;;
+    guard-disk-full) echo "the disk is full, so the guard cannot run its own check (not a match, and not a broken guard). SAFE ROUTE: free some space (empty nothing permanently: ask Gavin what can go), then run the command again." ;;
     guard-broken) echo "the guard's classifier is broken (it no longer denies /bin/rm), so it cannot judge anything (not a match). SAFE ROUTE: ask Gavin; run the hook's --selftest, or revert the last change to it." ;;
     trash-path)     echo "trash called by path (/usr/bin/trash, or a copy anywhere but ~/.local/bin), through command/env, or after a PATH change (PATH=..., export/unset PATH, hash trash=, sudo -i) skips the trash guard (it refuses a blank argument, the current folder, ~, ~/CODE and repo roots; an empty trash '' moved a whole repo to the Trash on 2026-09-29). SAFE ROUTE: plain trash, which goes through the guard." ;;
     trash-empty)    echo "emptying the Trash (trash-empty, trash-rm, Finder empty trash) makes every earlier delete permanent. SAFE ROUTE: ask Gavin." ;;
@@ -2200,9 +2201,10 @@ SNAP
   # the gutted copy ALLOWED /bin/rm x, exit 0, no output. Each copy is first
   # proved to carry exactly the intended fault, so an arm cannot pass on a copy
   # the sed left unchanged.
-  _hookc() { # $1 = hook file, $2 = command -> out, rc, hb_d, hb_r
-    local pl; pl="$(printf '%s' "$env_json" | jq -c --arg c "$2" --arg cwd "$fx/repo" '.tool_input.command = $c | .cwd = $cwd')"
-    out="$(printf '%s' "$pl" | DEL_GUARD_LOG="$logf" DEL_GUARD_SNAPSHOT_DIR="$fx/snap" perl -e 'alarm shift; exec @ARGV' 4 "$1" 2>&1)"; rc=$?
+  _hookc() { # $1 = hook file, $2 = command, then VAR=value env -> out, rc, hb_d, hb_r
+    local pl hf="$1"; pl="$(printf '%s' "$env_json" | jq -c --arg c "$2" --arg cwd "$fx/repo" '.tool_input.command = $c | .cwd = $cwd')"
+    shift 2 || set --
+    out="$(printf '%s' "$pl" | env DEL_GUARD_LOG="$logf" DEL_GUARD_SNAPSHOT_DIR="$fx/snap" "$@" perl -e 'alarm shift; exec @ARGV' 4 "$hf" 2>&1)"; rc=$?
     hb_d="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
     hb_r="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)"
   }
@@ -2224,6 +2226,23 @@ SNAP
   _hookc "$fx/hook-gutted.sh" 'echo control-ok'
   [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-broken)'* ]] && [[ $hb_r == *'canary /bin/rm x came back allow'* ]]; _chk 'gutted classifier (parses fine): the canary refuses as guard-broken' $?
   grep -q "BLOCKED $HOOK_NAME \"guard-broken\"" "$logf" 2>/dev/null; _chk 'the broken-guard deny is logged' $?
+
+  echo "=== DISK-FULL arms: a failed check on a full disk says the disk is full (#4014) ==="
+  # 26 Oct 2026: with 0 bytes free the classifier's own temp writes failed, the
+  # canary came back allow, and two sessions were told the guard was broken
+  # while its selftest passed. DEL_GUARD_TEST_FREE_KB stands in for df's figure;
+  # it can only change WHICH deny is given, never turn one into an allow.
+  _hookc "$fx/hook-gutted.sh" 'echo control-ok' DEL_GUARD_TEST_FREE_KB=1024
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-disk-full)'* ]] && [[ $hb_r == *'1 MB free'* ]]; _chk 'a failed canary on a full disk: denied as guard-disk-full, naming the space left' $?
+  [[ $hb_r != *'guard is broken'* ]]; _chk 'a failed canary on a full disk does not call the guard broken' $?
+  _hookc "$fx/hook-gutted.sh" 'echo control-ok' DEL_GUARD_TEST_FREE_KB=5000000
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-broken)'* ]]; _chk 'control: a failed canary with space free is still guard-broken' $?
+  _hookb 'echo control-ok' 0 4 DEL_GUARD_TEST_CRASH=1 DEL_GUARD_TEST_FREE_KB=1024
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-disk-full)'* ]]; _chk 'a child with no verdict on a full disk: denied as guard-disk-full' $?
+  _hookc "$fx/hook-same.sh" '/bin/rm x' DEL_GUARD_TEST_FREE_KB=1024
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (rm-path)'* ]]; _chk 'a working guard on a full disk still denies /bin/rm x as rm-path' $?
+  _hookc "$fx/hook-same.sh" 'echo control-ok' DEL_GUARD_TEST_FREE_KB=1024
+  [ "$rc" -eq 0 ] && [ -z "$out" ]; _chk 'a working guard on a full disk still allows a harmless command' $?
 
   # a verdict still crosses the child boundary intact: rule id and where
   _hookb 'gwtrm ../wt' 0 "$al" DEL_GUARD_DEADLINE=$dl   # dl and al from the calibrated deadline arms (A04)
@@ -2329,7 +2348,7 @@ trash-path|/usr/bin/trash x'
   ids="$(awk '/^_msg\(\)/ {m=1; next} m && /^}/ {m=0} m && match($0, /^    [a-z][a-zA-Z-]*\)/) {s=substr($0, RSTART+4, RLENGTH-5); print s}' "$self")"
   for id in $ids; do
     n_ids=$((n_ids + 1))
-    case "$id" in guard-timeout|guard-no-verdict|guard-broken|redir-trunc) continue ;; esac   # not a command shape / a > redirection
+    case "$id" in guard-timeout|guard-no-verdict|guard-broken|guard-disk-full|redir-trunc) continue ;; esac   # not a command shape / a > redirection
     [[ $'\n'"$cov" == *$'\n'"$id|"* ]] || missing="$missing $id"
   done
   [ "$n_ids" -ge 25 ] && [ -z "$missing" ]; _chk "all $n_ids rule ids in _msg are covered or excluded (>= 25 read, the control)${missing:+; MISSING:$missing}" $?
@@ -2482,6 +2501,23 @@ _verdict_child() {
   trap - EXIT
   printf 'V%s%s%s%s%s%s\n' "$US" "$REASON_ID" "$US" "${LEXER_FAILED:-0}" "$US" "${REASON_WHERE//$'\n'/$RSC}"
 }
+# A FULL DISK LOOKS LIKE A BROKEN GUARD (#4014). On 26 Oct 2026 free space hit
+# zero; the classifier's own temp writes (here-strings, substitutions) failed,
+# the canary came back allow, and two sessions were told the guard was broken
+# while its selftest passed. The refusal was right and the words were wrong.
+# So a failed check first asks df about the temp folder's volume, which needs
+# no write of its own, and names a full disk instead. Still a DENY either way.
+# DEL_GUARD_TEST_FREE_KB stands in for df's figure in the selftest; it can only
+# change which deny is given.
+_disk_full_deny() { # $1 = the other rule id, $2 = its where -> denies one or the other
+  local kb
+  kb="${DEL_GUARD_TEST_FREE_KB:-$(df -Pk "${TMPDIR:-/tmp}" 2>/dev/null | awk 'NR==2 {print $4}')}"
+  case "$kb" in
+    ''|*[!0-9]*) ;;
+    *) [ "$kb" -lt 51200 ] && _deny guard-disk-full "$(( kb / 1024 )) MB free on the temp folder's volume; then: $2" ;;   #M: a full disk is named
+  esac
+  _deny "$1" "$2"   # a no-op when the disk-full deny came first
+}
 exec 3< <(_verdict_child 2>/dev/null)
 vchild=$!
 vline=""; IFS= read -r -t "$DEADLINE" -u 3 vline
@@ -2491,10 +2527,10 @@ case "$vline" in
     REASON_ID="${vf[1]:-}"; LEXER_FAILED="${vf[2]:-0}"; REASON_WHERE="${vf[3]:-}"; REASON_WHERE="${REASON_WHERE//$RSC/$'\n'}"
     [ -n "$REASON_ID" ] && REASON="$(_msg "$REASON_ID")" ;;
   X)
-    _deny guard-no-verdict "the guard's child exited before its verdict"                        #M: crash fails closed
+    _disk_full_deny guard-no-verdict "the guard's child exited before its verdict"              #M: crash fails closed
     ;;
   B"$US"*)
-    _deny guard-broken "${vline#B"$US"}"
+    _disk_full_deny guard-broken "${vline#B"$US"}"
     ;;
   *)
     # nothing within the deadline: the child is still working, or died too
@@ -2519,6 +2555,8 @@ _log "$REASON_ID" "$cmd"
 case "$REASON_ID" in
   guard-broken) head="the deletion guard is broken, so this command is refused (fail closed). This is NOT a match: nothing in it was found to be a delete."
            foot="A broken guard that allowed would switch off every permanent-delete check in every session with no message, so it refuses instead. Tell Gavin; run enforce-no-permanent-delete.sh --selftest." ;;
+  guard-disk-full) head="the disk is full, so the deletion guard cannot run its own check, and every command is refused until space is freed. This is NOT a match, and the guard is NOT broken."
+           foot="A guard that allowed when it could not check would switch off every permanent-delete check exactly when sessions are hurrying to free space, so it refuses instead. Tell Gavin the disk is full." ;;
   guard-*) head="the deletion guard could not finish checking this command, so it is refused (fail closed). This is NOT a match: nothing in it was found to be a delete."
            foot="A guard that stalls would let the command through when the harness gives up on it, so it refuses instead. Tell Gavin if an ordinary command hits this; run enforce-no-permanent-delete.sh --selftest." ;;
   *)       head="this command deletes or destroys data outside the Trash."; foot="$FOOTER" ;;
