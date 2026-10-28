@@ -8,6 +8,9 @@
 #                                      the shared temp folder, biggest first: size, age, live or
 #                                      ended, who made it, and the line that would move it to the
 #                                      Trash once Gavin says so. It prints those lines, never runs them.
+#   disk-watch note-trash              note the Trash's size for the pass, which launchd keeps from
+#                                      reading it; a hook runs it after each Bash call, and it
+#                                      measures at most once in 15 minutes. Prints nothing, exits 0.
 #   disk-watch --selftest
 #
 # WHY (record #3989; Gavin, dotfiles-main, 25 Oct 2026). Sessions of makeitso left 31 test
@@ -155,6 +158,45 @@ measure_trash() {
     TRASH_KB=$(printf '%s\n' "$out" | awk -F"$TAB" 'NR == 1 { print $1 }')
     case "$TRASH_KB" in '' | *[!0-9]*) TRASH_KB=""; return 1 ;; esac
     return 0
+}
+
+# THE TRASH, AS A SESSION SAW IT (#4018). The first real ping (1:21 AM 26 Oct 2026) said "Trash:
+# not readable": macOS keeps ~/.Trash from launchd's /bin/bash, while a Claude session's commands
+# read it. /bin/bash is not given Full Disk Access, which would open the protected folders to
+# every bash script. Instead a hook runs `disk-watch note-trash` after each Bash call (Gavin,
+# dotfiles-main Q2: 1, 28 Oct 2026): at most once in 15 minutes it measures the Trash and writes
+# "<KB or ->\t<epoch>" to <state>/trash.note; "-" means this session could not read it either, so
+# it is not tried again on every call. A pass that cannot read the Trash shows the noted size and
+# its age, up to a day old.
+TRASH_NOTE_S=900
+TRASH_NOTE_MAX_S=86400
+note_trash() {
+    local nf="$STATE/trash.note" lk="$STATE/trash.note.lock" t kb last
+    [ -t 0 ] || cat >/dev/null 2>&1   # a hook's stdin, read to the end (EPIPE otherwise)
+    t=$(now)
+    if [ -f "$nf" ] && IFS="$TAB" read -r kb last < "$nf"; then
+        case "$last" in '' | *[!0-9]*) ;; *) [ $(( t - last )) -lt "$TRASH_NOTE_S" ] && return 0 ;; esac
+    fi
+    [ -d "$STATE" ] || mkdir -p "$STATE" 2>/dev/null || return 0
+    if ! mkdir "$lk" 2>/dev/null; then
+        # a lock older than 5 minutes is a killed run's (du is cut off after 60 s)
+        [ -n "$(find "$lk" -maxdepth 0 -type d -mmin +5 2>/dev/null)" ] && rmdir "$lk" 2>/dev/null && mkdir "$lk" 2>/dev/null || return 0
+    fi
+    if measure_trash; then kb="$TRASH_KB"; else kb="-"; note "note-trash: the Trash was not readable from this session either"; fi
+    printf '%s\t%s\n' "$kb" "$t" > "$nf.$$" 2>/dev/null && command mv -f "$nf.$$" "$nf"
+    rmdir "$lk" 2>/dev/null
+    return 0
+}
+
+# noted_trash -> NOTED_KB and NOTED_AGE ("12m"); rc 1 when there is no usable note.
+noted_trash() {
+    local kb last age
+    NOTED_KB=""; NOTED_AGE=""
+    [ -f "$STATE/trash.note" ] && IFS="$TAB" read -r kb last < "$STATE/trash.note" || return 1
+    case "$kb$last" in '' | *[!0-9]*) return 1 ;; esac
+    age=$(( $(now) - last ))
+    [ "$age" -le "$TRASH_NOTE_MAX_S" ] || return 1
+    NOTED_KB="$kb"; NOTED_AGE="$(age_h "$age")"
 }
 
 # build_table: <state>/du.out (the folders) plus the loose entries read here -> <state>/table.tsv,
@@ -422,9 +464,10 @@ ping_now() {
     l1="Free: $(kb_h "$FREE_KB"), limit $(kb_h "$FREE_LIMIT_KB")"
     # The Trash and the temp folder share a line: on 25 Oct 2026 the Trash, not the temp folder,
     # was what filled the disk (engage's test runs move their folders there).
-    if measure_trash; then tr="$(kb_h "$TRASH_KB")"; else tr="not readable"; fi
     if [ -n "$TEMP_KB" ]; then tl="$(kb_h "$TEMP_KB")"; else tl="not measured"; fi
-    l2=$(cut40 "Trash: $tr; temp folder $tl")
+    if measure_trash; then l2=$(cut40 "Trash: $(kb_h "$TRASH_KB"); temp folder $tl")
+    elif noted_trash; then l2=$(cut40 "Trash: $(kb_h "$NOTED_KB") $NOTED_AGE ago; temp $tl")   # the noted figure is longer
+    else l2=$(cut40 "Trash: not readable; temp folder $tl"); fi
     l3=$(cut40 "Top: $(row_line 1)")
     r2=$(row_line 2); r3=$(row_line 3); r4=$(row_line 4)
     ( builtin cd "$(repo_dir)" 2>/dev/null || builtin cd "$HOME"
@@ -498,6 +541,7 @@ report() {
         "$( [ -n "$TEMP_LIMIT_KB" ] && echo "pings over $(kb_h "$TEMP_LIMIT_KB")" || echo "no size limit set yet")"
     if [ "$cached" -eq 0 ]; then
         if measure_trash; then printf 'The Trash: %s (it frees space only once emptied).\n' "$(kb_h "$TRASH_KB")"
+        elif noted_trash; then printf 'The Trash: %s, as a session saw it %s ago (not readable here; it frees space only once emptied).\n' "$(kb_h "$NOTED_KB")" "$NOTED_AGE"
         else echo "The Trash: not readable here."; fi
     fi
     total=$(grep -c . "$STATE/table.tsv" 2>/dev/null) || total=0
@@ -715,6 +759,33 @@ EOF
     : > "$fx/state/alerts"
     FX_FREE=5000000 "$0"
     grep -qx "ARG=Top: sess-one's own folder 5 MB" "$fx/ping.$(pings)" && ok "15 a session's own folder on top: 'sess-one's own folder 5 MB', no id" || bad "15 top: $(grep '^ARG=Top' "$fx/ping.$(pings)")"
+    # 16. note-trash (#4018): a session notes the Trash's size for the pass that cannot read it,
+    # at most once in 15 minutes; the ping and the report show that figure and its age.
+    : > "$fx/du.calls"
+    DISK_WATCH_NOW=$t0 "$0" note-trash < /dev/null; rc=$?
+    IFS="$TAB" read -r c iso < "$fx/state/trash.note" 2>/dev/null
+    [ "$rc" -eq 0 ] && [ "${c:-0}" -ge 2048 ] 2>/dev/null && [ "$iso" = "$t0" ] && ok "16 note-trash writes the Trash's size and the time" || bad "16 note: rc=$rc '$c' '$iso'"
+    c=$(grep -c . "$fx/du.calls"); DISK_WATCH_NOW=$(( t0 + 899 )) "$0" note-trash < /dev/null
+    [ "$(grep -c . "$fx/du.calls")" = "$c" ] && ok "16 a second note inside 15 minutes runs no du" || bad "16 throttle"
+    DISK_WATCH_NOW=$(( t0 + 900 )) "$0" note-trash < /dev/null
+    [ "$(grep -c . "$fx/du.calls")" -gt "$c" ] && ok "16 control: after 15 minutes it measures again" || bad "16 throttle control"
+    mkdir "$fx/state/trash.note.lock"; c=$(grep -c . "$fx/du.calls")
+    DISK_WATCH_NOW=$(( t0 + 2000 )) "$0" note-trash < /dev/null
+    [ "$(grep -c . "$fx/du.calls")" = "$c" ] && ok "16 a run already under way (the lock) is not doubled" || bad "16 lock"
+    touch -t "$(date -r $(( $(date +%s) - 600 )) '+%Y%m%d%H%M.%S')" "$fx/state/trash.note.lock"
+    DISK_WATCH_NOW=$(( t0 + 2000 )) "$0" note-trash < /dev/null
+    [ "$(grep -c . "$fx/du.calls")" -gt "$c" ] && [ ! -e "$fx/state/trash.note.lock" ] && ok "16 a lock left 10 minutes by a killed run is taken over" || bad "16 stale lock"
+    : > "$fx/state/alerts"
+    FX_FREE=5000000 DISK_WATCH_TRASH="$fx/no-such-trash" DISK_WATCH_NOW=$(( t0 + 2000 + 720 )) "$0"
+    grep -q '^ARG=Trash: 2 MB 12m ago; temp [0-9]' "$fx/ping.$(pings)" && ok "16 an unreadable Trash: the ping shows the noted size and its age" || bad "16 ping: $(grep '^ARG=Trash' "$fx/ping.$(pings)")"
+    out=$(DISK_WATCH_TRASH="$fx/no-such-trash" DISK_WATCH_NOW=$(( t0 + 2000 + 720 )) "$0" report 2>&1)
+    printf '%s\n' "$out" | grep -q '^The Trash: 2 MB, as a session saw it 12m ago' && ok "16 the report shows the noted size and its age" || bad "16 report: $(printf '%s\n' "$out" | grep -i trash | head -n 2)"
+    : > "$fx/state/alerts"
+    FX_FREE=5000000 DISK_WATCH_TRASH="$fx/no-such-trash" DISK_WATCH_NOW=$(( t0 + 2000 + 86401 )) "$0"
+    grep -q '^ARG=Trash: not readable; temp folder ' "$fx/ping.$(pings)" && ok "16 a note over a day old is not used" || bad "16 old note: $(grep '^ARG=Trash' "$fx/ping.$(pings)")"
+    DISK_WATCH_TRASH="$fx/no-such-trash" DISK_WATCH_NOW=$(( t0 + 9000 )) "$0" note-trash < /dev/null
+    IFS="$TAB" read -r c iso < "$fx/state/trash.note" 2>/dev/null
+    [ "$c" = "-" ] && [ "$iso" = "$(( t0 + 9000 ))" ] && ok "16 a Trash this session cannot read either: noted as not read, so it is not retried each call" || bad "16 unreadable note: '$c' '$iso'"
     echo "disk-watch selftest: $pass_n passed, $fail_n failed"
     [ "$fail_n" -eq 0 ]
 }
@@ -722,6 +793,7 @@ EOF
 case "${1:-}" in
     --selftest) selftest; exit ;;
     report) shift; report "$@"; exit ;;
+    note-trash) note_trash; exit 0 ;;
     --help | -h) sed -n '2,/^set -u$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     "") pass; exit ;;
     *) echo "disk-watch: unknown argument: $1 (try --help)" >&2; exit 2 ;;

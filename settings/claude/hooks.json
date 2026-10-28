@@ -427,11 +427,24 @@
       "class": "advisory"
     },
     {
+      "event": "PostToolUse",
+      "matcher": "Bash",
+      "script": "disk-watch",
+      "script_path": "$HOME/.local/bin/disk-watch",
+      "targets": ["user"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.local/bin/disk-watch\"; if [ -x \"$h\" ]; then \"$h\" note-trash; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: disk-watch is registered but ~/.local/bin/disk-watch is missing or not executable, so the disk watch pings without the Trash size. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"HOOK MISSING: disk-watch is registered but ~/.local/bin/disk-watch is missing or not executable, so the disk watch pings without the Trash size. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
+        "timeout": 90,
+        "async": true
+      },
+      "why": "Record #4018, Gavin's dotfiles-main Q2: 1 (28 Oct 2026): macOS keeps ~/.Trash from the disk watch's launchd job, while a Claude session can read it, so after each Bash call this notes the Trash's size in the watch's state, at most once in 15 minutes (du cut off after 60 s, hence the 90 s timeout); the ping and the report show that figure and its age when they cannot read the Trash themselves. Its own row, not part of test-temp's after-command, so that hook's no-work test stays as it is. PostToolUse only: any Bash call that succeeded is often enough. async: Claude Code never waits on it; it prints nothing. User target only: engage sessions read only engage's own settings. docs/DISK_WATCH.md",
+      "class": "advisory"
+    },
+    {
       "event": "PermissionRequest",
       "script": "notify-permission-prompt.sh",
-      "targets": [
-        "user"
-      ],
+      "targets": ["user"],
       "entry": {
         "type": "command",
         "command": "h=\"$HOME/.claude/hooks/notify-permission-prompt.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: notify-permission-prompt.sh is registered but ~/.claude/hooks/notify-permission-prompt.sh is missing or not executable, so permission prompts are neither pinged nor logged. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}'; fi",
@@ -444,9 +457,7 @@
       "event": "PreToolUse",
       "matcher": "Bash",
       "script": "enforce-zsh-parse.sh",
-      "targets": [
-        "user"
-      ],
+      "targets": ["user"],
       "entry": {
         "type": "command",
         "command": "h=\"$HOME/.claude/hooks/enforce-zsh-parse.sh\"; if [ ! -x \"$h\" ]; then sleep 0.005; fi; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK CRASHED, DENYING: enforce-zsh-parse.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed (D-20261002-A01). Fix it from your own terminal, where no Claude hook runs: run ~/.claude/hooks/enforce-zsh-parse.sh --selftest to see what broke, then restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-zsh-parse.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-zsh-parse.sh is registered but ~/.claude/hooks/enforce-zsh-parse.sh is missing or not executable, so every call it guards is denied until that is fixed. If the dotfiles links are gone, run in any terminal: sh ~/.local/state/dotfiles/links/restore (puts every link back, deletes nothing). Otherwise fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-zsh-parse.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
@@ -459,9 +470,7 @@
       "event": "PreToolUse",
       "matcher": "Monitor",
       "script": "enforce-zsh-parse.sh",
-      "targets": [
-        "user"
-      ],
+      "targets": ["user"],
       "entry": {
         "type": "command",
         "command": "h=\"$HOME/.claude/hooks/enforce-zsh-parse.sh\"; if [ ! -x \"$h\" ]; then sleep 0.005; fi; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK CRASHED, DENYING: enforce-zsh-parse.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed (D-20261002-A01). Fix it from your own terminal, where no Claude hook runs: run ~/.claude/hooks/enforce-zsh-parse.sh --selftest to see what broke, then restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-zsh-parse.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-zsh-parse.sh is registered but ~/.claude/hooks/enforce-zsh-parse.sh is missing or not executable, so every call it guards is denied until that is fixed. If the dotfiles links are gone, run in any terminal: sh ~/.local/state/dotfiles/links/restore (puts every link back, deletes nothing). Otherwise fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-zsh-parse.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",

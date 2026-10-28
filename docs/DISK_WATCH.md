@@ -18,7 +18,7 @@ the Trash beside the temp folder's, and names the biggest folders in the shared 
 the session that made each. The Trash is there because on the evening of 25 Oct 2026 it, not the
 temp folder, was what filled the disk: engage's test runs move their folders there, and it grew
 by half a gigabyte in 40 seconds. A Trash the job is not allowed to read shows as "not readable",
-never as a size. It pings again only when
+never as a size, unless a session has noted it (below). It pings again only when
 things get 1 GB worse, after 6 hours still over the limit, or when the last ping reached no
 phone. Coming back needs 512 MB of room past the limit, and that is logged, not pinged.
 
@@ -31,6 +31,21 @@ the Trash frees no space until the Trash is emptied, and every ping says so.
 
 A ping that reaches no phone is tried again once an hour, not on every pass, so a broken send
 cannot turn into four alarm sounds every 15 minutes.
+
+## The Trash, as a session saw it
+
+macOS keeps `~/.Trash` from the launchd job's `/bin/bash`, so its first real ping (1:21 AM
+26 Oct 2026) said "Trash: not readable". A Claude session's commands can read it. So a hook runs
+`disk-watch note-trash` after each Bash call (record #4018, Gavin's dotfiles-main Q2: 1,
+28 Oct 2026). At most once in 15 minutes it measures the Trash and writes the size and the time
+to `trash.note` in the state folder; "-" there means the session could not read it either, so it
+is not tried on every call. A pass that cannot read the Trash shows the noted size and its age
+("Trash: 2.6 GB 12m ago"), and ignores a note over a day old. `/bin/bash` is deliberately not
+given Full Disk Access: every bash script would then read the protected folders.
+
+The hook is its own row in `settings/claude/hooks.json` (async, prints nothing), so test-temp's
+after-command hook keeps its no-work test as it is. It reaches a session once
+`claude-hooks-sync --install` has registered it.
 
 ## Who made a folder
 
@@ -51,7 +66,8 @@ The names come from the live session file, else the transcript's own title, else
 disk-watch report              # the biggest 20 rows, the top 8 looked up
 disk-watch report --all        # every row, every one looked up (slower)
 disk-watch report --cached     # the last pass's measurement, no new du
-disk-watch --selftest          # 47 arms, each with a control
+disk-watch note-trash          # note the Trash's size for the pass (the hook runs this)
+disk-watch --selftest          # 57 arms, each with a control
 ```
 
 The log is `~/.local/state/dotfiles/disk-watch/watch.log`, one line a pass, kept to its last 500
