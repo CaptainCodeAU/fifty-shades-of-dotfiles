@@ -153,7 +153,9 @@ __cl_checkin_reminder() {
 # re-check's process listing printed it into a transcript on 18 Oct. An environment is
 # readable only by the same user, which is where the key sat before a43b851. Never pass a
 # setting as an argument here. Measured 18 Oct with a probe setting: in the arguments of 2
-# launch processes before, 0 after. -t 43200 still drops the key after 12 hours. No key file, or no
+# launch processes before, 0 after. -t 86400 drops the key after 24 hours: a key added later in
+# the session (`ssh-add --apple-load-keychain`) gets the same lifetime. 12 hours (43200) until
+# 31 Oct 2026; Gavin asked for 24 (dotfiles-main, 31 Oct). No key file, or no
 # ssh-agent: the command runs with no agent. Test: ~/CODE/CaptainCodeAU/engage/tests/launch-agent.test.zsh
 # Its one local is named __cl_key, not key: a local is still in scope while claude runs, and
 # it would hide an inherited exported variable of the same name from claude.
@@ -175,7 +177,7 @@ __cl_ssh_agent() {
   if [[ -f "$__cl_key" ]] && command -v ssh-agent >/dev/null 2>&1; then
     (
       (( ${+__cl_env} )) && (( ${#__cl_env} )) && builtin export "${__cl_env[@]}"
-      ssh-agent -t 43200 zsh -fc '
+      ssh-agent -t 86400 zsh -fc '
         __cl_k=$1 __cl_f=$2; shift 2
         source "$__cl_f"
         ssh-add --apple-use-keychain "$__cl_k" 2>/dev/null || ssh-add "$__cl_k"
