@@ -196,6 +196,90 @@ __check_github_forward_drift() {
 }
 
 # ------------------------------------------------------------------------------
+# Helper: a newer bun or herdr past its release cooldown (Gavin, dotfiles-main Q1: 1,
+# 31 Oct 2026: tell me on the bun line, then the herdr line, when a new version is out
+# and past the cooldown, "as it would be a good reminder to update")
+# ------------------------------------------------------------------------------
+# __welcome_release_note INSTALLED CANDIDATE PUBLISHED_EPOCH GATE_DAYS NOW_EPOCH HOW
+# Pure: prints the suffix for a tool's line and returns which case it was.
+#   0  nothing to say: no candidate, or INSTALLED is already at or past it (silent)
+#   1  " ↑CANDIDATE (past the N-day cooldown, run HOW)" -- the reminder
+#   2  " (CANDIDATE out, X.Xd of the N-day cooldown left)" -- out, still waiting
+# The age is worked out from PUBLISHED_EPOCH at NOW, not taken from the cached report,
+# so a release that clears the cooldown between two refreshes shows at once, and a tool
+# upgraded since the last refresh goes quiet at once. Tested by zsh-welcome-selftest.
+__welcome_release_note() {
+    local have="${1#v}" want="${2#v}" pub="$3" gate="$4" now="$5" how="$6"
+    [[ -n "$have" && -n "$want" && "$pub" == <-> && "$now" == <-> && -n "$gate" ]] || return 0
+    local -a a b; a=("${(@s/./)have%%[^0-9.]*}") b=("${(@s/./)want%%[^0-9.]*}")
+    local i x y cmp=0
+    for i in 1 2 3; do
+        x="${a[i]:-0}" y="${b[i]:-0}"
+        [[ "$x" == <-> && "$y" == <-> ]] || return 0
+        if (( x != y )); then (( x < y )) && cmp=-1 || cmp=1; break; fi
+    done
+    (( cmp < 0 )) || return 0
+    local gate_txt="${gate%.0}" age left
+    age=$(( (now - pub) / 86400.0 ))
+    if (( age >= gate )); then
+        print -rn -- " ${warn}↑${want} (past the ${gate_txt}-day cooldown, run ${how})${done}"
+        return 1
+    fi
+    left=$(printf '%.1f' $(( gate - age )))
+    print -rn -- " ${info}(${want} out, ${left}d of the ${gate_txt}-day cooldown left)${done}"
+    return 2
+}
+
+# __welcome_release_cache NAME TTL_SECONDS COMMAND...
+# Prints the path of NAME's cached --json report. When it is older than TTL (or
+# missing), runs COMMAND in the background, detached (`&!`), so the banner never waits
+# on the network; the next shell reads the new report. A report without a `latest`
+# (offline, rate-limited) never replaces a good one. A start stamp stops a burst of new
+# tabs from launching one check each.
+__welcome_release_cache() {
+    (( $# >= 3 )) || return 0
+    local name="$1" ttl="$2"; shift 2
+    local dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
+    local file="$dir/${name}_release.json" stamp="$dir/${name}_release.started"
+    [[ -d "$dir" ]] || mkdir -p "$dir" 2>/dev/null
+    print -r -- "$file"
+    # -F b:zstat only: a bare `zmodload zsh/stat` also replaces the stat command.
+    zmodload -F zsh/stat b:zstat 2>/dev/null
+    zmodload zsh/datetime 2>/dev/null
+    local now=$EPOCHSECONDS
+    [[ -n "$now" ]] || now=$(date +%s)
+    local -a st
+    if [[ -s "$file" ]]; then
+        zstat -A st +mtime -- "$file" 2>/dev/null || st=(0)
+        (( now - ${st[1]:-0} < ttl )) && return 0
+    fi
+    if [[ -e "$stamp" ]]; then
+        zstat -A st +mtime -- "$stamp" 2>/dev/null || st=(0)
+        (( now - ${st[1]:-0} < 600 )) && return 0
+    fi
+    : >| "$stamp" 2>/dev/null
+    (
+        local out
+        out=$("$@" 2>/dev/null)
+        [[ -n "$(jq -r '.latest // empty' <<<"$out" 2>/dev/null)" ]] || exit 0
+        print -r -- "$out" >| "$file.tmp" && command mv -f -- "$file.tmp" "$file"
+    ) </dev/null >/dev/null 2>&1 &!
+    # The redirects matter: the caller reads this function through $(...), which waits
+    # until every holder of its pipe closes, so a background job left on stdout would
+    # make the banner wait for the network after all.
+}
+
+# Echo "CANDIDATE PUBLISHED_EPOCH GATE_DAYS" from a cached report, or nothing when it
+# cannot be read.
+__welcome_release_fields() {
+    [[ -s "$1" ]] && command -v jq &>/dev/null || return 0
+    jq -r '[(.latest // "" | sub("^v"; "")),
+            (.latest_published // "" | sub("\\.[0-9]+"; "") | sub("\\+00:00$"; "Z")
+                | (try fromdateiso8601 catch "")),
+            (.cooldown_days // "")] | map(tostring) | join(" ")' "$1" 2>/dev/null
+}
+
+# ------------------------------------------------------------------------------
 # Full Welcome Display
 # ------------------------------------------------------------------------------
 __show_welcome_full() {
@@ -407,12 +491,41 @@ __show_welcome_full() {
 
     # --- bun (version floor for the ~/.bunfig.toml minimumReleaseAge cooldown) ---
     if command -v bun &>/dev/null; then
-        local bun_ver=$(bun --version 2>/dev/null || echo 'N/A')
+        local bun_ver=$(command bun --version 2>/dev/null || echo 'N/A')
+        # Settings, as pnpm's line shows them: the package cooldown from ~/.bunfig.toml
+        # (seconds), and whether `bun upgrade` waits it out too (the bun() guard).
+        local bun_age="" bun_set=""
+        bun_age=$(grep -oE '^[[:space:]]*minimumReleaseAge[[:space:]]*=[[:space:]]*[0-9]+' ~/.bunfig.toml 2>/dev/null \
+            | grep -oE '[0-9]+$' | head -1)
+        local -a bun_parts=()
+        if [[ "$bun_age" == <-> ]]; then
+            if (( bun_age == 0 )); then bun_parts+=("minReleaseAge: off")
+            elif (( bun_age % 86400 == 0 )); then bun_parts+=("minReleaseAge: $(( bun_age / 86400 ))d")
+            else bun_parts+=("minReleaseAge: $(( bun_age / 3600 ))h"); fi
+        fi
+        (( $+functions[bun] )) && [[ "${functions[bun]}" == *bun-upgrade-cooldown-check* ]] \
+            && bun_parts+=("upgrade gated")
+        (( ${#bun_parts} )) && bun_set=" ${info}(${(j:, :)bun_parts})${done}"
         if [[ "$bun_ver" != "N/A" ]] && typeset -f __semver_cmp &>/dev/null && [[ -n "$BUN_MIN_VERSION" ]] \
              && [[ "$(__semver_cmp "$bun_ver" "$BUN_MIN_VERSION")" == "-1" ]]; then
             echo "    bun:  ${err}${bun_ver}${done} ${err}↑${BUN_MIN_VERSION} (below min — .bunfig.toml cooldown ignored; run_onboarding)${done}"
         else
-            echo "    bun:  ${ok}${bun_ver}${done}"
+            # A newer bun past the cooldown, from a report refreshed in the background.
+            local bun_note="" bun_rc=0 bun_cache
+            if command -v bun-upgrade-cooldown-check &>/dev/null && command -v jq &>/dev/null; then
+                bun_cache=$(__welcome_release_cache bun 21600 bun-upgrade-cooldown-check --json)
+                local -a bun_f=(${=$(__welcome_release_fields "$bun_cache")})
+                if (( ${#bun_f} == 3 )); then
+                    bun_note=$(__welcome_release_note "$bun_ver" "${bun_f[1]}" "${bun_f[2]}" \
+                        "${bun_f[3]}" "${EPOCHSECONDS:-$(date +%s)}" "bun upgrade")
+                    bun_rc=$?
+                fi
+            fi
+            if (( bun_rc == 1 )); then
+                echo "    bun:  ${warn}${bun_ver}${done}${bun_note}${bun_set}"
+            else
+                echo "    bun:  ${ok}${bun_ver}${done}${bun_note}${bun_set}"
+            fi
         fi
     else
         echo "    bun:  ${err}Not Found${done}"
@@ -434,14 +547,35 @@ __show_welcome_full() {
     # Silent when herdr is absent (it is optional).
     if command -v herdr &>/dev/null; then
         local herdr_ver=$(herdr --version 2>/dev/null | awk '{print $NF}' || echo 'N/A')
+        # A newer herdr past the cooldown, from herdr-cooldown-check's report, refreshed
+        # in the background. The cooldown length is install.sh's HERDR_COOLDOWN_DAYS,
+        # read from the repo the way the session-start hook reads it. On a Mac the
+        # update is install.sh's bump; on Linux it needs HERDR_VERSION moved first.
+        local herdr_note="" herdr_rc=0 herdr_cache herdr_how herdr_repo="${${HOME}/.zshrc:A:h:h}"
+        if command -v herdr-cooldown-check &>/dev/null && command -v jq &>/dev/null; then
+            local herdr_days=""
+            herdr_days=$(grep -oE '^HERDR_COOLDOWN_DAYS="[0-9]+"' "$herdr_repo/install.sh" 2>/dev/null \
+                | grep -oE '[0-9]+' | head -1)
+            herdr_cache=$(__welcome_release_cache herdr 21600 herdr-cooldown-check --json \
+                ${herdr_days:+--cooldown-days} ${herdr_days})
+            if [[ "$OSTYPE" == darwin* ]]; then herdr_how="${herdr_repo/#$HOME/~}/install.sh"
+            else herdr_how="install.sh once HERDR_VERSION is moved"; fi
+            local -a herdr_f=(${=$(__welcome_release_fields "$herdr_cache")})
+            if (( ${#herdr_f} == 3 )); then
+                herdr_note=$(__welcome_release_note "$herdr_ver" "${herdr_f[1]}" "${herdr_f[2]}" \
+                    "${herdr_f[3]}" "${EPOCHSECONDS:-$(date +%s)}" "$herdr_how")
+                herdr_rc=$?
+            fi
+        fi
+        local herdr_col="$ok"; (( herdr_rc == 1 )) && herdr_col="$warn"
         if [[ "$OSTYPE" == darwin* ]]; then
             if [[ -e "${HOMEBREW_PREFIX:-/opt/homebrew}/var/homebrew/pinned/herdr" ]]; then
-                echo "    herdr: ${ok}${herdr_ver}${done} ${info}(pinned — cooldown enforced)${done}"
+                echo "    herdr: ${herdr_col}${herdr_ver}${done}${herdr_note} ${info}(pinned — cooldown enforced)${done}"
             else
-                echo "    herdr: ${err}${herdr_ver} — NOT pinned; 'brew upgrade' would bypass the cooldown (run: brew pin herdr)${done}"
+                echo "    herdr: ${err}${herdr_ver} — NOT pinned; 'brew upgrade' would bypass the cooldown (run: brew pin herdr)${done}${herdr_note}"
             fi
         else
-            echo "    herdr: ${ok}${herdr_ver}${done} ${info}(direct install — pinned via install.sh checksum lock)${done}"
+            echo "    herdr: ${herdr_col}${herdr_ver}${done}${herdr_note} ${info}(direct install — pinned via install.sh checksum lock)${done}"
         fi
     fi
 

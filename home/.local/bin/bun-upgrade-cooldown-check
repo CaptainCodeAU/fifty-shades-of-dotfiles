@@ -1,0 +1,339 @@
+#!/usr/bin/env -S uv run python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+#
+# ============================================================================
+#  bun-upgrade-cooldown-check -- may bun upgrade ITSELF yet, under the cooldown?
+# ============================================================================
+#
+# WHY
+# ---
+# ~/.bunfig.toml sets [install] minimumReleaseAge = 259200 (3 days), and bun
+# honours it for the packages it installs (measured 2026-10-31: typescript@next
+# resolved to the 27 Oct nightly, not the 30 Oct one; --minimum-release-age=0
+# took the 30 Oct one). But that key does NOT cover bun's own binary:
+# `bun upgrade` and the bun.sh installer always take the newest release, on the
+# day it ships. That made bun the second tool in this estate, after herdr, that
+# could change underneath us with no wait (Gavin, dotfiles-main Q1: 1,
+# 31 Oct 2026: "do it like Herdr. Keep it 3 days").
+#
+# Sibling of herdr-cooldown-check, which does the same for herdr, and of
+# bun-cooldown-check, which watches bun's GLOBAL PACKAGES (a different thing:
+# packages held by the cooldown, not bun itself).
+#
+# THE GATE
+#   The cooldown length is READ from ~/.bunfig.toml minimumReleaseAge, so the
+#   packages and the binary share one number and cannot drift apart. Missing
+#   file or key -> 3 days (fail toward waiting, never toward no gate).
+#
+# GATING CANDIDATE
+#   `bun upgrade` takes no version: it installs the newest stable release, so
+#   that release IS the candidate. A version between the installed one and the
+#   newest is never offered, because nothing here would install it.
+#
+# WHO READS THIS
+#   - the `bun` shell function in ~/.zshrc runs `--gate` before `bun upgrade`
+#   - install.sh's _preflight_bun_bump_check reads `--json` and upgrades once
+#     the verdict is ELIGIBLE (the same "lazy option" herdr gets)
+#   - the welcome banner reads a cached `--json` report (refreshed in the
+#     background, never on the prompt's critical path)
+#
+# DATA SOURCE
+#   GET https://api.github.com/repos/oven-sh/bun/releases/latest
+#   GitHub's "latest" already excludes prereleases and drafts (canary is a
+#   prerelease); the tag must still read bun-vX.Y.Z. Not the full list: 30
+#   releases are 1.3 MB, and through the sandbox proxy 2 of 3 reads came back
+#   short (IncompleteRead, measured 2026-10-31). --releases-file takes either
+#   one release object or a list.
+#   Unauthenticated (60 req/h/IP); $GH_TOKEN is used when present only to raise
+#   that ceiling.
+#
+# SAFETY
+#   Read-only. Never installs or upgrades. Any failure degrades to UNKNOWN,
+#   never to a false ELIGIBLE, and --gate refuses on UNKNOWN.
+#
+# USAGE
+#   bun-upgrade-cooldown-check [--json] [--quiet]
+#   bun-upgrade-cooldown-check --gate     exit 0 only if `bun upgrade` is allowed now
+#     --cooldown-days N   override the gate read from ~/.bunfig.toml
+#     --timeout SEC       network timeout (default 8)
+#   Controls (no network): --installed-version V --releases-file F --now ISO
+#
+# EXIT CODES
+#   default/--json: 0 nothing actionable, 1 an upgrade is ELIGIBLE or the
+#                   self-test failed
+#   --gate:         0 allowed (CURRENT or ELIGIBLE), 3 HELD by the cooldown,
+#                   2 UNKNOWN (offline, no bun, broken self-test)
+# ============================================================================
+
+from __future__ import annotations
+
+import argparse
+import http.client
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+try:
+    import tomllib
+except ImportError:  # pragma: no cover - requires-python is 3.11
+    tomllib = None
+
+RELEASES_URL = "https://api.github.com/repos/oven-sh/bun/releases/latest"
+BUNFIG = os.path.expanduser("~/.bunfig.toml")
+DEFAULT_DAYS = 3.0
+TAG_RE = re.compile(r"^bun-v(\d+)\.(\d+)\.(\d+)$")
+
+
+def semver(text: str) -> tuple[int, ...] | None:
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", text or "")
+    return tuple(int(g) for g in m.groups()) if m else None
+
+
+def vstr(v: tuple[int, ...] | None) -> str | None:
+    return ".".join(map(str, v)) if v else None
+
+
+def gate_days_from_bunfig(text: str | None) -> tuple[float, str]:
+    """Pure: (days, source). Missing or unreadable -> the 3-day default."""
+    if text is None or tomllib is None:
+        return DEFAULT_DAYS, "default (no ~/.bunfig.toml)"
+    try:
+        data = tomllib.loads(text)
+        secs = data["install"]["minimumReleaseAge"]
+        if isinstance(secs, (int, float)) and secs > 0:
+            return secs / 86400, "~/.bunfig.toml minimumReleaseAge"
+    except (tomllib.TOMLDecodeError, KeyError, TypeError):
+        pass
+    return DEFAULT_DAYS, "default (no minimumReleaseAge in ~/.bunfig.toml)"
+
+
+def newest_stable(releases: list) -> tuple[tuple[int, ...], datetime] | None:
+    """Pure: newest bun-vX.Y.Z that is not a prerelease or draft. Takes the
+    list endpoint's answer or the single object /releases/latest returns."""
+    if isinstance(releases, dict):
+        releases = [releases]
+    best = None
+    for r in releases if isinstance(releases, list) else []:
+        if not isinstance(r, dict) or r.get("prerelease") or r.get("draft"):
+            continue
+        m = TAG_RE.match(r.get("tag_name") or "")
+        pub = r.get("published_at")
+        if not m or not pub:
+            continue
+        try:
+            when = datetime.fromisoformat(pub.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        v = tuple(int(g) for g in m.groups())
+        if best is None or v > best[0]:
+            best = (v, when)
+    return best
+
+
+def version_verdict(have, want, age_days: float, gate: float) -> str:
+    """Pure: CURRENT | HELD | ELIGIBLE | UNKNOWN. The whole cooldown rule."""
+    if have is None or want is None:
+        return "UNKNOWN"
+    if have >= want:
+        return "CURRENT"
+    return "HELD" if age_days < gate else "ELIGIBLE"
+
+
+def install_method(path: str | None) -> str:
+    """Pure: 'absent' | 'direct' (the bun.sh installer, ~/.bun) | 'brew' | 'other'."""
+    if not path:
+        return "absent"
+    real = os.path.realpath(path)
+    if "/Cellar/" in real or real.startswith(("/opt/homebrew/", "/home/linuxbrew/")):
+        return "brew"
+    bun_home = os.path.realpath(os.environ.get("BUN_INSTALL") or os.path.expanduser("~/.bun"))
+    if real.startswith(bun_home + os.sep):
+        return "direct"
+    return "other"
+
+
+def self_test() -> list[str]:
+    """Prove the gate still goes every way. A gate that can only say yes is
+    decoration; these drive the same pure functions the real run uses."""
+    fails: list[str] = []
+
+    def check(label, got, expected):
+        if got != expected:
+            fails.append(f"{label}: got {got!r}, expected {expected!r}")
+
+    check("same version is CURRENT", version_verdict((1, 4, 4), (1, 4, 4), 0.1, 3), "CURRENT")
+    check("newer installed is CURRENT", version_verdict((1, 4, 5), (1, 4, 4), 0.1, 3), "CURRENT")
+    check("young release is HELD", version_verdict((1, 4, 3), (1, 4, 4), 2.9, 3), "HELD")
+    check("old release is ELIGIBLE", version_verdict((1, 4, 3), (1, 4, 4), 3.0, 3), "ELIGIBLE")
+    check("unknown installed is UNKNOWN", version_verdict(None, (1, 4, 4), 9, 3), "UNKNOWN")
+    check("numeric compare, not string", version_verdict((1, 3, 9), (1, 3, 11), 9, 3), "ELIGIBLE")
+
+    rel = [
+        {"tag_name": "bun-v1.4.4", "published_at": "2026-10-22T10:11:32Z", "prerelease": False},
+        {"tag_name": "canary", "published_at": "2026-10-30T00:00:00Z", "prerelease": True},
+        {"tag_name": "bun-v1.5.0", "published_at": "2026-10-29T00:00:00Z", "prerelease": True},
+        {"tag_name": "bun-v1.4.10", "published_at": "2026-10-28T00:00:00Z", "draft": True},
+        {"tag_name": "bun-v1.4.3", "published_at": "2026-10-10T05:24:54Z", "prerelease": False},
+    ]
+    got = newest_stable(rel)
+    check("newest stable skips canary, prerelease and draft", got and got[0], (1, 4, 4))
+    check("no releases -> None", newest_stable([]), None)
+    check("a single release object is read", (newest_stable(rel[0]) or [None])[0], (1, 4, 4))
+    check("a single canary object is refused", newest_stable(rel[1]), None)
+
+    check("bunfig 259200 s is 3 days", gate_days_from_bunfig("[install]\nminimumReleaseAge = 259200\n")[0], 3.0)
+    check("bunfig without the key falls back to 3 days", gate_days_from_bunfig("telemetry = false\n")[0], 3.0)
+    check("no bunfig falls back to 3 days", gate_days_from_bunfig(None)[0], 3.0)
+    check("bunfig 0 does not switch the gate off", gate_days_from_bunfig("[install]\nminimumReleaseAge = 0\n")[0], 3.0)
+    return fails
+
+
+FETCH_ERROR = ""
+
+
+def fetch_releases(timeout: int) -> list | dict | None:
+    """The API answer, or None with FETCH_ERROR naming why. Three tries: inside
+    the Claude sandbox's proxy about half the reads of this 60 KB answer came
+    back short (IncompleteRead, measured 2026-10-31); outside it, 4 of 4 were
+    whole. A short read is retried; any other failure is final."""
+    global FETCH_ERROR
+    req = urllib.request.Request(RELEASES_URL, headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "bun-upgrade-cooldown-check",
+    })
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    for _ in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except http.client.IncompleteRead as exc:
+            FETCH_ERROR = f"IncompleteRead ({len(exc.partial)} bytes)"
+            continue
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
+            FETCH_ERROR = f"{type(exc).__name__}: {str(exc)[:120]}"
+            return None
+    return None
+
+
+def installed_version() -> tuple[tuple[int, ...] | None, str | None]:
+    path = shutil.which("bun")
+    if not path:
+        return None, None
+    try:
+        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None, path
+    return semver(out), path
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="Is bun's own upgrade past the release cooldown?")
+    ap.add_argument("--json", dest="as_json", action="store_true")
+    ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--gate", action="store_true",
+                    help="exit 0 only if `bun upgrade` is allowed now (3 = held, 2 = unknown)")
+    ap.add_argument("--cooldown-days", type=float, default=None)
+    ap.add_argument("--timeout", type=int, default=8)
+    ap.add_argument("--installed-version", default=None, help="control: pretend this is installed")
+    ap.add_argument("--releases-file", default=None, help="control: read releases JSON from a file")
+    ap.add_argument("--now", default=None, help="control: ISO time to treat as now")
+    args = ap.parse_args()
+
+    if args.cooldown_days is not None:
+        gate, gate_src = args.cooldown_days, "--cooldown-days"
+    else:
+        try:
+            with open(BUNFIG, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            text = None
+        gate, gate_src = gate_days_from_bunfig(text)
+
+    if args.installed_version:
+        have, path = semver(args.installed_version), "(control)"
+        method = "control"
+    else:
+        have, path = installed_version()
+        method = install_method(path)
+
+    now = (datetime.fromisoformat(args.now.replace("Z", "+00:00")) if args.now
+           else datetime.now(timezone.utc))
+
+    report: dict[str, object] = {
+        "tool": "bun",
+        "install_method": method,
+        "installed": vstr(have),
+        "cooldown_days": round(gate, 3),
+        "cooldown_source": gate_src,
+    }
+    broken = self_test()
+    report["self_test"] = "pass" if not broken else broken
+
+    if args.releases_file:
+        try:
+            with open(args.releases_file, encoding="utf-8") as fh:
+                releases = json.load(fh)
+        except (OSError, ValueError):
+            releases = None
+    else:
+        releases = fetch_releases(args.timeout)
+
+    verdict, detail = "UNKNOWN", ""
+    if broken:
+        detail = "DETECTOR BROKEN: " + "; ".join(broken)
+    elif method == "absent":
+        detail = "bun is not installed"
+    elif releases is None:
+        detail = f"could not reach the GitHub releases API ({FETCH_ERROR or 'unreadable file'})"
+    else:
+        newest = newest_stable(releases)
+        if newest is None:
+            detail = "no stable bun release found in the API answer"
+        else:
+            want, published = newest
+            age = (now - published).total_seconds() / 86400
+            report["latest"] = vstr(want)
+            report["latest_published"] = published.isoformat()
+            report["latest_age_days"] = round(age, 2)
+            verdict = version_verdict(have, want, age, gate)
+            if verdict == "CURRENT":
+                detail = f"installed {vstr(have)} is current ({vstr(want)})"
+            elif verdict == "HELD":
+                detail = (f"{vstr(want)} HELD by cooldown: {gate - age:.1f}d of "
+                          f"{gate:g}d remaining")
+            elif verdict == "ELIGIBLE":
+                fix = ("bun upgrade" if method in ("direct", "control")
+                       else "brew upgrade oven-sh/bun/bun" if method == "brew"
+                       else "bun upgrade (install method not recognised; check first)")
+                report["fix"] = fix
+                detail = f"{vstr(want)} ELIGIBLE: released {age:.1f}d ago; run: {fix}"
+            else:
+                detail = "could not parse `bun --version`"
+    report["verdict"] = verdict
+    report["detail"] = detail
+
+    if args.as_json:
+        print(json.dumps(report, indent=2))
+    elif not (args.quiet and verdict in ("CURRENT", "HELD")):
+        print(f"  {verdict:<8} bun {detail}")
+
+    if args.gate:
+        if verdict in ("CURRENT", "ELIGIBLE"):
+            return 0
+        return 3 if verdict == "HELD" else 2
+    return 1 if (broken or verdict == "ELIGIBLE") else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

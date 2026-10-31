@@ -1,0 +1,144 @@
+#!/usr/bin/env zsh
+# zsh-bun-guard-selftest -- prove the bun() guard in home/.zshrc lets `bun upgrade` run only
+# once the newest release is past the release cooldown (Gavin, dotfiles-main Q1: 1, 31 Oct
+# 2026: "do it like Herdr. Keep it 3 days").
+#
+# THE SEAM is the function itself, cut out of the .zshrc under test with awk and run in a
+# clean `zsh -f` whose PATH starts with two stubs: `bun` (logs every call, answers --version
+# from a file, and an `upgrade` writes STUB_NEWVER into that file) and
+# `bun-upgrade-cooldown-check` (prints STUB_JSON, exits STUB_RC). The run ABORTS before any
+# arm unless both names resolve to the stubs, so no arm can upgrade the real bun.
+#
+# Every arm that must BLOCK is paired with one that must RUN, in the same stubs: a guard
+# that never runs the upgrade would pass every blocking arm on its own.
+#
+# Usage:
+#   zsh-bun-guard-selftest                          test <repo>/home/.zshrc (exit 0 = all passed)
+#   ZSHRC_UNDER_TEST=<file> zsh-bun-guard-selftest  test another copy
+# Exit: 0 all passed; 1 an arm failed; 2 REFUSED (no function, stubs not first: NOT a pass).
+
+setopt no_unset pipe_fail 2>/dev/null
+
+_resolve_repo() {
+    local self="${(%):-%x}" dir target
+    dir="$(cd -- "$(dirname -- "$self")" && pwd)"
+    if [[ -L "$self" ]]; then
+        target="$(readlink "$self")"
+        [[ "$target" != /* ]] && target="$dir/$target"   # re-base a relative stow link
+        dir="$(cd -- "$(dirname -- "$target")" && pwd)"
+    fi
+    (cd -- "$dir/../../.." && pwd)                      # <repo>/home/.local/bin -> <repo>
+}
+ZSHRC="${ZSHRC_UNDER_TEST:-$(_resolve_repo)/home/.zshrc}"
+
+PASS=0; FAIL=0
+ok()  { PASS=$(( PASS + 1 )); printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
+bad() { FAIL=$(( FAIL + 1 )); printf '  \033[31mFAIL\033[0m  %s\n' "$1"
+        [[ $# -gt 1 ]] && printf '        %s\n' "$2"; }
+
+echo "bun() guard selftest ($ZSHRC)"
+echo
+
+fn_src=$(awk '/^bun\(\) \{/{f=1} f{print} f&&/^\}/{exit}' "$ZSHRC" 2>/dev/null)
+[[ -n "$fn_src" ]] || { echo "REFUSED: no bun() function in $ZSHRC"; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "REFUSED: jq is not on PATH (the guard reads the report with it)"; exit 2; }
+
+# The test's own temp folder, sent to the Trash however the run ends (test-temp.sh).
+. "$HOME/.local/bin/test-temp.sh" new zsh-bun-guard || { echo "REFUSED: test-temp.sh not found"; exit 2; }
+WORK="$TT"
+STUBS="$WORK/bin"; mkdir -p "$STUBS"
+print -r -- "$fn_src" > "$WORK/fn.zsh"
+
+cat > "$STUBS/bun" <<'EOF'
+#!/bin/sh
+echo "bun $*" >> "$STUB_LOG"
+case "$1" in
+    --version) cat "$STUB_VERFILE" ;;
+    upgrade)   printf '%s\n' "$STUB_NEWVER" > "$STUB_VERFILE"
+               [ "$STUB_APPEND" = 1 ] && echo '# bun completions' >> "$HOME/.zshrc" ;;
+esac
+exit 0
+EOF
+cat > "$STUBS/bun-upgrade-cooldown-check" <<'EOF'
+#!/bin/sh
+echo "check $*" >> "$STUB_LOG"
+printf '%s\n' "$STUB_JSON"
+exit "$STUB_RC"
+EOF
+chmod +x "$STUBS/bun" "$STUBS/bun-upgrade-cooldown-check"
+JQ_DIR="$(dirname "$(command -v jq)")"
+
+# run <check-present 0|1> <rc> <json> <newver> -- <bun args...>
+# HOME is a folder of the test's own, so the .zshrc the guard watches is never the real one.
+mkdir -p "$WORK/home"
+run() {
+    (( $# >= 5 )) || { bad "run() called with $# arguments, needs 5 or more"; return 1; }
+    local present="$1" rc="$2" json="$3" newver="$4"; shift 5
+    : > "$WORK/log"; print -r -- "1.3.11" > "$WORK/ver"; print -r -- "# fixture" >| "$WORK/home/.zshrc"
+    local spath="$STUBS:$JQ_DIR:/usr/bin:/bin"   # not `path`: zsh ties it to PATH
+    [[ "$present" == 1 ]] || { command mv -f "$STUBS/bun-upgrade-cooldown-check" "$WORK/hidden"; }
+    OUT=$(env -i PATH="$spath" HOME="$WORK/home" STUB_APPEND="${STUB_APPEND:-0}" STUB_LOG="$WORK/log" STUB_VERFILE="$WORK/ver" \
+          STUB_RC="$rc" STUB_JSON="$json" STUB_NEWVER="$newver" \
+          zsh -f -c 'ok= warn= err= done=; source "$1"; shift; bun "$@"' _ "$WORK/fn.zsh" "$@" 2>&1)
+    RC=$?
+    [[ "$present" == 1 ]] || { command mv -f "$WORK/hidden" "$STUBS/bun-upgrade-cooldown-check"; }
+    LOG=$(<"$WORK/log")
+}
+
+# Abort unless both names resolve to the stubs inside the test shell.
+resolved=$(env -i PATH="$STUBS:$JQ_DIR:/usr/bin:/bin" zsh -f -c 'whence -p bun; whence -p bun-upgrade-cooldown-check')
+if [[ "$resolved" != "$STUBS/bun"$'\n'"$STUBS/bun-upgrade-cooldown-check" ]]; then
+    echo "REFUSED: the stubs are not first on PATH ($resolved)"; exit 2
+fi
+ok "stubs resolve first, so no arm can reach the real bun"
+
+ELIG='{"verdict":"ELIGIBLE","latest":"1.4.4","detail":"1.4.4 ELIGIBLE: released 8.6d ago; run: bun upgrade"}'
+HELD='{"verdict":"HELD","latest":"1.4.4","detail":"1.4.4 HELD by cooldown: 2.0d of 3d remaining"}'
+UNKN='{"verdict":"UNKNOWN","detail":"could not reach the GitHub releases API (URLError)"}'
+
+# 1. Not an upgrade: straight through, checker never asked.
+run 1 0 "$ELIG" 1.4.4 -- install --frozen-lockfile
+if (( RC == 0 )) && [[ "$LOG" == "bun install --frozen-lockfile" ]]; then ok "bun install passes straight through, no check"
+else bad "bun install passes straight through, no check" "rc=$RC log=[$LOG]"; fi
+
+# 2. RUN arm: eligible, the upgrade lands on the cleared version.
+run 1 0 "$ELIG" 1.4.4 -- upgrade
+if (( RC == 0 )) && [[ "$LOG" == *"bun upgrade"* ]] && [[ "$OUT" == *"cleared"* ]]; then ok "ELIGIBLE: bun upgrade runs, exit 0"
+else bad "ELIGIBLE: bun upgrade runs, exit 0" "rc=$RC log=[$LOG] out=[$OUT]"; fi
+
+# 3. Held by the cooldown: refused, upgrade never runs, the days left are shown.
+run 1 3 "$HELD" 1.4.4 -- upgrade
+if (( RC == 1 )) && [[ "$LOG" != *"bun upgrade"* ]] && [[ "$OUT" == *"BLOCKED"* && "$OUT" == *"2.0d of 3d"* ]]; then ok "HELD: refused, upgrade never runs, days left shown"
+else bad "HELD: refused, upgrade never runs, days left shown" "rc=$RC log=[$LOG] out=[$OUT]"; fi
+
+# 4. Checker cannot see (offline): refused, the reason is shown.
+run 1 2 "$UNKN" 1.4.4 -- upgrade
+if (( RC == 1 )) && [[ "$LOG" != *"bun upgrade"* ]] && [[ "$OUT" == *"URLError"* ]]; then ok "UNKNOWN: refused, upgrade never runs, reason shown"
+else bad "UNKNOWN: refused, upgrade never runs, reason shown" "rc=$RC log=[$LOG] out=[$OUT]"; fi
+
+# 5. Checker missing: refused.
+run 0 0 "$ELIG" 1.4.4 -- upgrade
+if (( RC == 1 )) && [[ "$LOG" != *"bun upgrade"* ]] && [[ "$OUT" == *"not installed"* ]]; then ok "checker missing: refused"
+else bad "checker missing: refused" "rc=$RC log=[$LOG] out=[$OUT]"; fi
+
+# 6. --canary: refused before the checker is even asked.
+run 1 0 "$ELIG" 1.4.4 -- upgrade --canary
+if (( RC == 1 )) && [[ "$LOG" != *"bun upgrade"* ]] && [[ "$LOG" != *"check"* ]]; then ok "--canary: refused, checker not asked"
+else bad "--canary: refused, checker not asked" "rc=$RC log=[$LOG] out=[$OUT]"; fi
+
+# 7. A newer release slipped in between the check and the download: loud, exit 1.
+run 1 0 "$ELIG" 1.4.5 -- upgrade
+if (( RC == 1 )) && [[ "$LOG" == *"bun upgrade"* ]] && [[ "$OUT" == *"cooldown cleared 1.4.4"* ]]; then ok "landed on a version the gate did not clear: warns, exit 1"
+else bad "landed on a version the gate did not clear: warns, exit 1" "rc=$RC log=[$LOG] out=[$OUT]"; fi
+
+# 8. The upgrade wrote into ~/.zshrc (bun 1.4.4 did, 31 Oct 2026): said so; and silent when not.
+STUB_APPEND=1 run 1 0 "$ELIG" 1.4.4 -- upgrade
+if [[ "$OUT" == *"changed ~/.zshrc"* ]]; then ok "upgrade wrote into ~/.zshrc: said so"
+else bad "upgrade wrote into ~/.zshrc: said so" "rc=$RC out=[$OUT]"; fi
+run 1 0 "$ELIG" 1.4.4 -- upgrade
+if [[ "$OUT" != *"changed ~/.zshrc"* ]]; then ok "upgrade left ~/.zshrc alone: silent"
+else bad "upgrade left ~/.zshrc alone: silent" "rc=$RC out=[$OUT]"; fi
+
+echo
+echo "  $PASS passed, $FAIL failed"
+(( FAIL == 0 ))

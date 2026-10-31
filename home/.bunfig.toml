@@ -10,6 +10,14 @@
 # Scope: applies to `bun add` / `bun install`. A project-level bunfig.toml
 # overrides this file; per-package escape via `minimumReleaseAgeExcludes` below,
 # or a one-off `bun add --minimum-release-age=0 <pkg>`.
+#
+# bun ITSELF is not covered by this key: `bun upgrade` takes the newest release
+# on the day it ships. bun-upgrade-cooldown-check reads THIS minimumReleaseAge
+# and applies it to bun's own releases: the bun() function in .zshrc refuses a
+# `bun upgrade` until the newest release is that old, install.sh's
+# _preflight_bun_bump_check upgrades once it is, and the welcome banner's bun
+# line says when one is waiting (Gavin, dotfiles-main Q1: 1, 31 Oct 2026). So
+# changing the number here moves both gates.
 # ------------------------------------------------------------------------------
 # Telemetry OFF, stated in the config rather than left to the environment.
 # `DO_NOT_TRACK=1` is exported from .zshrc and bun honours it (the binary

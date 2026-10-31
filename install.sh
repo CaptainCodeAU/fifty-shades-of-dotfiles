@@ -1316,6 +1316,71 @@ _preflight_herdr_bump_check() {
     return 0
 }
 
+# bun's own release cooldown, the same "lazy option" herdr gets (Gavin, dotfiles-main
+# Q1: 1, 31 Oct 2026: "do it like Herdr. Keep it 3 days"). ~/.bunfig.toml's
+# minimumReleaseAge covers the packages bun installs, not bun itself, so the `bun`
+# shell function refuses a `bun upgrade` younger than that, and this upgrades bun
+# once bun-upgrade-cooldown-check says the newest release has cleared it. The tool
+# decides ELIGIBLE and its self-test gates this, exactly as for herdr: a broken
+# detector or no network never upgrades, it just skips. Only the bun.sh install
+# (~/.bun) is upgraded here; a Homebrew bun is left to its owner.
+_preflight_bun_bump_check() {
+    [[ "$SKIP_PREFLIGHT" == true || "$SKIP_BUN" == true ]] && return 0
+    command -v bun &>/dev/null || return 0
+    command -v jq &>/dev/null || return 0
+    command -v uv &>/dev/null || return 0
+    # The stowed copy, or the repo's own on a first run before the stow.
+    local checker=""
+    checker=$(command -v bun-upgrade-cooldown-check 2>/dev/null) \
+        || checker="$REPO_DIR/home/.local/bin/bun-upgrade-cooldown-check"
+    [[ -x "$checker" ]] || return 0
+
+    local report=""
+    report=$("$checker" --json 2>/dev/null) || true
+    [[ -n "$report" ]] || return 0
+
+    local self_test verdict method have latest days
+    self_test=$(jq -r '.self_test // ""' <<<"$report" 2>/dev/null) || return 0
+    [[ "$self_test" == "pass" ]] || return 0
+    verdict=$(jq -r '.verdict // ""' <<<"$report" 2>/dev/null) || return 0
+    [[ "$verdict" == "ELIGIBLE" ]] || return 0
+    method=$(jq -r '.install_method // ""' <<<"$report" 2>/dev/null)
+    have=$(jq -r '.installed // "unknown"' <<<"$report" 2>/dev/null)
+    latest=$(jq -r '.latest // "the newest release"' <<<"$report" 2>/dev/null)
+    days=$(jq -r '(.cooldown_days // 3) | tostring | sub("\\.0$"; "")' <<<"$report" 2>/dev/null)
+
+    step "Pre-flight bun cooldown bump"
+    if [[ "$method" != "direct" ]]; then
+        info "bun ${latest} has cleared the ${days}-day cooldown, but this bun is not the bun.sh install (${method}); upgrade it by hand."
+        return 0
+    fi
+    info "bun ${have} → ${latest}: released past the ${days}-day cooldown. Upgrading."
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] No changes made. Re-run without --dry-run to upgrade bun."
+        return 0
+    fi
+    # The binary, not the zsh guard: this script is bash, and the gate ran just above.
+    # The rc guard, as for bun's installer: on 31 Oct 2026 the 1.3.11 → 1.4.4 upgrade
+    # appended "# bun completions" and a source line with the home path to ~/.zshrc,
+    # through the stow link into this repo (the .zshrc already loads _bun).
+    _rc_guard_begin
+    if ! run_cmd command bun upgrade; then
+        _rc_guard_end "bun upgrade"
+        warn "bun upgrade failed; bun stays at ${have}, will retry next run."
+        return 0
+    fi
+    _rc_guard_end "bun upgrade"
+    hash -r 2>/dev/null || true
+    local now=""
+    now=$(bun --version 2>/dev/null)
+    if [[ "$now" == "$latest" ]]; then
+        success "bun now ${now}"
+    else
+        warn "bun is now ${now:-unknown}, not ${latest}, which the cooldown cleared: a newer release may have shipped during the upgrade. Check: bun-upgrade-cooldown-check"
+    fi
+    return 0
+}
+
 # Homebrew removed herdr's service definition on 2026-09-24 (homebrew-core
 # fe0006641fba: `herdr: remove service definition`), so `brew services` no
 # longer manages herdr and the server is started by herdr itself on attach.
@@ -6173,6 +6238,11 @@ main() {
     # above so it always starts from a known-pinned state. herdr-cooldown-check itself stays
     # read-only -- this just runs the same manual commands it recommends, automatically. ---
     _preflight_herdr_bump_check
+
+    # --- bun cooldown bump: `bun upgrade` once bun-upgrade-cooldown-check reports the
+    # newest release has cleared ~/.bunfig.toml's minimumReleaseAge (the herdr bump above,
+    # for bun). The bun() shell guard refuses it any sooner. ---
+    _preflight_bun_bump_check
 
     # --- herdr leftover LaunchAgent (macOS): report a pre-2026-09-24 brew-services
     # plist, which would make `herdr server stop` respawn. Reports only. ---

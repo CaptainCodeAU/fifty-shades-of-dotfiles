@@ -927,6 +927,66 @@ herdr() {
     command herdr "$@"
 }
 
+# --- `bun upgrade` waits out the release cooldown, like herdr ---
+# ~/.bunfig.toml's minimumReleaseAge (3 days) covers the packages bun installs, not
+# bun itself: `bun upgrade` takes the newest release on the day it ships. So it asks
+# bun-upgrade-cooldown-check first, which reads the same 3 days from ~/.bunfig.toml,
+# and runs only when the newest release is past it (or already installed). Gavin,
+# dotfiles-main Q1: 1, 31 Oct 2026: "do it like Herdr. Keep it 3 days".
+#   - `--canary` is refused outright: a daily build has no release age to wait out.
+#   - Offline, or the checker missing, is a refusal too: a gate that opens when it
+#     cannot see is no gate.
+#   - Afterwards the version is checked against the one the gate cleared, since a
+#     release published between the check and the download would land unseen.
+# Like herdr(), this guards interactive shells and Claude's Bash tool only, not a
+# script calling the binary. install.sh bumps bun itself once the cooldown has
+# passed (_preflight_bun_bump_check). Tested by zsh-bun-guard-selftest.
+bun() {
+    if [[ "$1" != "upgrade" ]]; then
+        command bun "$@"
+        return
+    fi
+    if (( ${@[(Ie)--canary]} )); then
+        echo "${err}BLOCKED: bun upgrade --canary${done}"
+        echo "  A canary is a daily build with no release age, so the ${warn}3-day release cooldown${done} cannot apply."
+        return 1
+    fi
+    if ! command -v bun-upgrade-cooldown-check &>/dev/null; then
+        echo "${err}BLOCKED: bun upgrade${done} (bun-upgrade-cooldown-check is not installed, so the cooldown cannot be checked)"
+        echo "  Restow the dotfiles: ./install.sh --stow-only"
+        return 1
+    fi
+    local _report _rc _detail _want _now
+    _report=$(bun-upgrade-cooldown-check --json --gate 2>/dev/null); _rc=$?
+    _detail=$(jq -r '.detail // empty' <<<"$_report" 2>/dev/null)
+    _want=$(jq -r '.latest // empty' <<<"$_report" 2>/dev/null)
+    if (( _rc != 0 )); then
+        echo "${err}BLOCKED: bun upgrade${done}"
+        echo "  ${_detail:-bun-upgrade-cooldown-check gave no answer}"
+        (( _rc == 3 )) && echo "  The ${warn}release cooldown${done} comes from ~/.bunfig.toml minimumReleaseAge. Try again once it has passed."
+        echo "  Check state:  bun-upgrade-cooldown-check"
+        return 1
+    fi
+    echo "${ok}bun upgrade cleared:${done} ${_detail}"
+    # bun 1.4.4's upgrade appended a completions line to ~/.zshrc, which is the stowed
+    # repo file (31 Oct 2026); this .zshrc already loads $BUN_INSTALL/_bun. Say so.
+    local _rc_before _rc_after
+    _rc_before=$(cksum < ~/.zshrc 2>/dev/null)
+    command bun "$@" || return
+    hash -r 2>/dev/null
+    _rc_after=$(cksum < ~/.zshrc 2>/dev/null)
+    if [[ "$_rc_before" != "$_rc_after" ]]; then
+        echo "${warn}bun upgrade changed ~/.zshrc, which is the dotfiles repo's file; it already loads bun's completions.${done}"
+        echo "  Review and drop the new lines:  git -C ${${HOME}/.zshrc:A:h:h}  diff -- home/.zshrc"
+    fi
+    _now=$(command bun --version 2>/dev/null)
+    if [[ -n "$_want" && -n "$_now" && "$_now" != "$_want" ]]; then
+        echo "${err}WARNING: bun is now ${_now}, but the cooldown cleared ${_want}.${done}"
+        echo "  A newer release may have shipped during the upgrade. Check it:  bun-upgrade-cooldown-check"
+        return 1
+    fi
+}
+
 # Guard gh auth subcommands that re-add HTTPS credential helpers.
 # Blocks: login (unless --git-protocol ssh), setup-git, refresh.
 # Allows: status, token, switch, logout, login --git-protocol ssh, and all

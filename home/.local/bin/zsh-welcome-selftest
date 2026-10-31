@@ -224,5 +224,53 @@ if [[ -n "$FX" ]]; then
     else bad "control: every tool present, every hint shown" "out='$OUT'"; fi
 fi
 
+# --- 5. release reminder (dotfiles-main Q1: 1, 31 Oct 2026): bun and herdr lines -------
+# __welcome_release_note is pure: versions, the publish time, the gate and "now" go in,
+# the suffix and a case number come out. Each case is paired with its neighbour, so a
+# function that always printed the reminder (or never did) fails here.
+echo
+note_src=$(sed -n '/^__welcome_release_note() {/,/^}/p' "$WELCOME")
+if [[ -z "$note_src" ]]; then
+    bad "__welcome_release_note is defined" "not found in $WELCOME"
+else
+    ok "__welcome_release_note is defined"; info=""
+    eval "$note_src"
+    for fn in __welcome_release_note __welcome_release_cache __welcome_release_fields; do
+        if [[ "$(code_of "$full_src")" == *"$fn"* ]]; then ok "$fn is used by the full banner"
+        else bad "$fn is used by the full banner" "never called from __show_welcome_full"; fi
+    done
+    PUB=1792663892   # 2026-10-22 10:11:32 UTC, bun 1.4.4's release
+    note() { OUT="$(__welcome_release_note "$@")"; RC=$?; }
+    # The reminder: older install, release 8.6 days old, 3-day gate.
+    note 1.3.11 1.4.4 $PUB 3 $(( PUB + 743000 )) "bun upgrade"
+    if (( RC == 1 )) && [[ "$OUT" == *"↑1.4.4 (past the 3-day cooldown, run bun upgrade)"* ]]; then
+        ok "past the cooldown: the reminder, case 1"
+    else bad "past the cooldown: the reminder, case 1" "rc=$RC out='$OUT'"; fi
+    # Same release one day old: out, still waiting, and how long.
+    note 1.3.11 1.4.4 $PUB 3 $(( PUB + 86400 )) "bun upgrade"
+    if (( RC == 2 )) && [[ "$OUT" == *"1.4.4 out, 2.0d of the 3-day cooldown left"* ]]; then
+        ok "inside the cooldown: out, 2.0d left, case 2"
+    else bad "inside the cooldown: out, 2.0d left, case 2" "rc=$RC out='$OUT'"; fi
+    # The edge: exactly the gate counts as past it, as in bun-upgrade-cooldown-check.
+    note 1.3.11 1.4.4 $PUB 3 $(( PUB + 259200 )) "bun upgrade"
+    if (( RC == 1 )); then ok "exactly 3 days: past the cooldown"
+    else bad "exactly 3 days: past the cooldown" "rc=$RC out='$OUT'"; fi
+    # Already on it, or past it (a canary): silent.
+    note 1.4.4 1.4.4 $PUB 3 $(( PUB + 743000 )) "bun upgrade"
+    if (( RC == 0 )) && [[ -z "$OUT" ]]; then ok "installed = newest: silent"
+    else bad "installed = newest: silent" "rc=$RC out='$OUT'"; fi
+    note 1.4.5 1.4.4 $PUB 3 $(( PUB + 743000 )) "bun upgrade"
+    if (( RC == 0 )) && [[ -z "$OUT" ]]; then ok "installed newer than the newest: silent"
+    else bad "installed newer than the newest: silent" "rc=$RC out='$OUT'"; fi
+    # Numbers, not text: 0.9.10 is newer than 0.9.5, and herdr's tags carry a v.
+    note 0.9.5 v0.9.10 $PUB 3 $(( PUB + 743000 )) "install.sh"
+    if (( RC == 1 )) && [[ "$OUT" == *"↑0.9.10"* ]]; then ok "0.9.5 < v0.9.10, compared as numbers"
+    else bad "0.9.5 < v0.9.10, compared as numbers" "rc=$RC out='$OUT'"; fi
+    # Nothing cached yet: silent, never a guess.
+    note 1.3.11 "" "" 3 $(( PUB + 743000 )) "bun upgrade"
+    if (( RC == 0 )) && [[ -z "$OUT" ]]; then ok "no report yet: silent"
+    else bad "no report yet: silent" "rc=$RC out='$OUT'"; fi
+fi
+
 echo; echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
