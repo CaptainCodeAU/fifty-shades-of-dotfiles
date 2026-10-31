@@ -606,8 +606,8 @@ profilezsh() {
     ZPROF=1 zsh -i -c exit
 }
 
-# To hide direnv messages to be displayed in the terminal, added `hide_env_diff = true` in
-# this file: `~/.config/direnv/direnv.toml`
+# direnv's own messages (the env diff and the "loading/unloading" lines) are hidden by
+# `hide_env_diff = true` and `log_format = "-"` in `~/.config/direnv/direnv.toml`
 
 # --- Hook Direnv into the Shell ---
 # IMPORTANT: This must be one of the last things in your .zshrc.

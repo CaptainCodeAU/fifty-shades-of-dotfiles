@@ -5,3 +5,7 @@
 # Hide the environment diff output when entering/leaving directories
 # This keeps the terminal cleaner (the .envrc can print its own formatted output)
 hide_env_diff = true
+# Hide the "direnv: loading/unloading ..." lines (direnv >= 2.36). Measured on
+# 2.38.2: errors (a blocked .envrc, log_error) and an .envrc's own echo still
+# show; log_status lines do not, so a warning that must be seen uses log_error.
+log_format = "-"

@@ -288,7 +288,8 @@ EOF
 #
 # It runs a fast, OFFLINE, NON-BLOCKING structural scan of the current project
 # (exotic sources / missing integrity / hygiene) and prints a one-line warning
-# via direnv's status line if anything moderate or worse is found. It never
+# via log_error if anything moderate or worse is found (log_status is hidden by
+# log_format = "-" in direnv.toml). It never
 # blocks the shell and never touches the project. For a full network audit
 # (cooldown + advisories), run `pnpm-audit-tree .` manually.
 pnpm_audit_oncd() {
@@ -297,7 +298,7 @@ pnpm_audit_oncd() {
     local out
     out="$(pnpm-audit-tree "$PWD" --no-recursive --offline --quiet --no-report --fail-on moderate 2>/dev/null)"
     if [[ -n "$out" ]]; then
-        log_status "pnpm-audit: ${out}  (run: pnpm-audit-tree $PWD)"
+        log_error "pnpm-audit:${out}  (run: pnpm-audit-tree $PWD)"
     fi
     return 0
 }
